@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: pipeline
+      POSTGRES_DB: pipeline
+    ports:
+      - "5432:5432"
+    volumes:
+      - pipeline_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://pipeline:pipeline@db:5432/pipeline
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev-only-change-me}
+      FACEBOOK_VERIFY_TOKEN: ${FACEBOOK_VERIFY_TOKEN:-}
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      CRON_SECRET: ${CRON_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pipeline_db_data:
