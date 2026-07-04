@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { randomUUID } from "crypto";
 import { db } from "@/db";
 import { companies, dispositionOptions, assignmentRules, automationSettings, users } from "@/db/schema";
 import { hashPassword, setSessionCookie, setRefreshCookie } from "@/lib/auth";
@@ -33,91 +34,139 @@ function slugify(name: string) {
 }
 
 export async function POST(req: NextRequest) {
-  const ip = getClientIp(req);
-  const rl = checkRateLimit(`signup:${ip}`, 5, 60_000); // 5 signups/minute/IP
-  if (!rl.allowed) {
-    return NextResponse.json({ error: "Too many signup attempts. Please wait a minute and try again." }, { status: 429 });
-  }
+  const reqId = randomUUID();
+  const log = (step: string, extra?: Record<string, unknown>) =>
+    console.log(`[signup:${reqId}] ${step}`, extra ? JSON.stringify(extra) : "");
 
-  const body = await req.json();
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  }
-  const { companyName, plan, name, email, password } = parsed.data;
+  try {
+    log("start");
 
-  const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  if (existing.length > 0) {
-    return NextResponse.json({ error: "An account with that email already exists." }, { status: 409 });
-  }
+    const ip = getClientIp(req);
+    const rl = checkRateLimit(`signup:${ip}`, 5, 60_000); // 5 signups/minute/IP
+    if (!rl.allowed) {
+      log("rate_limited", { ip });
+      return NextResponse.json({ error: "Too many signup attempts. Please wait a minute and try again." }, { status: 429 });
+    }
 
-  const [company] = await db
-    .insert(companies)
-    .values({
-      name: companyName,
-      slug: slugify(companyName),
-      status: "pending", // super-admin approves before it goes live (manual-billing phase)
-      plan,
-      pricePerAgentCents: PLAN_PRICE_CENTS[plan] ?? 1900,
-    })
-    .returning();
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      log("invalid_json_body");
+      return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
+    }
 
-  const passwordHash = await hashPassword(password);
-  const [admin] = await db
-    .insert(users)
-    .values({
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      log("validation_failed", { issues: parsed.error.flatten() });
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    }
+    const { companyName, plan, name, email, password } = parsed.data;
+    log("validated", { email, plan });
+
+    const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    if (existing.length > 0) {
+      log("duplicate_email", { email });
+      return NextResponse.json({ error: "An account with that email already exists." }, { status: 409 });
+    }
+    log("email_available");
+
+    const passwordHash = await hashPassword(password);
+    log("password_hashed");
+
+    // Company, admin user, and default company data are created atomically —
+    // if any insert fails, nothing is left half-created.
+    const { company, admin } = await db.transaction(async (tx) => {
+      const [company] = await tx
+        .insert(companies)
+        .values({
+          name: companyName,
+          slug: slugify(companyName),
+          status: "pending", // super-admin approves before it goes live (manual-billing phase)
+          plan,
+          pricePerAgentCents: PLAN_PRICE_CENTS[plan] ?? 1900,
+        })
+        .returning();
+      log("company_created", { companyId: company.id });
+
+      const [admin] = await tx
+        .insert(users)
+        .values({
+          companyId: company.id,
+          name,
+          email,
+          passwordHash,
+          role: "admin",
+          tier: "1",
+          active: true,
+        })
+        .returning();
+      log("admin_user_created", { userId: admin.id, companyId: company.id });
+
+      // Seed sensible defaults so a new company isn't empty on first login.
+      await tx.insert(dispositionOptions).values([
+        { companyId: company.id, label: "New Lead", color: "#2563eb", sortOrder: 0 },
+        { companyId: company.id, label: "Answering Machine", color: "#d97706", sortOrder: 1 },
+        { companyId: company.id, label: "Not Interested", color: "#dc2626", sortOrder: 2 },
+        { companyId: company.id, label: "Qualified", color: "#16a34a", sortOrder: 3 },
+        { companyId: company.id, label: "Sold", color: "#7c3aed", sortOrder: 4 },
+      ]);
+      log("disposition_options_seeded", { companyId: company.id });
+
+      await tx.insert(assignmentRules).values([
+        { companyId: company.id, tier: "1", weight: 3, active: true },
+        { companyId: company.id, tier: "2", weight: 2, active: true },
+        { companyId: company.id, tier: "3", weight: 1, active: true },
+      ]);
+      log("assignment_rules_seeded", { companyId: company.id });
+
+      await tx.insert(automationSettings).values({
+        companyId: company.id,
+        autoAssignEnabled: true,
+        assignmentMode: "weighted",
+        autoRecycleEnabled: false,
+        recycleAfterMinutes: 1440,
+      });
+      log("automation_settings_seeded", { companyId: company.id });
+
+      return { company, admin };
+    });
+
+    log("transaction_committed", { companyId: company.id, userId: admin.id });
+
+    await setSessionCookie({
+      userId: admin.id,
       companyId: company.id,
-      name,
-      email,
-      passwordHash,
       role: "admin",
-      tier: "1",
-      active: true,
-    })
-    .returning();
+      email: admin.email,
+    });
+    log("session_cookie_set", { userId: admin.id });
 
-  // Seed sensible defaults so a new company isn't empty on first login.
-  await db.insert(dispositionOptions).values([
-    { companyId: company.id, label: "New Lead", color: "#2563eb", sortOrder: 0 },
-    { companyId: company.id, label: "Answering Machine", color: "#d97706", sortOrder: 1 },
-    { companyId: company.id, label: "Not Interested", color: "#dc2626", sortOrder: 2 },
-    { companyId: company.id, label: "Qualified", color: "#16a34a", sortOrder: 3 },
-    { companyId: company.id, label: "Sold", color: "#7c3aed", sortOrder: 4 },
-  ]);
-  await db.insert(assignmentRules).values([
-    { companyId: company.id, tier: "1", weight: 3, active: true },
-    { companyId: company.id, tier: "2", weight: 2, active: true },
-    { companyId: company.id, tier: "3", weight: 1, active: true },
-  ]);
-  await db.insert(automationSettings).values({
-    companyId: company.id,
-    autoAssignEnabled: true,
-    assignmentMode: "weighted",
-    autoRecycleEnabled: false,
-    recycleAfterMinutes: 1440,
-  });
+    const { rawToken, expiresAt } = await issueRefreshToken(admin.id, req.headers.get("user-agent") || undefined);
+    await setRefreshCookie(rawToken, expiresAt);
+    log("refresh_token_issued", { userId: admin.id, expiresAt: expiresAt.toISOString() });
 
-  await setSessionCookie({
-    userId: admin.id,
-    companyId: company.id,
-    role: "admin",
-    email: admin.email,
-  });
-  const { rawToken, expiresAt } = await issueRefreshToken(admin.id, req.headers.get("user-agent") || undefined);
-  await setRefreshCookie(rawToken, expiresAt);
+    await recordAudit({
+      companyId: company.id,
+      userId: admin.id,
+      action: "company.signed_up",
+      entityType: "company",
+      entityId: company.id,
+      metadata: { plan },
+    });
+    log("audit_recorded", { companyId: company.id });
 
-  await recordAudit({
-    companyId: company.id,
-    userId: admin.id,
-    action: "company.signed_up",
-    entityType: "company",
-    entityId: company.id,
-    metadata: { plan },
-  });
-
-  return NextResponse.json({
-    company,
-    message:
-      "Account created. Your company is pending activation — our team will review and activate it shortly.",
-  });
+    log("done", { companyId: company.id, userId: admin.id });
+    return NextResponse.json({
+      company,
+      message:
+        "Account created. Your company is pending activation — our team will review and activate it shortly.",
+    });
+  } catch (err) {
+    console.error(`[signup:${reqId}] failed`, err);
+    return NextResponse.json(
+      { error: "Something went wrong while creating your account. Please try again." },
+      { status: 500 }
+    );
+  }
 }

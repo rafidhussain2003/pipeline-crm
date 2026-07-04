@@ -3,8 +3,8 @@ services:
     name: pipeline-crm
     runtime: node
     plan: starter
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm run db:migrate && npm start
     healthCheckPath: /api/health
     envVars:
       - key: DATABASE_URL

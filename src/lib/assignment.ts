@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { assignmentLog, assignmentRules, automationSettings, leads, users, userSkills } from "@/db/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, count, eq, isNull } from "drizzle-orm";
 
 /**
  * Tiered assignment engine supporting three modes (see automation_settings.assignmentMode):
@@ -78,13 +78,22 @@ export async function assignLead(leadId: string, companyId: string, requiredSkil
   }
   if (cycle.length === 0) return null;
 
-  const assignedCountRows = await db
-    .select({ id: assignmentLog.id })
+  // NOTE: this still costs O(total historical assignments for this company)
+  // per call, because the cursor is derived from a count rather than stored.
+  // The `count(*)` aggregate (vs. pulling every row into Node, as before) and
+  // the indexes added to assignment_log keep this bounded for now, but it
+  // will keep getting slower as a company's assignment history grows. The
+  // correct long-term fix is a persistent cursor column on
+  // automation_settings, updated atomically per assignment — deferred here
+  // because it needs a generated migration (run `npm run db:generate` in an
+  // environment with Node installed, then apply it).
+  const [{ value: assignedCount }] = await db
+    .select({ value: count() })
     .from(assignmentLog)
     .innerJoin(leads, eq(assignmentLog.leadId, leads.id))
     .where(eq(leads.companyId, companyId));
 
-  const cursor = assignedCountRows.length % cycle.length;
+  const cursor = assignedCount % cycle.length;
   const chosenAgentId = cycle[cursor];
 
   await db.update(leads).set({ ownerId: chosenAgentId, updatedAt: new Date() }).where(eq(leads.id, leadId));

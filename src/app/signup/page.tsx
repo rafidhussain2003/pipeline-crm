@@ -23,18 +23,47 @@ function SignupForm() {
     e.preventDefault();
     setError("");
     setSubmitting(true);
-    const res = await fetch("/api/auth/signup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, plan }),
-    });
-    const data = await res.json();
-    setSubmitting(false);
-    if (!res.ok) {
-      setError(data.error?.formErrors?.[0] || data.error || "Something went wrong");
-      return;
+
+    // Belt-and-suspenders: if the request ever truly stalls (dropped
+    // connection, stuck proxy) the button must not be stuck forever, so we
+    // abort and surface an error rather than waiting indefinitely.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20_000);
+
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, plan }),
+        signal: controller.signal,
+      });
+
+      let data: { error?: string | { formErrors?: string[] } } = {};
+      try {
+        data = await res.json();
+      } catch {
+        // Non-JSON response (e.g. a server crash page) — fall through to the
+        // generic error message below instead of leaving the button stuck.
+      }
+
+      if (!res.ok) {
+        setError(
+          (typeof data.error === "object" ? data.error?.formErrors?.[0] : data.error) ||
+            "Something went wrong. Please try again."
+        );
+        return;
+      }
+      setDone(true);
+    } catch (err) {
+      setError(
+        err instanceof DOMException && err.name === "AbortError"
+          ? "The request timed out. Please try again."
+          : "Could not reach the server. Please check your connection and try again."
+      );
+    } finally {
+      clearTimeout(timeoutId);
+      setSubmitting(false);
     }
-    setDone(true);
   }
 
   if (done) {

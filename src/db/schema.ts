@@ -342,13 +342,20 @@ export const automationSettings = pgTable("automation_settings", {
 // ---------------------------------------------------------------------------
 // Assignment log (audit trail for lead routing specifically)
 // ---------------------------------------------------------------------------
-export const assignmentLog = pgTable("assignment_log", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }).notNull(),
-  assignedTo: uuid("assigned_to").references(() => users.id, { onDelete: "set null" }),
-  assignedAt: timestamp("assigned_at").notNull().defaultNow(),
-  ruleUsed: varchar("rule_used", { length: 100 }),
-});
+export const assignmentLog = pgTable(
+  "assignment_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }).notNull(),
+    assignedTo: uuid("assigned_to").references(() => users.id, { onDelete: "set null" }),
+    assignedAt: timestamp("assigned_at").notNull().defaultNow(),
+    ruleUsed: varchar("rule_used", { length: 100 }),
+  },
+  (t) => ({
+    leadIdx: index("assignment_log_lead_idx").on(t.leadId),
+    assignedToIdx: index("assignment_log_assigned_to_idx").on(t.assignedTo),
+  })
+);
 
 // ---------------------------------------------------------------------------
 // General audit log (governance): who did what, to what, when

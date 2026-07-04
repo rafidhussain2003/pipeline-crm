@@ -1,0 +1,2 @@
+CREATE INDEX "assignment_log_lead_idx" ON "assignment_log" USING btree ("lead_id");--> statement-breakpoint
+CREATE INDEX "assignment_log_assigned_to_idx" ON "assignment_log" USING btree ("assigned_to");

@@ -24,9 +24,8 @@ export async function GET(req: NextRequest) {
 // needed (look up the source + fetch the lead) and return quickly; at higher
 // volume this handler's body can be moved into a queue worker unchanged.
 export async function POST(req: NextRequest) {
-  const body = await req.json();
-
   try {
+    const body = await req.json();
     const entries = body.entry || [];
     for (const entry of entries) {
       const changes = entry.changes || [];
