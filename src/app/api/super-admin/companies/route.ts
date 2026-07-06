@@ -3,9 +3,11 @@ import { randomUUID } from "crypto";
 import { z } from "zod";
 import { db } from "@/db";
 import { companies, users, dispositionOptions, assignmentRules, automationSettings } from "@/db/schema";
-import { getSession, hashPassword } from "@/lib/auth";
+import { hashPassword } from "@/lib/auth";
+import { requireSuperAdmin } from "@/lib/permissions";
 import { isNull } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { checkPolicy } from "@/lib/rate-limit";
 
 const schema = z.object({
   companyName: z.string().min(1),
@@ -14,10 +16,6 @@ const schema = z.object({
   adminEmail: z.string().email(),
   adminPassword: z.string().min(8),
 });
-
-function requireSuperAdmin(session: Awaited<ReturnType<typeof getSession>>) {
-  return session && session.role === "super_admin";
-}
 
 function slugify(name: string) {
   return (
@@ -30,8 +28,8 @@ function slugify(name: string) {
 }
 
 export async function GET() {
-  const session = await getSession();
-  if (!requireSuperAdmin(session)) return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  const auth = await requireSuperAdmin();
+  if (!auth.ok) return auth.response;
 
   const rows = await db.select().from(companies).where(isNull(companies.deletedAt));
   return NextResponse.json({ companies: rows });
@@ -45,8 +43,18 @@ export async function POST(req: NextRequest) {
     console.log(`[super-admin-create-company:${reqId}] ${step}`, extra ? JSON.stringify(extra) : "");
 
   try {
-    const session = await getSession();
-    if (!requireSuperAdmin(session)) return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    const auth = await requireSuperAdmin();
+    if (!auth.ok) return auth.response;
+    const { session } = auth;
+
+    // Super-admin actions have the largest blast radius in the app
+    // (creating/activating arbitrary companies), so this uses the
+    // strictest policy of anything in the app: 10/min per super-admin user.
+    const rl = checkPolicy("api.super_admin", session.userId);
+    if (!rl.allowed) {
+      log("rate_limited");
+      return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
+    }
 
     let body: unknown;
     try {
@@ -117,10 +125,11 @@ export async function POST(req: NextRequest) {
 
     await recordAudit({
       companyId: company.id,
-      userId: session!.userId,
+      userId: session.userId,
       action: "company.created_by_super_admin",
       entityType: "company",
       entityId: company.id,
+      after: { name: company.name, plan: company.plan, status: company.status },
     });
 
     log("done", { companyId: company.id });

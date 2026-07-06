@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { dispositionOptions } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { asc, eq } from "drizzle-orm";
+import { recordAudit } from "@/lib/audit";
 
 export async function GET() {
   const session = await getSession();
@@ -29,6 +30,15 @@ export async function POST(req: NextRequest) {
     .insert(dispositionOptions)
     .values({ companyId: session.companyId, label, color: color || "#2563eb", sortOrder: 999 })
     .returning();
+
+  await recordAudit({
+    companyId: session.companyId,
+    userId: session.userId,
+    action: "disposition.created",
+    entityType: "disposition_option",
+    entityId: created.id,
+    metadata: { label, color: created.color },
+  });
 
   return NextResponse.json({ disposition: created });
 }

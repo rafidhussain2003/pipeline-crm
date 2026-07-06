@@ -53,7 +53,13 @@ export async function POST(req: NextRequest) {
       })
       .returning();
 
-    await assignLead(lead.id, session.companyId);
+    try {
+      await assignLead(lead.id, session.companyId);
+    } catch (err) {
+      // Lead was already created — don't let an assignment failure abort
+      // the rest of the import. It's simply left unassigned.
+      console.error(`Lead assignment failed during import (lead ${lead.id}):`, err);
+    }
     created++;
   }
 

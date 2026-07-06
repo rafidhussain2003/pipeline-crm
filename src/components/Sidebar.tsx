@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import PresenceHeartbeat from "./PresenceHeartbeat";
 
 const navItems = [
   { href: "/leads", label: "All Leads" },
@@ -11,6 +12,12 @@ const navItems = [
   { href: "/settings/automation", label: "Automation" },
   { href: "/settings/audit-log", label: "Audit Log" },
 ];
+
+// Team dashboard is a supervisor tool (force assign/recycle, lock agents,
+// live queue) — shown only to admins, following the same role-gating
+// pattern already used below for the Super Admin link, rather than
+// showing every agent a page whose actions they have no permission to use.
+const SUPERVISOR_NAV_ITEM = { href: "/team", label: "Team" };
 
 export default function Sidebar({ companyName, role }: { companyName: string; role: string }) {
   const pathname = usePathname();
@@ -29,6 +36,16 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
         <div className="text-xs text-slate-500 mt-0.5 truncate">{companyName}</div>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
+        {role === "admin" && (
+          <Link
+            href={SUPERVISOR_NAV_ITEM.href}
+            className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              pathname === SUPERVISOR_NAV_ITEM.href ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            }`}
+          >
+            {SUPERVISOR_NAV_ITEM.label}
+          </Link>
+        )}
         {navItems.map((item) => {
           const active = pathname === item.href;
           return (
@@ -52,6 +69,7 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
           </Link>
         )}
       </nav>
+      {role !== "super_admin" && <PresenceHeartbeat />}
       <div className="px-3 py-4 border-t border-slate-100">
         <button
           onClick={logout}

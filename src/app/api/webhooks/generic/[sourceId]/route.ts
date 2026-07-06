@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { mapPayloadToLead, FieldMapping } from "@/lib/field-mapping";
 import { assignLead } from "@/lib/assignment";
 import { findDuplicateLead } from "@/lib/duplicates";
-import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 
 // Universal webhook connector: any tool that can POST JSON (Google Lead
 // Forms via a relay like Zapier/Pabbly, a custom form builder, another CRM)
@@ -16,7 +16,7 @@ import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 export async function POST(req: NextRequest, { params }: { params: Promise<{ sourceId: string }> }) {
   const { sourceId } = await params;
   const ip = getClientIp(req);
-  const rl = checkRateLimit(`webhook:${sourceId}:${ip}`, 60, 60_000); // 60/min per source+IP
+  const rl = checkPolicy("webhook.generic", `${sourceId}:${ip}`);
   if (!rl.allowed) {
     return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
   }
@@ -71,7 +71,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
       })
       .returning();
 
-    await assignLead(lead.id, source.companyId);
+    try {
+      await assignLead(lead.id, source.companyId);
+    } catch (err) {
+      // The lead was already created — don't let an assignment failure
+      // report this webhook as "failed" (that could trigger the sender's
+      // retry logic and create a duplicate lead for an already-successful
+      // capture). It's simply left unassigned.
+      console.error(`Lead assignment failed for webhook lead ${lead.id}:`, err);
+    }
     await db.update(leadSources).set({ lastSyncedAt: new Date() }).where(eq(leadSources.id, source.id));
 
     await db.insert(webhookLogs).values({

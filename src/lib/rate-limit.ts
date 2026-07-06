@@ -41,3 +41,94 @@ export function getClientIp(req: Request): string {
   if (forwarded) return forwarded.split(",")[0].trim();
   return req.headers.get("x-real-ip") || "unknown";
 }
+
+/**
+ * Centralized rate-limit policies. Routes call `checkPolicy(category, id)`
+ * instead of hardcoding `checkRateLimit(key, limit, windowMs)` inline, so
+ * every category's limit lives in one place instead of being scattered
+ * (and easy to lose track of) across ~30 route files.
+ *
+ * This still runs on the in-memory `checkRateLimit` above — no Redis yet,
+ * as instructed. When Redis is introduced later, only `checkPolicy`'s
+ * internals need to change; every call site stays the same.
+ */
+export type RateLimitCategory =
+  | "auth.login"
+  | "auth.signup"
+  | "auth.password_reset" // reserved: no password-reset endpoint exists yet
+  | "auth.password_change"
+  | "webhook.generic"
+  | "webhook.facebook"
+  | "oauth.facebook"
+  | "api.public"
+  | "api.authenticated"
+  | "api.admin"
+  | "api.super_admin";
+
+const POLICIES: Record<RateLimitCategory, { limit: number; windowMs: number }> = {
+  "auth.login": { limit: 10, windowMs: 60_000 },
+  "auth.signup": { limit: 5, windowMs: 60_000 },
+  "auth.password_reset": { limit: 5, windowMs: 60_000 },
+  "auth.password_change": { limit: 5, windowMs: 60_000 },
+  "webhook.generic": { limit: 60, windowMs: 60_000 },
+  // Facebook's own leadgen delivery rate for a single app is nowhere near
+  // this; it's set high enough to only catch actual abuse, not throttle
+  // real webhook traffic.
+  "webhook.facebook": { limit: 300, windowMs: 60_000 },
+  "oauth.facebook": { limit: 20, windowMs: 60_000 },
+  "api.public": { limit: 60, windowMs: 60_000 },
+  "api.authenticated": { limit: 120, windowMs: 60_000 },
+  "api.admin": { limit: 30, windowMs: 60_000 },
+  "api.super_admin": { limit: 10, windowMs: 60_000 },
+};
+
+export function checkPolicy(category: RateLimitCategory, identifier: string): { allowed: boolean; remaining: number } {
+  const policy = POLICIES[category];
+  return checkRateLimit(`${category}:${identifier}`, policy.limit, policy.windowMs);
+}
+
+/**
+ * Per-account login lockout — complements the IP-based rate limit above.
+ * IP limiting stops one IP from hammering many accounts; this stops one
+ * account from being brute-forced across many IPs. Same in-memory,
+ * single-instance approach as the rest of this file (see note at top).
+ */
+type LockoutEntry = { failures: number; lockedUntil: number | null; lastFailureAt: number };
+const lockouts = new Map<string, LockoutEntry>();
+
+const MAX_LOGIN_FAILURES = 5;
+const LOCKOUT_DURATION_MS = 15 * 60_000; // 15 minutes
+const FAILURE_MEMORY_MS = 60 * 60_000; // a failure this old no longer counts toward the threshold
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of lockouts) {
+    const stillLocked = entry.lockedUntil !== null && entry.lockedUntil > now;
+    const failureStillCounts = now - entry.lastFailureAt < FAILURE_MEMORY_MS;
+    if (!stillLocked && !failureStillCounts) lockouts.delete(key);
+  }
+}, 60_000).unref?.();
+
+export function checkAccountLockout(key: string): { locked: boolean; retryAfterMs: number } {
+  const entry = lockouts.get(key);
+  if (!entry || entry.lockedUntil === null || entry.lockedUntil <= Date.now()) {
+    return { locked: false, retryAfterMs: 0 };
+  }
+  return { locked: true, retryAfterMs: entry.lockedUntil - Date.now() };
+}
+
+export function recordLoginFailure(key: string): void {
+  const now = Date.now();
+  const entry = lockouts.get(key);
+  if (entry && now - entry.lastFailureAt < FAILURE_MEMORY_MS) {
+    entry.failures += 1;
+    entry.lastFailureAt = now;
+    if (entry.failures >= MAX_LOGIN_FAILURES) entry.lockedUntil = now + LOCKOUT_DURATION_MS;
+  } else {
+    lockouts.set(key, { failures: 1, lockedUntil: null, lastFailureAt: now });
+  }
+}
+
+export function recordLoginSuccess(key: string): void {
+  lockouts.delete(key);
+}

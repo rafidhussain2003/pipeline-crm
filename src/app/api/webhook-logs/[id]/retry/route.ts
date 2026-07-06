@@ -21,6 +21,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!log.payload) return NextResponse.json({ error: "No payload was captured for this log entry" }, { status: 400 });
   if (!log.sourceId) return NextResponse.json({ error: "This log has no associated source" }, { status: 400 });
 
+  // Idempotency guard: once a retry has actually created a lead, retrying
+  // the same log entry again must not create a second one. A failed retry
+  // (status stays whatever it was) can still be retried — only a
+  // previously-*successful* retry is blocked.
+  if (log.status === "retried") {
+    return NextResponse.json({ error: "This webhook was already successfully retried." }, { status: 409 });
+  }
+
   const [source] = await db.select().from(leadSources).where(eq(leadSources.id, log.sourceId)).limit(1);
   if (!source) return NextResponse.json({ error: "Source no longer exists" }, { status: 400 });
 
@@ -44,7 +52,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       })
       .returning();
 
-    await assignLead(lead.id, source.companyId);
+    try {
+      await assignLead(lead.id, source.companyId);
+    } catch (err) {
+      // Lead was already created — an assignment failure shouldn't mark
+      // this retry as failed (see below, that would clear the idempotency
+      // guard and allow a duplicate on a second retry attempt).
+      console.error(`Lead assignment failed during webhook retry (lead ${lead.id}):`, err);
+    }
 
     await db
       .update(webhookLogs)

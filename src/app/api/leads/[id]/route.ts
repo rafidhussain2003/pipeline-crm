@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leads } from "@/db/schema";
+import { leads, assignmentLog } from "@/db/schema";
 import { getSession } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 import { and, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 
@@ -13,11 +14,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params;
   const body = await req.json();
 
+  // Reassigning a lead or exempting it from auto-assignment are supervisor
+  // decisions (same permission the Team dashboard's force-assign requires)
+  // — everything else on this endpoint (disposition, notes fields, etc.)
+  // is a normal everyday edit any company member can make. Without this,
+  // any authenticated agent could reassign leads or blacklist them via a
+  // raw API call, bypassing the Lock/workload-cap/routing rules entirely.
+  if (("ownerId" in body || "isBlacklisted" in body) && !hasPermission(session.role, "leads:supervise")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const [before] = await db.select().from(leads).where(and(eq(leads.id, id), eq(leads.companyId, session.companyId))).limit(1);
   if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const allowed: Record<string, unknown> = {};
-  for (const key of ["disposition", "ownerId", "followUpAt", "name", "phone", "email", "state"]) {
+  for (const key of ["disposition", "ownerId", "followUpAt", "name", "phone", "email", "state", "priority", "isBlacklisted"]) {
     if (key in body) allowed[key] = body[key];
   }
   allowed.updatedAt = new Date();
@@ -41,6 +52,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     });
   }
   if ("ownerId" in body && body.ownerId !== before.ownerId) {
+    // Any path that changes ownerId must also log to assignment_log — the
+    // "assignments today" counts (Team dashboard) and the round-robin
+    // cursor (see assignLead()) both derive from this table, and would
+    // silently under-count/skew if a reassignment only showed up in
+    // audit_log. The Team dashboard's force-assign already does this (see
+    // src/lib/supervisor.ts); this is the other place ownerId can change.
+    if (body.ownerId) {
+      await db.insert(assignmentLog).values({ leadId: id, assignedTo: body.ownerId, ruleUsed: "manual:direct_edit" });
+    }
     await recordAudit({
       companyId: session.companyId,
       userId: session.userId,

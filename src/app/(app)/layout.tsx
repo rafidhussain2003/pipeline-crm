@@ -17,6 +17,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen bg-slate-50">
+      {/* Presence heartbeat is rendered inside Sidebar (role-gated there) —
+          only company members take leads and need presence tracked;
+          super_admin has no companyId and doesn't participate in routing. */}
       <Sidebar companyName={companyName} role={session.role} />
       <main className="flex-1 min-w-0">{children}</main>
     </div>

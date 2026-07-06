@@ -20,6 +20,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       ownerId: leads.ownerId,
       ownerName: users.name,
       followUpAt: leads.followUpAt,
+      priority: leads.priority,
+      isBlacklisted: leads.isBlacklisted,
       isDuplicate: leads.isDuplicate,
       duplicateOfLeadId: leads.duplicateOfLeadId,
       createdAt: leads.createdAt,

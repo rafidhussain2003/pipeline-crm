@@ -1,8 +1,29 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+// Validated once, at module load (i.e. app startup — this module is
+// imported before any request is handled). Returning a plain `string`
+// here (not narrowing `process.env.X` in place) is deliberate: TypeScript
+// does not carry an `if (!x) throw` guard's narrowing into functions
+// declared later in the same module, so `JWT_SECRET` would still be typed
+// `string | undefined` at every call site below without this — forcing
+// either an `as string` cast or a `!` assertion at each use. Giving this
+// function an explicit `string` return type fixes that everywhere at once,
+// with no cast needed anywhere.
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    // Fail loudly instead of silently signing sessions with a known,
+    // publicly-visible fallback secret. render.yaml always sets this via
+    // generateValue: true, so this should never trigger in the deployed app.
+    throw new Error(`${name} environment variable must be set.`);
+  }
+  return value;
+}
+
+const JWT_SECRET = requireEnv("JWT_SECRET");
 const COOKIE_NAME = "crm_session";
 const REFRESH_COOKIE_NAME = "crm_refresh";
 
@@ -21,8 +42,11 @@ export async function verifyPassword(password: string, hash: string) {
   return bcrypt.compare(password, hash);
 }
 
-export function signSession(payload: SessionPayload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+const DEFAULT_SESSION_DAYS = 7;
+const REMEMBER_ME_SESSION_DAYS = 30;
+
+export function signSession(payload: SessionPayload, maxAgeDays: number = DEFAULT_SESSION_DAYS) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: `${maxAgeDays}d` as jwt.SignOptions["expiresIn"] });
 }
 
 export function verifySession(token: string): SessionPayload | null {
@@ -40,16 +64,37 @@ export async function getSession(): Promise<SessionPayload | null> {
   return verifySession(token);
 }
 
-export async function setSessionCookie(payload: SessionPayload) {
+// The `const session = await getSession(); if (!session || !session.companyId)
+// return NextResponse.json({ error: "Unauthorized" }, { status: 401 });`
+// pattern is repeated near-identically across most API routes. This
+// extracts it — the caller still does its own `if (!ok) return response;`,
+// so control flow at each call site stays explicit and unchanged.
+export type CompanySession = SessionPayload & { companyId: string };
+
+export async function requireCompanySession(): Promise<
+  { ok: true; session: CompanySession } | { ok: false; response: NextResponse }
+> {
+  const session = await getSession();
+  if (!session || !session.companyId) {
+    return { ok: false, response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  }
+  return { ok: true, session: session as CompanySession };
+}
+
+export async function setSessionCookie(payload: SessionPayload, maxAgeDays: number = DEFAULT_SESSION_DAYS) {
   const store = await cookies();
-  store.set(COOKIE_NAME, signSession(payload), {
+  store.set(COOKIE_NAME, signSession(payload, maxAgeDays), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 7,
+    maxAge: 60 * 60 * 24 * maxAgeDays,
   });
 }
+
+// Exported so routes accepting a "remember me" option can opt into it
+// without hardcoding the number themselves.
+export { REMEMBER_ME_SESSION_DAYS };
 
 export async function clearSessionCookie() {
   const store = await cookies();

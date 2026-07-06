@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth";
 import { encrypt } from "@/lib/crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import crypto from "crypto";
+import { recordAudit } from "@/lib/audit";
 
 export async function GET() {
   const session = await getSession();
@@ -54,6 +55,18 @@ export async function POST(req: NextRequest) {
       })
       .returning();
 
+    // Note: intentionally not logging webhookSecret/fieldMapping contents —
+    // the secret is sensitive, and fieldMapping may echo customer-provided
+    // field names but never actual lead data.
+    await recordAudit({
+      companyId: session.companyId,
+      userId: session.userId,
+      action: "webhook_source.created",
+      entityType: "lead_source",
+      entityId: source.id,
+      after: { platform: source.platform, pageName: source.pageName },
+    });
+
     return NextResponse.json({
       source: {
         id: source.id,
@@ -67,9 +80,19 @@ export async function POST(req: NextRequest) {
 
   if (!accessToken) return NextResponse.json({ error: "Access token is required" }, { status: 400 });
 
-  const res = await fetch(
-    `https://graph.facebook.com/v19.0/me?fields=id,name&access_token=${encodeURIComponent(accessToken)}`
-  );
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://graph.facebook.com/v19.0/me?fields=id,name&access_token=${encodeURIComponent(accessToken)}`,
+      { signal: AbortSignal.timeout(10_000) }
+    );
+  } catch (err) {
+    console.error("Facebook Graph API request failed:", err);
+    return NextResponse.json(
+      { error: "Could not reach Facebook right now. Please try again." },
+      { status: 502 }
+    );
+  }
   if (!res.ok) {
     return NextResponse.json({ error: "Facebook rejected this token. Double-check it's a Page access token." }, { status: 400 });
   }
@@ -88,6 +111,17 @@ export async function POST(req: NextRequest) {
       status: "active",
     })
     .returning();
+
+  // Not logging accessToken (encrypted at rest, but still shouldn't appear
+  // in the audit trail).
+  await recordAudit({
+    companyId: session.companyId,
+    userId: session.userId,
+    action: "webhook_source.created",
+    entityType: "lead_source",
+    entityId: source.id,
+    after: { platform: source.platform, pageId, pageName },
+  });
 
   return NextResponse.json({
     source: { id: source.id, pageId, pageName, platform: source.platform, status: source.status },

@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { db } from "@/db";
 import { refreshTokens } from "@/db/schema";
-import { and, eq, isNull, gt } from "drizzle-orm";
+import { and, eq, isNull, gt, isNotNull, lt, or } from "drizzle-orm";
 
 const REFRESH_TOKEN_TTL_DAYS = 30;
 
@@ -40,4 +40,17 @@ export async function revokeRefreshToken(rawToken: string) {
 
 export async function revokeAllRefreshTokensForUser(userId: string) {
   await db.update(refreshTokens).set({ revokedAt: new Date() }).where(eq(refreshTokens.userId, userId));
+}
+
+// No cleanup of this table existed anywhere until now — every issued
+// token, expired or revoked, stayed in the table forever. Deletes rows
+// that are no longer useful for anything: already expired, or already
+// revoked (logout / password change / this same cleanup's future runs).
+// A live, valid token is never touched. See /api/cron/cleanup-tokens.
+export async function cleanupExpiredRefreshTokens(): Promise<number> {
+  const deleted = await db
+    .delete(refreshTokens)
+    .where(or(lt(refreshTokens.expiresAt, new Date()), isNotNull(refreshTokens.revokedAt)))
+    .returning({ id: refreshTokens.id });
+  return deleted.length;
 }

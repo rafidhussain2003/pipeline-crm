@@ -2,12 +2,16 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { leads, users } from "@/db/schema";
 import { getSession } from "@/lib/auth";
+import { checkPolicy } from "@/lib/rate-limit";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import Papa from "papaparse";
 
 export async function GET() {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const rl = checkPolicy("api.authenticated", session.userId);
+  if (!rl.allowed) return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
 
   const rows = await db
     .select({

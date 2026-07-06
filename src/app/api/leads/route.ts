@@ -3,7 +3,10 @@ import { db } from "@/db";
 import { leads, users } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { and, desc, eq, ilike, isNull, or } from "drizzle-orm";
-import { assignLead } from "@/lib/assignment";
+import "@/lib/assignment"; // registers the "lead.assign" job handler with the queue
+import "@/lib/workflows/registry"; // registers the lead.created -> workflow listener
+import { queue } from "@/lib/infra/queue";
+import { eventBus } from "@/lib/events/bus";
 import { findDuplicateLead } from "@/lib/duplicates";
 import { recordAudit } from "@/lib/audit";
 
@@ -77,7 +80,21 @@ export async function POST(req: NextRequest) {
     })
     .returning();
 
-  await assignLead(lead.id, session.companyId);
+  await eventBus.emit("lead.created", { leadId: lead.id, companyId: session.companyId, source: "manual" });
+
+  try {
+    // Routed through the job queue abstraction (src/lib/infra/queue.ts)
+    // rather than calling assignLead() directly — today this still runs
+    // inline (with automatic retry on transient failure), but this is the
+    // seam where it moves off the request entirely once a real queue
+    // backend exists, with no further changes needed here.
+    await queue.enqueue("lead.assign", { leadId: lead.id, companyId: session.companyId });
+  } catch (err) {
+    // The lead was already created successfully — an assignment failure
+    // shouldn't turn that into a failed request. Log it so it's visible,
+    // but the lead is simply left unassigned rather than erroring out.
+    console.error("Lead assignment failed after lead creation:", err);
+  }
   await recordAudit({
     companyId: session.companyId,
     userId: session.userId,

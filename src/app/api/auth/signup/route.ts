@@ -6,7 +6,7 @@ import { companies, dispositionOptions, assignmentRules, automationSettings, use
 import { hashPassword, setSessionCookie, setRefreshCookie } from "@/lib/auth";
 import { issueRefreshToken } from "@/lib/refresh-tokens";
 import { recordAudit } from "@/lib/audit";
-import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 import { eq } from "drizzle-orm";
 
 const schema = z.object({
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     log("start");
 
     const ip = getClientIp(req);
-    const rl = checkRateLimit(`signup:${ip}`, 5, 60_000); // 5 signups/minute/IP
+    const rl = checkPolicy("auth.signup", ip);
     if (!rl.allowed) {
       log("rate_limited", { ip });
       return NextResponse.json({ error: "Too many signup attempts. Please wait a minute and try again." }, { status: 429 });

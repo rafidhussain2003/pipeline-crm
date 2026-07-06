@@ -14,6 +14,8 @@ type Entry = {
 
 const ACTION_LABELS: Record<string, string> = {
   "auth.login": "logged in",
+  "auth.logout": "logged out",
+  "disposition.created": "added a disposition option",
   "lead.created": "created a lead",
   "lead.disposition_changed": "changed a lead's disposition",
   "lead.reassigned": "reassigned a lead",
@@ -21,10 +23,13 @@ const ACTION_LABELS: Record<string, string> = {
   "lead.note_added": "added a note",
   "lead.attachment_added": "added an attachment",
   "lead.auto_recycled": "auto-recycled a lead",
+  "lead.force_recycled": "force-recycled a lead",
   "leads.imported": "imported leads",
   "agent.added": "added an agent",
   "agent.updated": "updated an agent",
   "agent.removed": "removed an agent",
+  "agent.locked": "locked an agent",
+  "agent.unlocked": "unlocked an agent",
   "company.signed_up": "signed up",
   "company.status_changed": "changed company status",
 };

@@ -20,6 +20,14 @@ const pool =
     connectionTimeoutMillis: 10_000,
     statement_timeout: 20_000,
     query_timeout: 20_000,
+    // `pg` defaults to max 10 connections per Pool if unset — fine for
+    // local dev, but a single Render instance serving many concurrent
+    // requests would exhaust that quickly and start queuing/timing out
+    // every request behind it. 20 leaves headroom under a typical managed
+    // Postgres plan's connection ceiling while still being well above the
+    // old implicit default. Revisit if this instance is ever scaled to
+    // multiple concurrent processes (each gets its own pool of this size).
+    max: 20,
   });
 
 if (process.env.NODE_ENV !== "production") global._pgPool = pool;

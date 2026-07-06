@@ -6,8 +6,14 @@ import {
   exchangeForLongLivedToken,
   fetchUserPages,
 } from "@/lib/facebook-oauth";
+import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 
 export async function GET(req: NextRequest) {
+  const rl = checkPolicy("oauth.facebook", getClientIp(req));
+  if (!rl.allowed) {
+    return NextResponse.redirect(new URL("/settings/connector?error=rate_limited", req.url));
+  }
+
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state");

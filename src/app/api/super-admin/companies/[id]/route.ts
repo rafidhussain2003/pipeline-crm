@@ -1,17 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { companies } from "@/db/schema";
-import { getSession } from "@/lib/auth";
+import { requireSuperAdmin } from "@/lib/permissions";
 import { eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { checkPolicy } from "@/lib/rate-limit";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getSession();
-  if (!session || session.role !== "super_admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  const auth = await requireSuperAdmin();
+  if (!auth.ok) return auth.response;
+  const { session } = auth;
+
+  const rl = checkPolicy("api.admin", session.userId);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
   }
   const { id } = await params;
   const { status, customDomain, customDomainVerified } = await req.json();
+
+  const [beforeRow] = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
 
   const allowed: Record<string, unknown> = { updatedAt: new Date() };
   if (status) allowed.status = status;
@@ -27,7 +34,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     action: "company.status_changed",
     entityType: "company",
     entityId: id,
-    metadata: { status, customDomain, customDomainVerified },
+    before: beforeRow ? { status: beforeRow.status, customDomain: beforeRow.customDomain } : null,
+    after: { status: updated.status, customDomain: updated.customDomain, customDomainVerified: updated.customDomainVerified },
   });
 
   return NextResponse.json({ company: updated });
@@ -37,9 +45,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 // delete cascades logically since every child table is filtered by
 // companyId + a live parent), recoverable by clearing deletedAt manually if needed.
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getSession();
-  if (!session || session.role !== "super_admin") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  const auth = await requireSuperAdmin();
+  if (!auth.ok) return auth.response;
+  const { session } = auth;
+
+  const rl = checkPolicy("api.super_admin", session.userId);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
   }
   const { id } = await params;
 

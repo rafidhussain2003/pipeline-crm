@@ -11,6 +11,8 @@ type LeadDetail = {
   disposition: string;
   ownerId: string | null;
   ownerName: string | null;
+  priority: string;
+  isBlacklisted: boolean;
   isDuplicate: boolean;
   createdAt: string;
 };
@@ -18,6 +20,7 @@ type LeadDetail = {
 type Note = { id: string; body: string; createdAt: string; authorName: string | null };
 type Attachment = { id: string; fileName: string; fileUrl: string; createdAt: string };
 type Tag = { id: string; label: string; color: string };
+type TimelineEvent = { id: string; at: string; label: string; detail: string | null; actor: string | null };
 
 export default function LeadDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -29,25 +32,38 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const [newNote, setNewNote] = useState("");
   const [attachName, setAttachName] = useState("");
   const [attachUrl, setAttachUrl] = useState("");
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
 
   async function load() {
-    const [leadRes, notesRes, attRes, tagsRes, leadTagsRes] = await Promise.all([
+    const [leadRes, notesRes, attRes, tagsRes, leadTagsRes, timelineRes] = await Promise.all([
       fetch(`/api/leads/${id}/detail`),
       fetch(`/api/leads/${id}/notes`),
       fetch(`/api/leads/${id}/attachments`),
       fetch("/api/tags"),
       fetch(`/api/leads/${id}/tags`),
+      fetch(`/api/leads/${id}/timeline`),
     ]);
     const leadData = await leadRes.json();
     const notesData = await notesRes.json();
     const attData = await attRes.json();
     const tagsData = await tagsRes.json();
     const leadTagsData = await leadTagsRes.json();
+    const timelineData = await timelineRes.json();
     setLead(leadData.lead || null);
     setNotes(notesData.notes || []);
     setAttachments(attData.attachments || []);
     setAllTags(tagsData.tags || []);
     setLeadTagIds(leadTagsData.tagIds || []);
+    setTimeline(timelineData.events || []);
+  }
+
+  async function updateLeadField(patch: Partial<Pick<LeadDetail, "priority" | "isBlacklisted">>) {
+    setLead((prev) => (prev ? { ...prev, ...patch } : prev));
+    await fetch(`/api/leads/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
   }
 
   useEffect(() => {
@@ -114,6 +130,24 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
         </div>
         <div className="text-sm text-slate-500 mt-1">
           Owner: {lead.ownerName || "Unassigned"} · Disposition: {lead.disposition}
+        </div>
+        <div className="flex items-center gap-2 mt-3">
+          <button
+            onClick={() => updateLeadField({ priority: lead.priority === "high" ? "normal" : "high" })}
+            className={`text-xs font-medium rounded-full px-3 py-1 ${
+              lead.priority === "high" ? "text-amber-700 bg-amber-50" : "text-slate-500 bg-slate-100"
+            }`}
+          >
+            {lead.priority === "high" ? "High Priority ✓" : "Mark High Priority"}
+          </button>
+          <button
+            onClick={() => updateLeadField({ isBlacklisted: !lead.isBlacklisted })}
+            className={`text-xs font-medium rounded-full px-3 py-1 ${
+              lead.isBlacklisted ? "text-red-700 bg-red-50" : "text-slate-500 bg-slate-100"
+            }`}
+          >
+            {lead.isBlacklisted ? "Blacklisted (no auto-assign) ✓" : "Blacklist from auto-assign"}
+          </button>
         </div>
       </div>
 
@@ -190,6 +224,23 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           <button onClick={addAttachment} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">
             Add
           </button>
+        </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-lg p-5 mt-6">
+        <h2 className="text-sm font-semibold text-slate-700 mb-3">Timeline</h2>
+        <div className="space-y-3">
+          {timeline.map((e) => (
+            <div key={e.id} className="border-b border-slate-100 pb-3 last:border-0">
+              <p className="text-sm text-slate-800">
+                {e.label}
+                {e.actor && <span className="text-slate-400"> · {e.actor}</span>}
+              </p>
+              {e.detail && <p className="text-xs text-slate-400 mt-0.5">{e.detail}</p>}
+              <p className="text-xs text-slate-400 mt-0.5">{new Date(e.at).toLocaleString()}</p>
+            </div>
+          ))}
+          {timeline.length === 0 && <p className="text-xs text-slate-400">No history yet.</p>}
         </div>
       </div>
     </div>
