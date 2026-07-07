@@ -128,6 +128,73 @@ minutes of inactivity to a different agent. This runs when something calls
 Set up a **Render Cron Job** (or a free external scheduler like
 cron-job.org) to hit that URL every 15–30 minutes.
 
+## Billing (Stripe)
+
+Every company gets a **7-day free trial** the moment it's created (public
+signup or super-admin-created) — no Stripe involvement, no card required.
+Trial start/end and the current subscription status live on
+`companies.subscriptionStatus` / `trialStartedAt` / `trialEndsAt`
+(`trial` → `active` → `past_due` → `cancelled`; see the enum's comment in
+`src/db/schema.ts` for exactly what each one does and doesn't block). This
+is deliberately just **one plan** — there's no plan picker, no per-seat
+pricing, no proration logic to maintain.
+
+**One-time Stripe setup:**
+1. Create a Product with one recurring **monthly** Price in the
+   [Stripe Dashboard](https://dashboard.stripe.com/products) → copy its Price
+   ID (`price_...`) into `STRIPE_PRICE_ID`.
+2. Copy your API secret key (`sk_test_...` while testing) into `STRIPE_SECRET_KEY`.
+3. Add a webhook endpoint pointing at `https://YOUR_DOMAIN/api/webhooks/stripe`,
+   subscribed to: `checkout.session.completed`, `customer.subscription.created`,
+   `customer.subscription.updated`, `customer.subscription.deleted`,
+   `invoice.payment_failed`, `invoice.payment_succeeded`. Copy its signing
+   secret into `STRIPE_WEBHOOK_SECRET`.
+4. For local testing, use the [Stripe CLI](https://stripe.com/docs/stripe-cli)
+   instead of a dashboard webhook: `stripe listen --forward-to localhost:3000/api/webhooks/stripe`
+   (it prints a `whsec_...` — use that as `STRIPE_WEBHOOK_SECRET` while it's running).
+
+**How it fits together:**
+- **Upgrade Now / Upgrade Plan** → `POST /api/billing/checkout` creates a
+  Stripe Checkout Session (subscription mode) and redirects there. On
+  success, Stripe redirects to `/billing/success`, which eagerly confirms
+  the session server-side (so the app doesn't still look "blocked" for the
+  second or two before the webhook arrives) and then sends the user to
+  `/subscription`.
+- **Update Card / Billing History / Cancel Subscription** → all three open
+  the Stripe-hosted **Billing Portal** (`POST /api/billing/portal`), just
+  deep-linked to a different starting screen. Nothing about payment methods,
+  invoices, or cancellation is built or stored in this app — Stripe owns all
+  of it, per the "don't build a custom payment system" rule this was built
+  under.
+- **Renewals and failed payments** are handled entirely by Stripe's own
+  billing cycle + Smart Retries; `/api/webhooks/stripe` just mirrors the
+  resulting status onto the company row. A failed payment sets `past_due`,
+  which shows a warning banner but does **not** block the app (a grace
+  period while Stripe retries); it only becomes `cancelled` (which does
+  block) once Stripe gives up retrying and cancels the subscription.
+- Only `admin` can act on billing (`billing:manage` permission) — every
+  company role can see the read-only Subscription page.
+- **Enforcement is centralized in `src/proxy.ts`** (this app's `proxy.js`
+  file — the file convention Next.js 16 renamed `middleware.ts` to; it
+  defaults to the Node.js runtime, so it can query Postgres directly). It
+  decodes the session cookie and, for any `/api/*` request belonging to a
+  company session, checks that company's subscription status before the
+  request ever reaches its route handler — returning `402 Payment Required`
+  if the trial has expired or the subscription is cancelled. This is the
+  single chokepoint every company-scoped API passes through, so no
+  individual route needs its own copy of the check. Explicitly exempted:
+  `/api/auth/*`, `/api/webhooks/*`, `/api/health`, `/api/billing/*` (a
+  blocked company must still be able to pay), `/api/super-admin/*`, and
+  `/api/cron/*`. The same file also already handles page-level auth
+  redirects for `/leads`, `/settings`, and `/super-admin` — the billing
+  check was added alongside that, not as a second competing file (Next.js
+  only supports one).
+
+**Companies that existed before this feature shipped** were grandfathered in
+by the migration (`drizzle/0005_fair_moon_knight.sql`): already-`active`
+companies were set to `subscriptionStatus = 'active'` (no trial clock
+running), so this rollout never silently locks out an existing customer.
+
 ## Deploying to Render
 
 1. **Push to GitHub**, then in Render choose **New > Blueprint** and point it
@@ -152,9 +219,11 @@ Docker-based service instead of the native Node runtime — either works.
 
 ## What's deliberately simple / next steps
 
-- **Billing is manual-activation only** — a company signs up, lands
-  "pending," you activate it in Super Admin. Stripe for instant self-serve
-  activation is a clean add-on later; the signup flow won't need to change.
+- **Platform approval and billing are separate gates** — a company still
+  signs up and lands "pending" in Super Admin (that's unrelated to payment,
+  and unchanged by Stripe billing above); it separately gets its own 7-day
+  trial clock and, once subscribed, its own Stripe-billed status. A company
+  can be platform-"pending" and billing-"trial" at the same time.
 - **Per-company custom domain routing** isn't live-wired yet (stored, shown
   in Super Admin, not yet routing real traffic — needs a wildcard cert +
   host-header lookup layer).

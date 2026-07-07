@@ -74,6 +74,8 @@ export async function POST(req: NextRequest) {
     const passwordHash = await hashPassword(adminPassword);
     log("password_hashed");
 
+    const now = new Date();
+    const trialEndsAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const company = await db.transaction(async (tx) => {
       const [company] = await tx
         .insert(companies)
@@ -82,6 +84,11 @@ export async function POST(req: NextRequest) {
           slug: slugify(companyName),
           status: "active", // super-admin-created companies go live immediately
           plan: plan || "starter",
+          // Same 7-day trial every company gets, regardless of how it was
+          // created — see subscriptionStatusEnum in schema.ts.
+          subscriptionStatus: "trial",
+          trialStartedAt: now,
+          trialEndsAt,
         })
         .returning();
       log("company_created", { companyId: company.id });

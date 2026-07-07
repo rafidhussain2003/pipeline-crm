@@ -76,6 +76,8 @@ export async function POST(req: NextRequest) {
 
     // Company, admin user, and default company data are created atomically —
     // if any insert fails, nothing is left half-created.
+    const now = new Date();
+    const trialEndsAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const { company, admin } = await db.transaction(async (tx) => {
       const [company] = await tx
         .insert(companies)
@@ -85,6 +87,12 @@ export async function POST(req: NextRequest) {
           status: "pending", // super-admin approves before it goes live (manual-billing phase)
           plan,
           pricePerAgentCents: PLAN_PRICE_CENTS[plan] ?? 1900,
+          // Every new company gets a 7-day free trial, independent of the
+          // "pending" platform-approval status above — see
+          // subscriptionStatusEnum in schema.ts for why these are separate.
+          subscriptionStatus: "trial",
+          trialStartedAt: now,
+          trialEndsAt,
         })
         .returning();
       log("company_created", { companyId: company.id });

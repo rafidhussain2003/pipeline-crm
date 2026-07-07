@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { userSkills, users } from "@/db/schema";
 import { getSession } from "@/lib/auth";
+import { requirePermission } from "@/lib/permissions";
 import { and, eq } from "drizzle-orm";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -17,10 +18,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getSession();
-  if (!session || !session.companyId || session.role !== "admin") {
-    return NextResponse.json({ error: "Only company admins can edit agent skills" }, { status: 403 });
-  }
+  const auth = await requirePermission("agents:manage");
+  if (!auth.ok) return auth.response;
+  const { session } = auth;
   const { id } = await params;
   const { skillId } = await req.json();
   if (!skillId) return NextResponse.json({ error: "skillId is required" }, { status: 400 });
@@ -33,10 +33,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getSession();
-  if (!session || !session.companyId || session.role !== "admin") {
-    return NextResponse.json({ error: "Only company admins can edit agent skills" }, { status: 403 });
-  }
+  const auth = await requirePermission("agents:manage");
+  if (!auth.ok) return auth.response;
+  const { session } = auth;
   const { id } = await params;
   const { searchParams } = new URL(req.url);
   const skillId = searchParams.get("skillId");

@@ -7,7 +7,6 @@ import PresenceHeartbeat from "./PresenceHeartbeat";
 const navItems = [
   { href: "/leads", label: "All Leads" },
   { href: "/settings/connector", label: "Connect Facebook" },
-  { href: "/settings/agents", label: "Agents & Tiers" },
   { href: "/settings/pipeline", label: "Pipeline Settings" },
   { href: "/settings/automation", label: "Automation" },
   { href: "/settings/audit-log", label: "Audit Log" },
@@ -18,6 +17,11 @@ const navItems = [
 // pattern already used below for the Super Admin link, rather than
 // showing every agent a page whose actions they have no permission to use.
 const SUPERVISOR_NAV_ITEM = { href: "/team", label: "Team" };
+
+// Agents management requires "agents:manage" (admin or manager) — gated
+// the same way as the Team/Super Admin links rather than added to the
+// shared navItems list, which every role sees.
+const AGENTS_NAV_ITEM = { href: "/settings/agents", label: "Agents" };
 
 export default function Sidebar({ companyName, role }: { companyName: string; role: string }) {
   const pathname = usePathname();
@@ -46,6 +50,16 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
             {SUPERVISOR_NAV_ITEM.label}
           </Link>
         )}
+        {(role === "admin" || role === "manager") && (
+          <Link
+            href={AGENTS_NAV_ITEM.href}
+            className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              pathname === AGENTS_NAV_ITEM.href ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            }`}
+          >
+            {AGENTS_NAV_ITEM.label}
+          </Link>
+        )}
         {navItems.map((item) => {
           const active = pathname === item.href;
           return (
@@ -70,7 +84,25 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
         )}
       </nav>
       {role !== "super_admin" && <PresenceHeartbeat />}
-      <div className="px-3 py-4 border-t border-slate-100">
+      <div className="px-3 py-4 border-t border-slate-100 space-y-1">
+        {role !== "super_admin" && (
+          <Link
+            href="/subscription"
+            className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              pathname === "/subscription" ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            }`}
+          >
+            Subscription
+          </Link>
+        )}
+        <Link
+          href="/profile"
+          className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+            pathname === "/profile" ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+          }`}
+        >
+          Profile
+        </Link>
         <button
           onClick={logout}
           className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-900"

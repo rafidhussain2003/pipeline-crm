@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     }
 
     const newHash = await hashPassword(newPassword);
-    await db.update(users).set({ passwordHash: newHash }).where(eq(users.id, user.id));
+    await db.update(users).set({ passwordHash: newHash, passwordChangedAt: new Date() }).where(eq(users.id, user.id));
 
     // Force re-authentication everywhere else. The current tab's session
     // cookie is a stateless JWT and stays valid until it naturally expires

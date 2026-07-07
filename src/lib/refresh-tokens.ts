@@ -42,6 +42,18 @@ export async function revokeAllRefreshTokensForUser(userId: string) {
   await db.update(refreshTokens).set({ revokedAt: new Date() }).where(eq(refreshTokens.userId, userId));
 }
 
+// Revoke one specific session by its row id (used by the Security tab's
+// per-session "revoke" action) — scoped to userId so a user can only ever
+// revoke their own sessions, never guess another user's session id.
+export async function revokeRefreshTokenById(id: string, userId: string) {
+  const [revoked] = await db
+    .update(refreshTokens)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(refreshTokens.id, id), eq(refreshTokens.userId, userId)))
+    .returning({ id: refreshTokens.id });
+  return revoked || null;
+}
+
 // No cleanup of this table existed anywhere until now — every issued
 // token, expired or revoked, stayed in the table forever. Deletes rows
 // that are no longer useful for anything: already expired, or already

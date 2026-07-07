@@ -13,7 +13,14 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
-export const roleEnum = pgEnum("role", ["super_admin", "admin", "agent"]);
+// "manager" sits between admin and agent (Leads + Agents + Reports, but not
+// company-wide settings/API keys/audit log/integrations — see
+// src/lib/permissions.ts). There is no separate "owner" value: company
+// deletion isn't even a company-level action in this app (only super-admin
+// can delete a company), so "Owner" has no enforceable difference from
+// "admin" here — it's shown in the Agents UI as a computed label (the
+// earliest-created admin per company), not a stored role.
+export const roleEnum = pgEnum("role", ["super_admin", "admin", "manager", "agent"]);
 export const tierEnum = pgEnum("tier", ["1", "2", "3"]);
 export const companyStatusEnum = pgEnum("company_status", [
   "pending", // signed up, awaiting super-admin activation (manual billing phase)
@@ -29,22 +36,62 @@ export const sourcePlatformEnum = pgEnum("source_platform", [
 ]);
 export const webhookLogStatusEnum = pgEnum("webhook_log_status", ["success", "failed", "retried"]);
 
+// Billing lifecycle, independent of `companyStatusEnum` above (that's the
+// platform-level "has super-admin let this tenant onto the app at all"
+// gate; this is "are they current on payment"). "trial" is set at company
+// creation (see signup routes) and never touches Stripe; a real Stripe
+// subscription only exists once they complete Checkout, at which point
+// this flips to "active". "past_due" is a grace period (Stripe is retrying
+// a failed charge) — the app shows a warning but does NOT block usage for
+// it, only for an expired trial or "cancelled".
+export const subscriptionStatusEnum = pgEnum("subscription_status", [
+  "trial",
+  "active",
+  "past_due",
+  "cancelled",
+]);
+
 // ---------------------------------------------------------------------------
 // Companies (tenants)
 // ---------------------------------------------------------------------------
-export const companies = pgTable("companies", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: varchar("name", { length: 255 }).notNull(),
-  slug: varchar("slug", { length: 255 }).notNull().unique(),
-  status: companyStatusEnum("status").notNull().default("pending"),
-  plan: varchar("plan", { length: 100 }).notNull().default("starter"),
-  pricePerAgentCents: integer("price_per_agent_cents").notNull().default(1900),
-  customDomain: varchar("custom_domain", { length: 255 }),
-  customDomainVerified: boolean("custom_domain_verified").notNull().default(false),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-  deletedAt: timestamp("deleted_at"), // soft delete
-});
+export const companies = pgTable(
+  "companies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: varchar("name", { length: 255 }).notNull(),
+    slug: varchar("slug", { length: 255 }).notNull().unique(),
+    status: companyStatusEnum("status").notNull().default("pending"),
+    plan: varchar("plan", { length: 100 }).notNull().default("starter"),
+    pricePerAgentCents: integer("price_per_agent_cents").notNull().default(1900),
+    customDomain: varchar("custom_domain", { length: 255 }),
+    customDomainVerified: boolean("custom_domain_verified").notNull().default(false),
+    // Company Settings "Company" tab. logoUrl is a pasted link (same
+    // convention as lead attachments — no file-upload infra in this app).
+    logoUrl: text("logo_url"),
+    website: varchar("website", { length: 255 }),
+    address: text("address"),
+    timezone: varchar("timezone", { length: 100 }),
+    supportEmail: varchar("support_email", { length: 255 }),
+    businessPhone: varchar("business_phone", { length: 50 }),
+    // Billing / subscription (Stripe). See subscriptionStatusEnum above for
+    // what each status means and what it does/doesn't block.
+    subscriptionStatus: subscriptionStatusEnum("subscription_status").notNull().default("trial"),
+    trialStartedAt: timestamp("trial_started_at"),
+    trialEndsAt: timestamp("trial_ends_at"),
+    // "Next Billing Date" on the Subscription page — synced from Stripe's
+    // subscription.current_period_end via webhook, not computed locally, so
+    // it always reflects what Stripe will actually charge.
+    currentPeriodEnd: timestamp("current_period_end"),
+    stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
+    stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at"), // soft delete
+  },
+  (t) => ({
+    stripeCustomerIdx: uniqueIndex("companies_stripe_customer_idx").on(t.stripeCustomerId),
+  })
+);
 
 // ---------------------------------------------------------------------------
 // Users (super_admin has companyId = null; admin/agent belong to a company)
@@ -67,6 +114,7 @@ export const users = pgTable(
     companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
     name: varchar("name", { length: 255 }).notNull(),
     email: varchar("email", { length: 255 }).notNull().unique(),
+    phone: varchar("phone", { length: 50 }),
     passwordHash: text("password_hash").notNull(),
     role: roleEnum("role").notNull().default("agent"),
     tier: tierEnum("tier").default("1"),
@@ -78,6 +126,14 @@ export const users = pgTable(
     // (see src/lib/supervisor.ts). Defaults false so no existing agent is
     // affected until a supervisor explicitly locks one.
     locked: boolean("locked").notNull().default(false),
+    // Notifications tab preferences.
+    emailNotificationsEnabled: boolean("email_notifications_enabled").notNull().default(true),
+    smsNotificationsEnabled: boolean("sms_notifications_enabled").notNull().default(true),
+    // Security tab's "Last Password Change" — "Last Login" is deliberately
+    // NOT a column here; it's read from the existing audit_log (most
+    // recent "auth.login" row for this user), which already records this
+    // reliably with no new field needed.
+    passwordChangedAt: timestamp("password_changed_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     deletedAt: timestamp("deleted_at"), // soft delete
   },

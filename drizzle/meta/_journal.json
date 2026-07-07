@@ -22,6 +22,27 @@
       "when": 1783268648235,
       "tag": "0002_petite_luminals",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783359116771,
+      "tag": "0003_hard_punisher",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783368986759,
+      "tag": "0004_lame_deathstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783372718556,
+      "tag": "0005_fair_moon_knight",
+      "breakpoints": true
     }
   ]
 }

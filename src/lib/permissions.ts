@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import { getSession, requireCompanySession, type CompanySession, type SessionPayload } from "./auth";
 
 // Centralizes "which role can do what" in one place instead of scattering
-// `session.role !== "admin"` checks across every route. Adding a role later
-// (the app currently only has super_admin/admin/agent — "Owner"/"Manager"
-// don't exist in the schema's role enum yet) means adding one entry here,
-// not hunting through every route file.
+// `session.role !== "admin"` checks across every route. Adding a role
+// later (the schema's role enum is super_admin/admin/manager/agent — see
+// schema.ts for why there's no separate "owner" value) means adding one
+// entry here, not hunting through every route file.
 //
 // This intentionally mirrors the EXACT authorization behavior already
 // present in the routes it's applied to (verified by reading each route
@@ -16,8 +16,10 @@ export type Permission =
   | "assignment_rules:edit"
   | "automation_settings:edit"
   | "tags:manage"
-  | "users:create"
+  | "agents:manage" // Agents module: create/edit/reset-password/enable-disable/delete agents
   | "leads:supervise" // force assign/reassign/recycle, lock/unlock agents (Team dashboard)
+  | "company_settings:edit" // Profile > Company tab
+  | "billing:manage" // Subscription page actions (checkout, portal)
   | "companies:manage"; // super-admin-only actions
 
 // Deliberately does NOT grant company-scoped permissions to super_admin:
@@ -25,9 +27,23 @@ export type Permission =
 // requirePermission() (which requires a company session) would already
 // reject them before this matrix is even consulted. Their power lives
 // entirely in the super-admin-only routes guarded by requireSuperAdmin().
+//
+// manager gets exactly what the Agents module spec asks for — Leads
+// (already unrestricted for every company role, nothing to grant) and
+// Agents (agents:manage) — but not company-wide settings, API keys, the
+// audit log, or integrations, which stay admin-only.
 const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   super_admin: new Set(["companies:manage"]),
-  admin: new Set(["assignment_rules:edit", "automation_settings:edit", "tags:manage", "users:create", "leads:supervise"]),
+  admin: new Set([
+    "assignment_rules:edit",
+    "automation_settings:edit",
+    "tags:manage",
+    "agents:manage",
+    "leads:supervise",
+    "company_settings:edit",
+    "billing:manage",
+  ]),
+  manager: new Set(["agents:manage"]),
   agent: new Set(["tags:manage"]),
 };
 

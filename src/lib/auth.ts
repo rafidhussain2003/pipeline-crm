@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import type { roleEnum } from "@/db/schema";
 
 // Validated once, at module load (i.e. app startup — this module is
 // imported before any request is handled). Returning a plain `string`
@@ -27,10 +28,13 @@ const JWT_SECRET = requireEnv("JWT_SECRET");
 const COOKIE_NAME = "crm_session";
 const REFRESH_COOKIE_NAME = "crm_refresh";
 
+// Derived from the schema's role enum (not hardcoded here a second time) —
+// adding a role only ever means updating schema.ts, not hunting down every
+// place a role union type was independently retyped.
 export type SessionPayload = {
   userId: string;
   companyId: string | null;
-  role: "super_admin" | "admin" | "agent";
+  role: (typeof roleEnum.enumValues)[number];
   email: string;
 };
 
