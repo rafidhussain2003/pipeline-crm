@@ -217,6 +217,19 @@ running), so this rollout never silently locks out an existing customer.
 Render also picks up the included `Dockerfile` automatically if you choose a
 Docker-based service instead of the native Node runtime — either works.
 
+**Public URL / OAuth redirects:** every absolute URL this app hands to a
+third party — Facebook's OAuth `redirect_uri`, Stripe's Checkout/Portal
+`success_url`/`cancel_url`/`return_url`, and its own `/login` redirects —
+is built from `src/lib/url.ts`'s `getPublicAppUrl()`, never from the
+incoming request. On Render this resolves automatically via the
+platform-injected `RENDER_EXTERNAL_URL` env var, so there's nothing to
+configure. Set `APP_URL` explicitly only if you're on a custom domain or a
+different host. (This matters because Render's reverse proxy exposes an
+internal service hostname like `srv-xxxxxxxx:10000` to the app itself —
+building a redirect from `request.url`/`request.headers.get("host")`
+instead of `getPublicAppUrl()` sends users to that unreachable internal
+address instead of the real site.)
+
 ## What's deliberately simple / next steps
 
 - **Platform approval and billing are separate gates** — a company still

@@ -38,6 +38,15 @@ const ACTION_LABELS: Record<string, string> = {
   "agent.password_reset": "reset an agent's password",
   "company.signed_up": "signed up",
   "company.status_changed": "changed company status",
+  "webhook_source.created": "connected a lead source",
+  "lead_source.connected": "connected a Meta Lead Ads page",
+  "lead_source.reconnected": "reconnected a Meta Lead Ads page",
+  "lead_source.disconnected": "disconnected a lead source",
+  "lead_source.synced": "synced a lead source",
+  "lead_form.enabled": "enabled a lead form",
+  "lead_form.disabled": "disabled a lead form",
+  "connected_account.disconnected": "disconnected a Meta account",
+  "lead.created_from_facebook": "received a lead from Meta Lead Ads",
 };
 
 export default function AuditLogPage() {

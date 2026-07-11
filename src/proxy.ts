@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { companies } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { isBillingBlocked } from "@/lib/billing";
+import { getPublicAppUrl } from "@/lib/url";
 
 const COOKIE_NAME = "crm_session";
 
@@ -33,16 +34,16 @@ export async function proxy(req: NextRequest) {
   const isSuperAdminRoute = pathname.startsWith("/super-admin");
   const isApiRoute = pathname.startsWith("/api/");
 
+  // Built from getPublicAppUrl(), never req.nextUrl.clone() — behind
+  // Render's reverse proxy, req.nextUrl reflects an internal service
+  // hostname, not the public domain (see lib/url.ts). A redirect built
+  // from it sends the browser to an address it can't resolve.
   if ((isAppRoute || isSuperAdminRoute) && !session) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
+    return NextResponse.redirect(new URL("/login", getPublicAppUrl()));
   }
 
   if (isSuperAdminRoute && session?.role !== "super_admin") {
-    const url = req.nextUrl.clone();
-    url.pathname = "/leads";
-    return NextResponse.redirect(url);
+    return NextResponse.redirect(new URL("/leads", getPublicAppUrl()));
   }
 
   // Subscription gate — the single chokepoint every company-scoped API

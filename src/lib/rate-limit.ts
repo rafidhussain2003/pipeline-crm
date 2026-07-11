@@ -60,6 +60,7 @@ export type RateLimitCategory =
   | "webhook.generic"
   | "webhook.facebook"
   | "oauth.facebook"
+  | "lead_sources.account_sync"
   | "api.public"
   | "api.authenticated"
   | "api.admin"
@@ -76,6 +77,7 @@ const POLICIES: Record<RateLimitCategory, { limit: number; windowMs: number }> =
   // real webhook traffic.
   "webhook.facebook": { limit: 300, windowMs: 60_000 },
   "oauth.facebook": { limit: 20, windowMs: 60_000 },
+  "lead_sources.account_sync": { limit: 20, windowMs: 60_000 },
   "api.public": { limit: 60, windowMs: 60_000 },
   "api.authenticated": { limit: 120, windowMs: 60_000 },
   "api.admin": { limit: 30, windowMs: 60_000 },

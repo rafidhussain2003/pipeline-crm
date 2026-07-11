@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/permissions";
 import { getOrCreateStripeCustomer } from "@/lib/billing";
 import { getStripe } from "@/lib/stripe";
 import { checkPolicy } from "@/lib/rate-limit";
+import { getPublicAppUrl } from "@/lib/url";
 import type Stripe from "stripe";
 
 // One endpoint backs "Update Card", "Billing History", and "Cancel
@@ -35,7 +36,10 @@ export async function POST(req: NextRequest) {
   try {
     const stripe = getStripe();
     const customerId = await getOrCreateStripeCustomer(company);
-    const origin = req.nextUrl.origin;
+    // Never req.nextUrl.origin — behind Render's reverse proxy that
+    // reflects an internal service hostname, not the public domain. See
+    // lib/url.ts.
+    const origin = getPublicAppUrl();
 
     let flow_data: Stripe.BillingPortal.SessionCreateParams.FlowData | undefined;
     if (flow === "update_payment_method") {

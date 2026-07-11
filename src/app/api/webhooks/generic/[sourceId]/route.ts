@@ -22,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
   }
 
   const [source] = await db.select().from(leadSources).where(eq(leadSources.id, sourceId)).limit(1);
-  if (!source || source.status !== "active") {
+  if (!source || source.status !== "connected") {
     return NextResponse.json({ error: "Unknown or inactive webhook" }, { status: 404 });
   }
 

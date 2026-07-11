@@ -27,14 +27,66 @@ export const companyStatusEnum = pgEnum("company_status", [
   "active",
   "suspended",
 ]);
+// "google" (existing) is the Universal-Webhook stopgap for Google Lead
+// Forms delivered via a relay (Zapier/Pabbly) — pageName defaults to
+// "Google Lead Form" for it, see api/lead-sources/route.ts. "google_ads" is
+// kept distinct for the real future OAuth-based Google Ads integration
+// (its own connectedAccounts identity, its own token) so the two are never
+// ambiguous once both exist.
+//
+// typeform / gravityforms / jotform / wordpress / gohighlevel / zapier /
+// make all reuse the exact same Universal Webhook mechanism as "generic" —
+// they exist as distinct values purely so the Lead Sources UI can label a
+// connection by which tool it's actually from, not because any of them
+// need their own route or backend logic (see the generic webhook receiver
+// at api/webhooks/generic/[sourceId]). Deliberately no "website" value —
+// "generic" already covers a plain website contact form; adding a
+// synonym would just duplicate it.
 export const sourcePlatformEnum = pgEnum("source_platform", [
   "facebook",
   "google",
+  "google_ads",
+  "tiktok",
+  "linkedin",
+  "microsoft",
   "generic",
+  "typeform",
+  "gravityforms",
+  "jotform",
+  "wordpress",
+  "gohighlevel",
+  "zapier",
+  "make",
   "reddit",
   "other",
 ]);
 export const webhookLogStatusEnum = pgEnum("webhook_log_status", ["success", "failed", "retried"]);
+
+// A lead source's own connection health, distinct from webhookLogStatusEnum
+// (which is per-delivery-attempt) and from webhookStatusEnum below (whether
+// Facebook is actually subscribed to push events — a token can be fine
+// while the subscription itself was dropped independently). Mirrors
+// ProviderErrorKind in lib/lead-sources/provider.ts: token_expired,
+// permission_revoked, and not_found are set by the webhook receiver/
+// sync-now when a Graph API call fails, distinguishing "reconnect" from
+// "grant permission again" from "this Page/form no longer exists" instead
+// of one generic error. "disconnected" is set by the user-initiated
+// Disconnect action.
+export const leadSourceStatusEnum = pgEnum("lead_source_status", [
+  "connected",
+  "token_expired",
+  "permission_revoked",
+  "not_found",
+  "error",
+  "disconnected",
+]);
+
+// Whether the provider (Facebook) currently has an active push
+// subscription for this connection — separate from token/connection
+// health because a healthy token doesn't guarantee the subscription itself
+// is still active (Facebook can drop it independently, e.g. if the app
+// briefly failed its webhook verification).
+export const webhookStatusEnum = pgEnum("webhook_status", ["active", "inactive"]);
 
 // Billing lifecycle, independent of `companyStatusEnum` above (that's the
 // platform-level "has super-admin let this tenant onto the app at all"
@@ -190,7 +242,70 @@ export const userSkills = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// Lead sources (Facebook / Google / generic webhook connections)
+// Connected accounts — one row per external OAuth identity a company has
+// connected (a specific Meta login, later a specific Google Ads account,
+// TikTok Business Center account, etc). Sits above leadSources (one row per
+// Page/asset) so a company can connect unlimited accounts — each with its
+// own set of Pages — without anything in the schema assuming "one account
+// per company." Provider-agnostic by design: platform / externalAccountId
+// / accountLabel are meaningful for every OAuth-based provider, not just
+// Meta, so adding a real Google/TikTok/LinkedIn/Microsoft provider later
+// reuses this table unchanged (see lib/lead-sources/provider.ts).
+//
+// Not used by non-OAuth sources (Universal Webhook) — leadSources.accountId
+// is nullable for exactly that reason; a webhook source has no "account" to
+// group under.
+// ---------------------------------------------------------------------------
+export const connectedAccountStatusEnum = pgEnum("connected_account_status", [
+  "connected",
+  "token_expired",
+  "permission_revoked",
+  "error",
+  "disconnected",
+]);
+
+export const connectedAccounts = pgTable(
+  "connected_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    platform: sourcePlatformEnum("platform").notNull(),
+    // The provider's own id for this identity (a Facebook user id, later a
+    // Google Ads customer id, ...) — not displayed anywhere; it's what lets
+    // the OAuth callback recognize "this is the same login as before" and
+    // add pages to the existing account row instead of creating a
+    // duplicate one every time someone reconnects or adds another page.
+    externalAccountId: varchar("external_account_id", { length: 255 }).notNull(),
+    // What the Lead Sources page displays as the account's name — the
+    // connected email when the provider/granted scope includes it, else a
+    // display name.
+    accountLabel: varchar("account_label", { length: 255 }),
+    status: connectedAccountStatusEnum("status").notNull().default("connected"),
+    // Escape hatch for whatever a future provider needs that doesn't
+    // justify its own column (a Google Ads manager-account hierarchy id, a
+    // LinkedIn organization URN, a GoHighLevel location id, ...) — added
+    // now specifically so a provider's own quirks never force a schema
+    // migration later. Unused by Meta today; stays null for it.
+    providerMetadata: jsonb("provider_metadata"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at"), // soft delete
+  },
+  (t) => ({
+    companyIdx: index("connected_accounts_company_idx").on(t.companyId),
+    // One row per real-world login per company — reconnecting the same
+    // Meta account (or adding another page from it) must always resolve
+    // back to this same row, never create a sibling duplicate.
+    uniq: uniqueIndex("connected_accounts_unique").on(t.companyId, t.platform, t.externalAccountId),
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Lead sources (Facebook / Google / generic webhook connections) — one row
+// per connected Page/asset. Multiple rows can share the same accountId
+// (multiple Pages from the same connected Meta account) or belong to
+// different accounts entirely (see connectedAccounts above) — nothing here
+// assumes a company has only one of either.
 // ---------------------------------------------------------------------------
 export const leadSources = pgTable(
   "lead_sources",
@@ -199,11 +314,43 @@ export const leadSources = pgTable(
     companyId: uuid("company_id")
       .references(() => companies.id, { onDelete: "cascade" })
       .notNull(),
+    // Null for Universal Webhook sources, which have no OAuth account to
+    // group under — see connectedAccounts' comment above.
+    accountId: uuid("account_id").references(() => connectedAccounts.id, { onDelete: "cascade" }),
     platform: sourcePlatformEnum("platform").notNull().default("facebook"),
     pageId: varchar("page_id", { length: 255 }),
     pageName: varchar("page_name", { length: 255 }),
+    // The Facebook Business Manager account the page belongs to — requires
+    // the business_management scope to read (see lib/facebook-oauth.ts).
+    // Null for non-Facebook platforms and for pages connected before this
+    // scope existed, until they're reconnected. Kept denormalized here
+    // (not its own table) — it's a display-grouping label with no
+    // independent behavior of its own, and every Page already carries it.
+    businessId: varchar("business_id", { length: 255 }),
+    businessName: varchar("business_name", { length: 255 }),
     accessToken: text("access_token"), // encrypted at rest, see lib/crypto.ts
-    status: varchar("status", { length: 50 }).notNull().default("active"),
+    // Unused by Meta (its long-lived-token model has no refresh token —
+    // renewal means a full reconnect). Added now for OAuth2 providers that
+    // *do* issue one (Google, LinkedIn, Microsoft Ads all use short-lived
+    // access tokens + a refresh token for silent server-side renewal), so
+    // that isn't a schema change made under time pressure when the first
+    // such provider is built. Encrypted at rest, same as accessToken.
+    refreshToken: text("refresh_token"),
+    // Same escape hatch as connectedAccounts.providerMetadata, at the
+    // container level instead of the account level.
+    providerMetadata: jsonb("provider_metadata"),
+    status: leadSourceStatusEnum("status").notNull().default("connected"),
+    // Set on a successful subscribeWebhook/unsubscribeWebhook call — see
+    // this column's enum comment above for why it's tracked separately
+    // from `status`.
+    webhookStatus: webhookStatusEnum("webhook_status").notNull().default("active"),
+    // Set from Facebook's long-lived-token exchange response so a
+    // near-expiry token can be flagged before it actually fails a call.
+    tokenExpiresAt: timestamp("token_expires_at"),
+    // Last Graph API error observed for this source (webhook processing or
+    // sync-now) — shown on the Lead Sources page instead of a silent drop.
+    lastError: text("last_error"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     // For generic webhook sources: a per-source secret (checked against a
     // header on inbound requests) and a field-mapping so arbitrary JSON
     // shapes (Google Lead Forms, custom form builders, etc.) can be mapped
@@ -216,6 +363,33 @@ export const leadSources = pgTable(
   },
   (t) => ({
     companyIdx: index("lead_sources_company_idx").on(t.companyId),
+    accountIdx: index("lead_sources_account_idx").on(t.accountId),
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Lead forms — which specific Facebook Lead Ad forms (on an already-
+// connected Page) are enabled for sync. Facebook's page-level leadgen
+// webhook subscription can't be scoped to individual forms — it delivers
+// events for every form on the page, tagged with a form_id — so this table
+// is what lets the webhook receiver decide which of those events to act on
+// (see api/webhooks/facebook/route.ts). A join-table row per form (rather
+// than a JSON array on lead_sources) so toggling one form on/off is a
+// single-row update, matching this schema's existing pattern (user_skills).
+// ---------------------------------------------------------------------------
+export const leadForms = pgTable(
+  "lead_forms",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceId: uuid("source_id").references(() => leadSources.id, { onDelete: "cascade" }).notNull(),
+    formId: varchar("form_id", { length: 255 }).notNull(),
+    formName: varchar("form_name", { length: 255 }),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    sourceIdx: index("lead_forms_source_idx").on(t.sourceId),
+    uniq: uniqueIndex("lead_forms_source_form_unique").on(t.sourceId, t.formId),
   })
 );
 
@@ -682,13 +856,26 @@ export const userSkillsRelations = relations(userSkills, ({ one }) => ({
 
 export const leadSourcesRelations = relations(leadSources, ({ one, many }) => ({
   company: one(companies, { fields: [leadSources.companyId], references: [companies.id] }),
+  account: one(connectedAccounts, { fields: [leadSources.accountId], references: [connectedAccounts.id] }),
   leads: many(leads),
   webhookLogs: many(webhookLogs),
+  forms: many(leadForms),
+  creator: one(users, { fields: [leadSources.createdBy], references: [users.id] }),
+}));
+
+export const connectedAccountsRelations = relations(connectedAccounts, ({ one, many }) => ({
+  company: one(companies, { fields: [connectedAccounts.companyId], references: [companies.id] }),
+  creator: one(users, { fields: [connectedAccounts.createdBy], references: [users.id] }),
+  sources: many(leadSources),
 }));
 
 export const webhookLogsRelations = relations(webhookLogs, ({ one }) => ({
   source: one(leadSources, { fields: [webhookLogs.sourceId], references: [leadSources.id] }),
   company: one(companies, { fields: [webhookLogs.companyId], references: [companies.id] }),
+}));
+
+export const leadFormsRelations = relations(leadForms, ({ one }) => ({
+  source: one(leadSources, { fields: [leadForms.sourceId], references: [leadSources.id] }),
 }));
 
 export const dispositionOptionsRelations = relations(dispositionOptions, ({ one }) => ({

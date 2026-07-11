@@ -7,6 +7,7 @@ import { getOrCreateStripeCustomer } from "@/lib/billing";
 import { getStripe, getStripePriceId } from "@/lib/stripe";
 import { checkPolicy } from "@/lib/rate-limit";
 import { recordAudit } from "@/lib/audit";
+import { getPublicAppUrl } from "@/lib/url";
 
 // Creates a Stripe Checkout Session for the single monthly plan. This is
 // only for starting a brand-new subscription — once a company has one,
@@ -39,7 +40,10 @@ export async function POST(req: NextRequest) {
   try {
     const stripe = getStripe();
     const customerId = await getOrCreateStripeCustomer(company);
-    const origin = req.nextUrl.origin;
+    // Never req.nextUrl.origin — behind Render's reverse proxy that
+    // reflects an internal service hostname, not the public domain. See
+    // lib/url.ts.
+    const origin = getPublicAppUrl();
 
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
