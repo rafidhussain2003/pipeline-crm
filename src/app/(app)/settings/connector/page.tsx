@@ -2,6 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import Link from "next/link";
 
 type SourceStatus = "connected" | "token_expired" | "permission_revoked" | "not_found" | "error" | "disconnected";
 
@@ -38,12 +39,27 @@ type PendingForm = { id: string; name: string; status: string };
 
 type WebhookLog = {
   id: string;
-  status: "success" | "failed" | "retried";
+  status: "success" | "failed" | "retried" | "skipped";
   error: string | null;
   retryCount: number;
   createdAt: string;
   sourceName: string | null;
 };
+
+type Health = {
+  connectionStatus: string;
+  deliveryStatus: "active" | "inactive";
+  lastDeliveryReceivedAt: string | null;
+  lastLeadReceivedAt: string | null;
+  lastSuccessfulSyncAt: string | null;
+  totalFormsConnected: number;
+  totalLeadsReceived: number;
+  leadsToday: number;
+  leadsThisWeek: number;
+  leadsThisMonth: number;
+};
+
+type TestLeadState = { clickedAt: number; status: "polling" | "success" | "failed" };
 
 const ERROR_MESSAGES: Record<string, string> = {
   admin_only: "Only a company admin can connect Meta Lead Ads.",
@@ -105,6 +121,9 @@ function ConnectorContent() {
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [togglingFormId, setTogglingFormId] = useState<string | null>(null);
 
+  const [healthByAccount, setHealthByAccount] = useState<Record<string, Health>>({});
+  const [testLeadBySource, setTestLeadBySource] = useState<Record<string, TestLeadState>>({});
+
   const [showGeneric, setShowGeneric] = useState(false);
   const [genericName, setGenericName] = useState("");
   const [genericPlatform, setGenericPlatform] = useState<"generic" | "google">("generic");
@@ -123,13 +142,25 @@ function ConnectorContent() {
       fetch("/api/webhook-logs"),
     ]);
     const sourcesData = await sourcesRes.json();
+    const loadedAccounts: Account[] = sourcesData.accounts || [];
     setSources(sourcesData.sources || []);
-    setAccounts(sourcesData.accounts || []);
+    setAccounts(loadedAccounts);
     const pending = await pendingRes.json();
     setPendingPages(pending.pages || []);
     setReconnectSourceId(pending.reconnectSourceId || null);
     setExistingFormIds(pending.existingFormIds || []);
     setLogs((await logsRes.json()).logs || []);
+
+    if (loadedAccounts.length > 0) {
+      const healthResults = await Promise.all(
+        loadedAccounts.map((a) => fetch(`/api/lead-sources/accounts/${a.id}/health`).then((r) => r.json()))
+      );
+      const byAccount: Record<string, Health> = {};
+      loadedAccounts.forEach((a, i) => {
+        byAccount[a.id] = healthResults[i];
+      });
+      setHealthByAccount(byAccount);
+    }
   }
 
   useEffect(() => {
@@ -276,6 +307,34 @@ function ConnectorContent() {
     window.location.href = `/api/oauth/facebook/start?reconnect=${source.id}`;
   }
 
+  // Opens Meta's own Lead Ads Testing Tool in a new tab, then polls this
+  // source for a lead created after the button was clicked — that's the
+  // only reliable way to confirm end-to-end delivery (webhook subscription
+  // + Graph API access + assignment) actually works, short of waiting for
+  // a real customer lead.
+  function startTestLead(source: Source) {
+    const clickedAt = Date.now();
+    setTestLeadBySource((prev) => ({ ...prev, [source.id]: { clickedAt, status: "polling" } }));
+    window.open("https://developers.facebook.com/tools/lead-ads-testing/", "_blank", "noopener,noreferrer");
+
+    const sinceIso = new Date(clickedAt).toISOString();
+    const deadline = clickedAt + 90_000;
+    const poll = async () => {
+      const res = await fetch(`/api/lead-sources/${source.id}/latest-lead?since=${encodeURIComponent(sinceIso)}`);
+      const data = await res.json();
+      if (data.found) {
+        setTestLeadBySource((prev) => ({ ...prev, [source.id]: { clickedAt, status: "success" } }));
+        return;
+      }
+      if (Date.now() >= deadline) {
+        setTestLeadBySource((prev) => ({ ...prev, [source.id]: { clickedAt, status: "failed" } }));
+        return;
+      }
+      setTimeout(poll, 3000);
+    };
+    setTimeout(poll, 3000);
+  }
+
   async function createGenericSource() {
     setSubmitting(true);
     const res = await fetch("/api/lead-sources", {
@@ -363,14 +422,14 @@ function ConnectorContent() {
 
         <div className="bg-white border border-slate-200 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm font-semibold text-slate-900">Universal Webhook</span>
+            <span className="text-sm font-semibold text-slate-900">Custom Integration</span>
           </div>
           <p className="text-xs text-slate-500 mb-3">For Google Lead Forms (via Zapier/Pabbly), custom forms, or another CRM.</p>
           <button
             onClick={() => setShowGeneric((v) => !v)}
             className="text-xs font-medium text-slate-700 bg-slate-100 rounded-md px-3 py-2 hover:bg-slate-200"
           >
-            {showGeneric ? "Hide" : "Add a Webhook"}
+            {showGeneric ? "Hide" : "Add a Connection"}
           </button>
         </div>
 
@@ -474,7 +533,7 @@ function ConnectorContent() {
               onChange={(e) => setGenericPlatform(e.target.value as "generic" | "google")}
               className="rounded-md border border-slate-200 px-3 py-2 text-sm"
             >
-              <option value="generic">Generic Webhook</option>
+              <option value="generic">Generic Connection</option>
               <option value="google">Google Lead Forms</option>
             </select>
             <input
@@ -494,7 +553,7 @@ function ConnectorContent() {
           {newSource && (
             <div className="bg-blue-50 border border-blue-100 rounded-md p-3 text-xs text-blue-900 space-y-1">
               <div>
-                <strong>Webhook URL:</strong> <span className="font-mono break-all">{origin}{newSource.webhookUrl}</span>
+                <strong>Connection URL:</strong> <span className="font-mono break-all">{origin}{newSource.webhookUrl}</span>
               </div>
               <div>
                 <strong>Header required:</strong> <span className="font-mono">X-Webhook-Secret: {newSource.webhookSecret}</span>
@@ -587,6 +646,37 @@ function ConnectorContent() {
                 </div>
               ))}
 
+              {(() => {
+                const health = healthByAccount[account.id];
+                if (!health) return null;
+                const fmt = (v: string | null) => (v ? new Date(v).toLocaleString() : "Never");
+                const stat = (label: string, value: React.ReactNode) => (
+                  <div>
+                    <dt className="text-[10px] text-slate-400 uppercase tracking-wide">{label}</dt>
+                    <dd className="text-xs font-medium text-slate-800 mt-0.5">{value}</dd>
+                  </div>
+                );
+                return (
+                  <div className="mt-3 pt-3 border-t border-slate-100">
+                    <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">
+                      Lead Delivery Health
+                    </div>
+                    <dl className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-x-4 gap-y-3">
+                      {stat("Connection", health.connectionStatus === "connected" ? "Connected" : "Disconnected")}
+                      {stat("Delivery", health.deliveryStatus === "active" ? "Active" : "Inactive")}
+                      {stat("Last delivery received", fmt(health.lastDeliveryReceivedAt))}
+                      {stat("Last lead received", fmt(health.lastLeadReceivedAt))}
+                      {stat("Last successful sync", fmt(health.lastSuccessfulSyncAt))}
+                      {stat("Forms connected", health.totalFormsConnected)}
+                      {stat("Total leads received", health.totalLeadsReceived)}
+                      {stat("Leads today", health.leadsToday)}
+                      {stat("Leads this week", health.leadsThisWeek)}
+                      {stat("Leads this month", health.leadsThisMonth)}
+                    </dl>
+                  </div>
+                );
+              })()}
+
               {isOpen && (
                 <div className="mt-3 pt-3 border-t border-slate-100 space-y-3">
                   {loadingDetails && <div className="text-xs text-slate-400">Loading…</div>}
@@ -612,6 +702,13 @@ function ConnectorContent() {
                                   Sync
                                 </button>
                                 <button
+                                  onClick={() => startTestLead(s)}
+                                  disabled={testLeadBySource[s.id]?.status === "polling"}
+                                  className="text-[11px] font-medium text-blue-700 bg-blue-50 rounded px-2 py-1 disabled:opacity-50"
+                                >
+                                  {testLeadBySource[s.id]?.status === "polling" ? "Waiting for test lead…" : "Test Lead"}
+                                </button>
+                                <button
                                   onClick={() => disconnectSource(s)}
                                   className="text-[11px] font-medium text-red-600 bg-red-50 rounded px-2 py-1"
                                 >
@@ -620,8 +717,31 @@ function ConnectorContent() {
                               </div>
                             </div>
                             {err && <p className="text-xs text-amber-600 mb-2">{err}</p>}
+                            {testLeadBySource[s.id] && (
+                              <div
+                                className={`text-xs rounded-md p-2 mb-2 ${
+                                  testLeadBySource[s.id].status === "success"
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : testLeadBySource[s.id].status === "failed"
+                                    ? "bg-red-50 text-red-700"
+                                    : "bg-blue-50 text-blue-700"
+                                }`}
+                              >
+                                {testLeadBySource[s.id].status === "polling" && (
+                                  <>
+                                    A new tab opened to Meta&apos;s Lead Ads Testing Tool. Select <strong>{s.pageName}</strong> and
+                                    any form, then click &quot;Send Test Lead&quot; there — we&apos;re checking for it every few
+                                    seconds.
+                                  </>
+                                )}
+                                {testLeadBySource[s.id].status === "success" && <>✓ Test lead received successfully.</>}
+                                {testLeadBySource[s.id].status === "failed" && (
+                                  <>❌ Test failed — no lead arrived within 90 seconds. Check that the form was submitted for this Page and that the connection is healthy above.</>
+                                )}
+                              </div>
+                            )}
                             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-2">
-                              <dt className="text-slate-400">Webhook</dt>
+                              <dt className="text-slate-400">Delivery</dt>
                               <dd className="text-slate-700">
                                 <span
                                   className={`text-[10px] font-semibold rounded-full px-2 py-0.5 ${
@@ -665,7 +785,7 @@ function ConnectorContent() {
       </div>
       {accountMessage && <p className="text-xs text-slate-500 mb-8">{accountMessage}</p>}
 
-      {/* Universal Webhook sources — no account grouping, unchanged from before accounts existed */}
+      {/* Custom Integration sources — no account grouping, unchanged from before accounts existed */}
       {otherSources.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-100 mb-8">
           {otherSources.map((s) => (
@@ -673,7 +793,7 @@ function ConnectorContent() {
               <div className="min-w-0">
                 <div className="text-sm font-medium text-slate-900 truncate">{s.pageName || "Unknown source"}</div>
                 <div className="text-xs text-slate-400 mt-0.5 truncate">
-                  {s.platform === "google" ? "Google Lead Forms" : "Universal Webhook"}
+                  {s.platform === "google" ? "Google Lead Forms" : "Custom Integration"}
                   {" · "}
                   {s.lastSyncedAt ? `Last sync ${new Date(s.lastSyncedAt).toLocaleString()}` : "No leads yet"}
                 </div>
@@ -694,7 +814,12 @@ function ConnectorContent() {
         </div>
       )}
 
-      <h2 className="text-sm font-semibold text-slate-700 mb-3">Webhook delivery log</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold text-slate-700">Delivery Log</h2>
+        <Link href="/settings/delivery-log" className="text-xs font-medium text-blue-600">
+          View full log →
+        </Link>
+      </div>
       <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-100">
         {logs.length === 0 && <div className="p-4 text-sm text-slate-400">No deliveries yet.</div>}
         {logs.map((log) => (

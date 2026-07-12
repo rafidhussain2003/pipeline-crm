@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leadSources, leads, webhookLogs } from "@/db/schema";
+import { leadSources, leads } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { mapPayloadToLead, FieldMapping } from "@/lib/field-mapping";
 import { assignLead } from "@/lib/assignment";
 import { findDuplicateLead } from "@/lib/duplicates";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
+import { recordDeliveryLog } from "@/lib/delivery-log";
 
 // Universal webhook connector: any tool that can POST JSON (Google Lead
 // Forms via a relay like Zapier/Pabbly, a custom form builder, another CRM)
@@ -13,7 +14,13 @@ import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 // header (X-Webhook-Secret) to prove the caller is authorized, and
 // `fieldMapping` (set when the source was created) tells us how to pull
 // name/phone/email out of whatever JSON shape that tool sends.
+//
+// Shares webhookLogs/recordDeliveryLog with the Facebook receiver so both
+// feed the same Delivery Log page. This receiver has no separate "download"
+// step (the payload already contains the lead data), so its stages skip
+// straight from "received" to "lead_stored".
 export async function POST(req: NextRequest, { params }: { params: Promise<{ sourceId: string }> }) {
+  const startedAt = Date.now();
   const { sourceId } = await params;
   const ip = getClientIp(req);
   const rl = checkPolicy("webhook.generic", `${sourceId}:${ip}`);
@@ -28,10 +35,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
 
   const providedSecret = req.headers.get("x-webhook-secret");
   if (source.webhookSecret && providedSecret !== source.webhookSecret) {
-    await db.insert(webhookLogs).values({
+    await recordDeliveryLog({
       sourceId: source.id,
       companyId: source.companyId,
       status: "failed",
+      stage: "received",
+      startedAt,
       error: "Invalid or missing X-Webhook-Secret header",
     });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -41,10 +50,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
   try {
     payload = await req.json();
   } catch {
-    await db.insert(webhookLogs).values({
+    await recordDeliveryLog({
       sourceId: source.id,
       companyId: source.companyId,
       status: "failed",
+      stage: "received",
+      startedAt,
       error: "Request body was not valid JSON",
     });
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
@@ -71,32 +82,41 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
       })
       .returning();
 
+    let assignmentError: string | null = null;
     try {
       await assignLead(lead.id, source.companyId);
     } catch (err) {
-      // The lead was already created — don't let an assignment failure
-      // report this webhook as "failed" (that could trigger the sender's
-      // retry logic and create a duplicate lead for an already-successful
-      // capture). It's simply left unassigned.
+      // The lead was already created — kept, not rolled back. The HTTP
+      // response below still reports success (leadId) regardless, so the
+      // sender's own retry logic (if any) never fires and can't create a
+      // duplicate — only the Delivery Log row reflects that assignment
+      // specifically failed.
       console.error(`Lead assignment failed for webhook lead ${lead.id}:`, err);
+      assignmentError = err instanceof Error ? err.message : "Assignment failed";
     }
     await db.update(leadSources).set({ lastSyncedAt: new Date() }).where(eq(leadSources.id, source.id));
 
-    await db.insert(webhookLogs).values({
+    await recordDeliveryLog({
       sourceId: source.id,
       companyId: source.companyId,
-      status: "success",
-      payload: payload as object,
+      status: assignmentError ? "failed" : "success",
+      stage: assignmentError ? "lead_stored" : "completed",
+      startedAt,
+      leadId: lead.id,
+      payload,
+      error: assignmentError,
     });
 
     return NextResponse.json({ received: true, leadId: lead.id });
   } catch (err) {
     console.error("Generic webhook processing error:", err);
-    await db.insert(webhookLogs).values({
+    await recordDeliveryLog({
       sourceId: source.id,
       companyId: source.companyId,
       status: "failed",
-      payload: payload as object,
+      stage: "received",
+      startedAt,
+      payload,
       error: err instanceof Error ? err.message : "Unknown error",
     });
     // Still return 200-ish here would hide the failure from the sender;

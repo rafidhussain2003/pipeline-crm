@@ -7,6 +7,7 @@ import PresenceHeartbeat from "./PresenceHeartbeat";
 const navItems = [
   { href: "/leads", label: "All Leads" },
   { href: "/settings/connector", label: "Lead Sources" },
+  { href: "/settings/delivery-log", label: "Delivery Log" },
   { href: "/settings/pipeline", label: "Pipeline Settings" },
   { href: "/settings/automation", label: "Automation" },
   { href: "/settings/audit-log", label: "Audit Log" },

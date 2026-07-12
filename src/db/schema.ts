@@ -60,7 +60,25 @@ export const sourcePlatformEnum = pgEnum("source_platform", [
   "reddit",
   "other",
 ]);
-export const webhookLogStatusEnum = pgEnum("webhook_log_status", ["success", "failed", "retried"]);
+// "skipped" is not a failure — it's an intentional no-op (a disabled form,
+// a duplicate delivery, a disconnected source) that still deserves a row
+// so "why didn't this lead show up" is always answerable from the Delivery
+// Log rather than requiring a server-log search. See webhookLogs.stage
+// below for exactly which point in the pipeline a "failed" row stopped at.
+export const webhookLogStatusEnum = pgEnum("webhook_log_status", ["success", "failed", "retried", "skipped"]);
+
+// The 5-step lead-delivery pipeline shown on the Delivery Log page. For a
+// "success" row this is always "completed"; for a "failed" row it's the
+// last stage actually reached before the failure (e.g. stage="received"
+// with status="failed" means the Graph API lead fetch — the step after
+// "received" — is what failed).
+export const webhookStageEnum = pgEnum("webhook_stage", [
+  "received",
+  "lead_downloaded",
+  "lead_stored",
+  "lead_assigned",
+  "completed",
+]);
 
 // A lead source's own connection health, distinct from webhookLogStatusEnum
 // (which is per-delivery-attempt) and from webhookStatusEnum below (whether
@@ -403,9 +421,25 @@ export const webhookLogs = pgTable(
     sourceId: uuid("source_id").references(() => leadSources.id, { onDelete: "cascade" }),
     companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
     status: webhookLogStatusEnum("status").notNull(),
+    // Which pipeline stage this row reflects — see webhookStageEnum above.
+    // Null for rows written before this column existed.
+    stage: webhookStageEnum("stage"),
+    // Set once a lead is actually created for this delivery (null for
+    // skipped/failed-before-storage rows).
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    // Denormalized from the payload for display on the Delivery Log page
+    // without joining back into the payload JSON.
+    formId: varchar("form_id", { length: 255 }),
     payload: jsonb("payload"),
     error: text("error"),
     retryCount: integer("retry_count").notNull().default(0),
+    // Wall-clock time this row's handler took, start to finish — shown on
+    // the Delivery Log page in milliseconds.
+    processingTimeMs: integer("processing_time_ms"),
+    // Time between the provider's own event timestamp (Meta's entry.time)
+    // and when our server received it — a signal for delivery delay that's
+    // independent of our own processing time.
+    webhookLatencyMs: integer("webhook_latency_ms"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (t) => ({
@@ -509,6 +543,10 @@ export const leads = pgTable(
     // (assignment.ts) and the "last active lead" query
     // (/api/supervisor/agents) actually filter by.
     companyOwnerIdx: index("leads_company_owner_idx").on(t.companyId, t.ownerId),
+    // Added for the Lead Delivery Health panel's per-source aggregates
+    // (total/today/week/month lead counts) — nothing queried `leads` by
+    // sourceId before this, so there was no covering index.
+    sourceIdx: index("leads_source_idx").on(t.sourceId),
     createdIdx: index("leads_created_idx").on(t.createdAt),
     phoneIdx: index("leads_phone_idx").on(t.companyId, t.phone),
     emailIdx: index("leads_email_idx").on(t.companyId, t.email),
@@ -872,6 +910,7 @@ export const connectedAccountsRelations = relations(connectedAccounts, ({ one, m
 export const webhookLogsRelations = relations(webhookLogs, ({ one }) => ({
   source: one(leadSources, { fields: [webhookLogs.sourceId], references: [leadSources.id] }),
   company: one(companies, { fields: [webhookLogs.companyId], references: [companies.id] }),
+  lead: one(leads, { fields: [webhookLogs.leadId], references: [leads.id] }),
 }));
 
 export const leadFormsRelations = relations(leadForms, ({ one }) => ({
