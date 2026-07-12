@@ -57,7 +57,12 @@ export async function proxy(req: NextRequest) {
     !BILLING_EXEMPT_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))
   ) {
     const [company] = await db
-      .select({ subscriptionStatus: companies.subscriptionStatus, trialEndsAt: companies.trialEndsAt })
+      .select({
+        subscriptionStatus: companies.subscriptionStatus,
+        trialEndsAt: companies.trialEndsAt,
+        currentPeriodEnd: companies.currentPeriodEnd,
+        stripeSubscriptionId: companies.stripeSubscriptionId,
+      })
       .from(companies)
       .where(eq(companies.id, session.companyId))
       .limit(1);

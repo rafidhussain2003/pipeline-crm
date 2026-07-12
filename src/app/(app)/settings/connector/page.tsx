@@ -53,6 +53,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   oauth_failed: "Meta couldn't complete the connection. Please try again.",
   source_not_found: "That connection no longer exists.",
   rate_limited: "Too many attempts. Please wait a minute and try again.",
+  facebook_not_configured: "Meta Lead Ads isn't set up yet on this server. Contact your platform administrator.",
 };
 
 // No raw Graph API errors or status codes ever reach the customer — this

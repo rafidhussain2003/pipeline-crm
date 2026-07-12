@@ -8,6 +8,7 @@ import { requireSuperAdmin } from "@/lib/permissions";
 import { isNull } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
+import { yearsFromNow } from "@/lib/billing";
 
 const schema = z.object({
   companyName: z.string().min(1),
@@ -15,6 +16,12 @@ const schema = z.object({
   adminName: z.string().min(1),
   adminEmail: z.string().email(),
   adminPassword: z.string().min(8),
+  // Grants complimentary access immediately (any plan, including "free")
+  // instead of the normal 7-day trial — see isCompExpired() in
+  // lib/billing.ts. Omitted or 0 preserves today's default trial behavior
+  // exactly. Capped well above any realistic grant just to keep the stored
+  // date sane, not because 100 years is a real use case.
+  freeYears: z.number().min(0).max(100).optional(),
 });
 
 function slugify(name: string) {
@@ -68,14 +75,14 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
-    const { companyName, plan, adminName, adminEmail, adminPassword } = parsed.data;
-    log("validated", { adminEmail, plan });
+    const { companyName, plan, adminName, adminEmail, adminPassword, freeYears } = parsed.data;
+    log("validated", { adminEmail, plan, freeYears });
 
     const passwordHash = await hashPassword(adminPassword);
     log("password_hashed");
 
     const now = new Date();
-    const trialEndsAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const isComp = !!freeYears && freeYears > 0;
     const company = await db.transaction(async (tx) => {
       const [company] = await tx
         .insert(companies)
@@ -83,12 +90,16 @@ export async function POST(req: NextRequest) {
           name: companyName,
           slug: slugify(companyName),
           status: "active", // super-admin-created companies go live immediately
-          plan: plan || "starter",
-          // Same 7-day trial every company gets, regardless of how it was
-          // created — see subscriptionStatusEnum in schema.ts.
-          subscriptionStatus: "trial",
+          plan: plan || (isComp ? "free" : "starter"),
+          // A super-admin-granted comp skips the trial entirely and goes
+          // straight to "active" with no real Stripe subscription behind
+          // it — see isCompExpired() in lib/billing.ts. Every other
+          // company still gets the same 7-day trial regardless of how it
+          // was created.
+          subscriptionStatus: isComp ? "active" : "trial",
           trialStartedAt: now,
-          trialEndsAt,
+          trialEndsAt: isComp ? null : new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+          currentPeriodEnd: isComp ? yearsFromNow(freeYears) : null,
         })
         .returning();
       log("company_created", { companyId: company.id });
@@ -136,7 +147,13 @@ export async function POST(req: NextRequest) {
       action: "company.created_by_super_admin",
       entityType: "company",
       entityId: company.id,
-      after: { name: company.name, plan: company.plan, status: company.status },
+      after: {
+        name: company.name,
+        plan: company.plan,
+        status: company.status,
+        subscriptionStatus: company.subscriptionStatus,
+        freeYears: isComp ? freeYears : null,
+      },
     });
 
     log("done", { companyId: company.id });

@@ -2,6 +2,16 @@ const GRAPH_VERSION = "v19.0";
 const FB_APP_ID = process.env.FACEBOOK_APP_ID || "";
 const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET || "";
 
+// A real Facebook App ID is always purely numeric (15-16 digits). Checked
+// before ever building a Facebook URL so a missing or placeholder env var
+// (e.g. FACEBOOK_APP_ID literally left as "placeholder" in a hosting
+// provider's dashboard) fails with a clear in-app message instead of
+// silently sending the customer to Facebook's own cryptic "Invalid App ID"
+// error page — see /api/oauth/facebook/start's use of this.
+export function isFacebookConfigured(): boolean {
+  return /^\d+$/.test(FB_APP_ID) && FB_APP_SECRET.length > 0;
+}
+
 // Name of the short-lived httpOnly cookie that temporarily holds fetched
 // pages (with their page access tokens and business grouping) between the
 // OAuth callback and the admin picking which page + lead forms to connect

@@ -9,7 +9,9 @@ type BillingCompany = {
   supportEmail: string | null;
   subscriptionStatus: "trial" | "active" | "past_due" | "cancelled";
   trialEndsAt: Date | null;
+  currentPeriodEnd: Date | null;
   stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
 };
 
 export function daysRemaining(trialEndsAt: Date | null): number {
@@ -24,27 +26,59 @@ export function isTrialExpired(company: Pick<BillingCompany, "subscriptionStatus
   return company.trialEndsAt.getTime() < Date.now();
 }
 
+// A super-admin can grant a company free/complimentary access (any plan,
+// including "free", for however many years) by setting subscriptionStatus
+// to "active" with no real Stripe subscription behind it and an optional
+// currentPeriodEnd far in the future — see the super-admin company routes.
+// Leaving currentPeriodEnd null means the grant never expires on its own.
+// Scoped to `!stripeSubscriptionId` specifically so a REAL paying
+// customer's currentPeriodEnd (only ever a snapshot from the last Stripe
+// webhook, and can legitimately lag a few minutes behind Stripe's own
+// renewal) can never cause a false block — only a comp with no real
+// subscription behind it can expire this way.
+export function isCompExpired(
+  company: Pick<BillingCompany, "subscriptionStatus" | "currentPeriodEnd" | "stripeSubscriptionId">
+): boolean {
+  if (company.subscriptionStatus !== "active") return false;
+  if (company.stripeSubscriptionId) return false;
+  if (!company.currentPeriodEnd) return false;
+  return company.currentPeriodEnd.getTime() < Date.now();
+}
+
 // What actually stops CRM usage. "past_due" is deliberately NOT blocking —
 // it's a grace period while Stripe retries the card (see subscriptionStatusEnum's
-// comment in schema.ts) — only an expired trial or a fully cancelled
-// subscription locks the app.
-export function isBillingBlocked(company: Pick<BillingCompany, "subscriptionStatus" | "trialEndsAt">): boolean {
+// comment in schema.ts) — only an expired trial, an expired comp grant, or
+// a fully cancelled subscription locks the app.
+export function isBillingBlocked(
+  company: Pick<BillingCompany, "subscriptionStatus" | "trialEndsAt" | "currentPeriodEnd" | "stripeSubscriptionId">
+): boolean {
   if (company.subscriptionStatus === "cancelled") return true;
-  return isTrialExpired(company);
+  if (isTrialExpired(company)) return true;
+  return isCompExpired(company);
 }
 
 // Shared between the (app) layout's full-page block screen and proxy.ts's
 // API-level 402s, so both surfaces agree on why a company is blocked.
 export function billingBlockReason(
-  company: Pick<BillingCompany, "subscriptionStatus" | "trialEndsAt">
-): "trial_expired" | "cancelled" | null {
+  company: Pick<BillingCompany, "subscriptionStatus" | "trialEndsAt" | "currentPeriodEnd" | "stripeSubscriptionId">
+): "trial_expired" | "comp_expired" | "cancelled" | null {
   if (company.subscriptionStatus === "cancelled") return "cancelled";
   if (isTrialExpired(company)) return "trial_expired";
+  if (isCompExpired(company)) return "comp_expired";
   return null;
 }
 
 export function planLabel(plan: string): string {
   return plan.charAt(0).toUpperCase() + plan.slice(1);
+}
+
+// Used by the super-admin company routes to turn "grant N years free" into
+// a concrete currentPeriodEnd. setFullYear (not day-math) so leap years
+// land on the correct calendar date.
+export function yearsFromNow(years: number): Date {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + years);
+  return d;
 }
 
 // Every company gets a Stripe Customer lazily, the first time any billing
