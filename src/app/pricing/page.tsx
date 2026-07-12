@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Footer } from "@/components/Footer";
 
 const PLANS = [
   { id: "starter", name: "Starter", price: 19, blurb: "For small teams getting going", features: ["Up to 15 agents", "Facebook lead ingestion", "3-tier auto-assignment", "Email support"] },
@@ -55,6 +56,8 @@ export default function PricingPage() {
           </div>
         ))}
       </section>
+
+      <Footer />
     </div>
   );
 }

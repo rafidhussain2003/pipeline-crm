@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Footer } from "@/components/Footer";
 
 export default function HomePage() {
   return (
@@ -59,6 +60,8 @@ export default function HomePage() {
           </p>
         </div>
       </section>
+
+      <Footer />
     </div>
   );
 }
