@@ -212,6 +212,32 @@ by the migration (`drizzle/0005_fair_moon_knight.sql`): already-`active`
 companies were set to `subscriptionStatus = 'active'` (no trial clock
 running), so this rollout never silently locks out an existing customer.
 
+## Platform Owner Mailbox (super_admin only)
+
+A small internal email client for the platform operator — **never** visible
+to company admins (every mailbox route requires `super_admin`; company
+sessions get 403). It operates `support@`, `sales@`, and `mail@ziplod.com`
+with Inbox / Sent / Drafts / Trash / Archive, Star, Labels, Search, and
+Compose / Reply / Reply All / Forward, threaded into conversations by RFC
+`References`/`In-Reply-To` headers. Deliberately just a mailbox — no CRM
+automation, AI, ticketing, or shared/customer access.
+
+**Setup (to actually send/receive):**
+1. Create a [Resend](https://resend.com) account and API key → `RESEND_API_KEY`.
+2. Verify `ziplod.com` in Resend (add the SPF + DKIM DNS records it gives you)
+   so outbound mail delivers.
+3. Set `MAILBOX_INBOUND_SECRET` (e.g. `openssl rand -hex 24`), then configure
+   Resend inbound routing (point your domain's MX at Resend and add an inbound
+   route) to POST to `https://YOUR_DOMAIN/api/mailbox/inbound?secret=<that secret>`.
+   That's how replies land back in the mailbox as new messages in the right
+   thread.
+
+Until the key is set the whole UI works (compose, drafts, threading, search,
+labels) — only actual send/receive is gated, and it fails with a clear
+"add RESEND_API_KEY" message rather than silently. The three mailboxes are
+seeded by migration `0014`. Attachments are stored inline in Postgres
+(capped ~8MB each) — fine for a low-volume internal owner mailbox.
+
 ## Deploying to Render
 
 1. **Push to GitHub**, then in Render choose **New > Blueprint** and point it

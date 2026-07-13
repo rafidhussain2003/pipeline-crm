@@ -952,6 +952,123 @@ export const apiKeys = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Platform Owner Mailbox — a small internal email client for the platform
+// operator ONLY (super_admin; every table here is platform-level, has no
+// companyId, and is never exposed to company admins — enforced at the route
+// layer, all mailbox APIs require role super_admin). Sends via Resend and
+// receives via a Resend inbound webhook. Deliberately just a mailbox: no
+// CRM automation, AI, ticketing, or shared/customer access.
+// ---------------------------------------------------------------------------
+export const emailFolderEnum = pgEnum("email_folder", ["inbox", "sent", "drafts", "trash", "archive"]);
+export const emailDirectionEnum = pgEnum("email_direction", ["inbound", "outbound"]);
+
+// One row per operated address (support@ / sales@ / mail@ziplod.com). Seeded
+// once; the UI switches between them.
+export const mailboxes = pgTable("mailboxes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  address: varchar("address", { length: 255 }).notNull().unique(),
+  displayName: varchar("display_name", { length: 255 }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// A conversation — messages are grouped into a thread by their RFC 2822
+// References/In-Reply-To headers (or, failing that, normalized subject +
+// participants), so a reply chain reads as one conversation like Gmail.
+export const emailThreads = pgTable(
+  "email_threads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    mailboxId: uuid("mailbox_id").references(() => mailboxes.id, { onDelete: "cascade" }).notNull(),
+    subject: text("subject"),
+    lastMessageAt: timestamp("last_message_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    mailboxIdx: index("email_threads_mailbox_idx").on(t.mailboxId, t.lastMessageAt),
+  })
+);
+
+export const emailMessages = pgTable(
+  "email_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    threadId: uuid("thread_id").references(() => emailThreads.id, { onDelete: "cascade" }).notNull(),
+    mailboxId: uuid("mailbox_id").references(() => mailboxes.id, { onDelete: "cascade" }).notNull(),
+    direction: emailDirectionEnum("direction").notNull(),
+    // Which folder this message currently lives in. A single message moves
+    // between folders (inbox -> archive -> trash); "sent"/"drafts" are set at
+    // creation for outbound. Star and read are separate flags, Gmail-style.
+    folder: emailFolderEnum("folder").notNull().default("inbox"),
+    fromAddress: varchar("from_address", { length: 255 }).notNull(),
+    toAddresses: jsonb("to_addresses").notNull(), // string[]
+    ccAddresses: jsonb("cc_addresses"), // string[] | null
+    bccAddresses: jsonb("bcc_addresses"), // string[] | null (outbound only)
+    subject: text("subject"),
+    htmlBody: text("html_body"),
+    textBody: text("text_body"),
+    // First ~200 chars of the text body for list previews without shipping
+    // the whole body to the message-list view.
+    snippet: varchar("snippet", { length: 255 }),
+    // RFC 2822 threading headers. messageIdHeader is this message's own
+    // Message-ID; inReplyTo / referencesHeader point at ancestors and are
+    // how a reply is stitched into the right thread.
+    messageIdHeader: varchar("message_id_header", { length: 998 }),
+    inReplyTo: varchar("in_reply_to", { length: 998 }),
+    referencesHeader: jsonb("references_header"), // string[] | null
+    providerId: varchar("provider_id", { length: 255 }), // Resend message id (outbound)
+    isRead: boolean("is_read").notNull().default(false),
+    isStarred: boolean("is_starred").notNull().default(false),
+    isDraft: boolean("is_draft").notNull().default(false),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    sentAt: timestamp("sent_at"),
+  },
+  (t) => ({
+    threadIdx: index("email_messages_thread_idx").on(t.threadId),
+    folderIdx: index("email_messages_mailbox_folder_idx").on(t.mailboxId, t.folder, t.createdAt),
+  })
+);
+
+// User-defined labels (Gmail-style), applied to messages many-to-many.
+export const emailLabels = pgTable("email_labels", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 100 }).notNull().unique(),
+  color: varchar("color", { length: 20 }).notNull().default("#64748b"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const emailMessageLabels = pgTable(
+  "email_message_labels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    messageId: uuid("message_id").references(() => emailMessages.id, { onDelete: "cascade" }).notNull(),
+    labelId: uuid("label_id").references(() => emailLabels.id, { onDelete: "cascade" }).notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("email_message_labels_unique").on(t.messageId, t.labelId),
+  })
+);
+
+// Attachment bytes stored inline as base64 (contentBase64). Fine for a
+// low-volume internal owner mailbox — no separate blob store to provision;
+// capped per-attachment at the route layer. Sent to Resend as base64 on
+// outbound; populated from the Resend inbound webhook on inbound.
+export const emailAttachments = pgTable(
+  "email_attachments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    messageId: uuid("message_id").references(() => emailMessages.id, { onDelete: "cascade" }).notNull(),
+    filename: varchar("filename", { length: 255 }).notNull(),
+    contentType: varchar("content_type", { length: 255 }),
+    size: integer("size"),
+    contentBase64: text("content_base64").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    messageIdx: index("email_attachments_message_idx").on(t.messageId),
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Relations
 // ---------------------------------------------------------------------------
 export const companiesRelations = relations(companies, ({ many }) => ({
@@ -1149,4 +1266,34 @@ export const notificationsRelations = relations(notifications, ({ one }) => ({
 export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
   company: one(companies, { fields: [apiKeys.companyId], references: [companies.id] }),
   creator: one(users, { fields: [apiKeys.createdBy], references: [users.id] }),
+}));
+
+export const mailboxesRelations = relations(mailboxes, ({ many }) => ({
+  threads: many(emailThreads),
+  messages: many(emailMessages),
+}));
+
+export const emailThreadsRelations = relations(emailThreads, ({ one, many }) => ({
+  mailbox: one(mailboxes, { fields: [emailThreads.mailboxId], references: [mailboxes.id] }),
+  messages: many(emailMessages),
+}));
+
+export const emailMessagesRelations = relations(emailMessages, ({ one, many }) => ({
+  thread: one(emailThreads, { fields: [emailMessages.threadId], references: [emailThreads.id] }),
+  mailbox: one(mailboxes, { fields: [emailMessages.mailboxId], references: [mailboxes.id] }),
+  attachments: many(emailAttachments),
+  labels: many(emailMessageLabels),
+}));
+
+export const emailLabelsRelations = relations(emailLabels, ({ many }) => ({
+  messageLabels: many(emailMessageLabels),
+}));
+
+export const emailMessageLabelsRelations = relations(emailMessageLabels, ({ one }) => ({
+  message: one(emailMessages, { fields: [emailMessageLabels.messageId], references: [emailMessages.id] }),
+  label: one(emailLabels, { fields: [emailMessageLabels.labelId], references: [emailLabels.id] }),
+}));
+
+export const emailAttachmentsRelations = relations(emailAttachments, ({ one }) => ({
+  message: one(emailMessages, { fields: [emailAttachments.messageId], references: [emailMessages.id] }),
 }));

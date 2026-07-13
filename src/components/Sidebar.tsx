@@ -76,12 +76,24 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
           );
         })}
         {role === "super_admin" && (
-          <Link
-            href="/super-admin"
-            className="block px-3 py-2 rounded-md text-sm font-medium text-purple-700 hover:bg-purple-50 mt-4 border-t border-slate-100 pt-4"
-          >
-            Super Admin
-          </Link>
+          <>
+            <Link
+              href="/super-admin"
+              className={`block px-3 py-2 rounded-md text-sm font-medium mt-4 border-t border-slate-100 pt-4 ${
+                pathname === "/super-admin" ? "bg-purple-50 text-purple-700" : "text-purple-700 hover:bg-purple-50"
+              }`}
+            >
+              Super Admin
+            </Link>
+            <Link
+              href="/super-admin/mailbox"
+              className={`block px-3 py-2 rounded-md text-sm font-medium ${
+                pathname.startsWith("/super-admin/mailbox") ? "bg-purple-50 text-purple-700" : "text-purple-700 hover:bg-purple-50"
+              }`}
+            >
+              Mailbox
+            </Link>
+          </>
         )}
       </nav>
       {role !== "super_admin" && <PresenceHeartbeat />}

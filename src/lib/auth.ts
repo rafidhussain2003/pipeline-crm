@@ -85,6 +85,20 @@ export async function requireCompanySession(): Promise<
   return { ok: true, session: session as CompanySession };
 }
 
+// Guard for platform-owner-only routes (the Platform Owner Mailbox).
+// super_admin has companyId = null, so requireCompanySession() would reject
+// them — this is the counterpart that requires exactly super_admin and
+// nobody else (no company admin can ever reach a route behind this).
+export async function requireSuperAdmin(): Promise<
+  { ok: true; session: SessionPayload } | { ok: false; response: NextResponse }
+> {
+  const session = await getSession();
+  if (!session || session.role !== "super_admin") {
+    return { ok: false, response: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+  }
+  return { ok: true, session };
+}
+
 export async function setSessionCookie(payload: SessionPayload, maxAgeDays: number = DEFAULT_SESSION_DAYS) {
   const store = await cookies();
   store.set(COOKIE_NAME, signSession(payload, maxAgeDays), {
