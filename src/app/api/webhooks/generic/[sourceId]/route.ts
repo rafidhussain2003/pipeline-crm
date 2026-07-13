@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leadSources, leads } from "@/db/schema";
+import { leadSources } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { mapPayloadToLead, FieldMapping } from "@/lib/field-mapping";
-import { assignLead } from "@/lib/assignment";
-import { findDuplicateLead } from "@/lib/duplicates";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 import { recordDeliveryLog } from "@/lib/delivery-log";
+import { ingestInboundLead } from "@/lib/lead-sources/ingest-inbound";
 
 // Universal webhook connector: any tool that can POST JSON (Google Lead
 // Forms via a relay like Zapier/Pabbly, a custom form builder, another CRM)
@@ -65,49 +64,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
     const mapping = (source.fieldMapping as FieldMapping) || { name: "name", phone: "phone", email: "email" };
     const mapped = mapPayloadToLead(payload, mapping);
 
-    const duplicateOfLeadId = await findDuplicateLead(source.companyId, mapped.phone, mapped.email);
-
-    const [lead] = await db
-      .insert(leads)
-      .values({
-        companyId: source.companyId,
-        sourceId: source.id,
-        name: mapped.name || "Unknown",
-        phone: mapped.phone,
-        email: mapped.email,
-        disposition: "New Lead",
-        rawPayload: payload as object,
-        isDuplicate: !!duplicateOfLeadId,
-        duplicateOfLeadId,
-      })
-      .returning();
-
-    let assignmentError: string | null = null;
-    try {
-      await assignLead(lead.id, source.companyId);
-    } catch (err) {
-      // The lead was already created — kept, not rolled back. The HTTP
-      // response below still reports success (leadId) regardless, so the
-      // sender's own retry logic (if any) never fires and can't create a
-      // duplicate — only the Delivery Log row reflects that assignment
-      // specifically failed.
-      console.error(`Lead assignment failed for webhook lead ${lead.id}:`, err);
-      assignmentError = err instanceof Error ? err.message : "Assignment failed";
-    }
-    await db.update(leadSources).set({ lastSyncedAt: new Date() }).where(eq(leadSources.id, source.id));
-
-    await recordDeliveryLog({
-      sourceId: source.id,
-      companyId: source.companyId,
-      status: assignmentError ? "failed" : "success",
-      stage: assignmentError ? "lead_stored" : "completed",
+    // Shared with the Website Forms endpoint — one dedup/store/assign/log path.
+    const { leadId } = await ingestInboundLead({
+      source,
+      name: mapped.name ?? null,
+      phone: mapped.phone ?? null,
+      email: mapped.email ?? null,
+      rawPayload: payload,
       startedAt,
-      leadId: lead.id,
-      payload,
-      error: assignmentError,
     });
 
-    return NextResponse.json({ received: true, leadId: lead.id });
+    return NextResponse.json({ received: true, leadId });
   } catch (err) {
     console.error("Generic webhook processing error:", err);
     await recordDeliveryLog({

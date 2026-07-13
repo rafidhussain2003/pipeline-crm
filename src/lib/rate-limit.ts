@@ -58,6 +58,8 @@ export type RateLimitCategory =
   | "auth.password_reset" // reserved: no password-reset endpoint exists yet
   | "auth.password_change"
   | "webhook.generic"
+  | "forms.submit"
+  | "forms.submit.ip"
   | "webhook.facebook"
   | "oauth.facebook"
   | "lead_sources.account_sync"
@@ -72,6 +74,12 @@ const POLICIES: Record<RateLimitCategory, { limit: number; windowMs: number }> =
   "auth.password_reset": { limit: 5, windowMs: 60_000 },
   "auth.password_change": { limit: 5, windowMs: 60_000 },
   "webhook.generic": { limit: 60, windowMs: 60_000 },
+  // Website form submissions come straight from visitor browsers, so they're
+  // rate-limited on two axes: per-form (a busy landing page can legitimately
+  // convert fast — generous) and per-IP-per-form (one browser hammering a
+  // form is almost certainly a bot/abuse — tight). Both must pass.
+  "forms.submit": { limit: 300, windowMs: 60_000 },
+  "forms.submit.ip": { limit: 10, windowMs: 60_000 },
   // Facebook's own leadgen delivery rate for a single app is nowhere near
   // this; it's set high enough to only catch actual abuse, not throttle
   // real webhook traffic.

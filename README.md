@@ -212,6 +212,30 @@ by the migration (`drizzle/0005_fair_moon_knight.sql`): already-`active`
 companies were set to `subscriptionStatus = 'active'` (no trial clock
 running), so this rollout never silently locks out an existing customer.
 
+## Website Forms
+
+A first-class lead source: a company creates a "Website Form" connection
+(Lead Sources → Website Forms → Add a Website Form) and gets a public form id.
+Two ways to use it, both feeding the exact same pipeline as every other
+source (dedup, assignment engine, Delivery Log, Audit Log, Assignment Log):
+
+- **Snippet (recommended):** paste `<script src="https://YOUR_DOMAIN/embed.js"></script>`
+  once, then tag any form `<form data-ziplod-form="FORM_ID">`. The loader wires
+  the form, auto-captures UTM params / referrer / landing page / timezone, and
+  auto-injects a honeypot. Works on WordPress, Shopify, Webflow, plain HTML,
+  React, anything.
+- **No JavaScript:** point a plain `<form action="https://YOUR_DOMAIN/api/forms/FORM_ID" method="post">`
+  at the endpoint; the visitor is redirected back after submitting.
+
+Unlike the server-to-server generic webhook (shared secret), a website form is
+submitted from the visitor's browser, so it's protected by a public-but-
+unguessable form id **+ a honeypot + dual rate limits (per-form and tighter
+per-IP) + optional CAPTCHA** (Turnstile/hCaptcha/reCAPTCHA — verified only if
+configured on the source's `providerMetadata.captcha`). Custom + hidden fields,
+IP, browser, and device are captured server-side into the lead's raw payload.
+Field mapping (which fields are name/phone/email) reuses the source's
+`fieldMapping`. Endpoint is CORS-open for cross-origin browser POSTs.
+
 ## Platform Owner Mailbox (super_admin only)
 
 A small internal email client for the platform operator — **never** visible

@@ -47,6 +47,8 @@ const ACTION_LABELS: Record<string, string> = {
   "lead_form.disabled": "disabled a lead form",
   "connected_account.disconnected": "disconnected a Meta account",
   "lead.created_from_facebook": "received a lead from Meta Lead Ads",
+  "lead.created_from_website": "received a lead from a website form",
+  "lead.created_from_webhook": "received a lead from a connected source",
 };
 
 export default function AuditLogPage() {

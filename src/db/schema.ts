@@ -39,9 +39,14 @@ export const companyStatusEnum = pgEnum("company_status", [
 // they exist as distinct values purely so the Lead Sources UI can label a
 // connection by which tool it's actually from, not because any of them
 // need their own route or backend logic (see the generic webhook receiver
-// at api/webhooks/generic/[sourceId]). Deliberately no "website" value —
-// "generic" already covers a plain website contact form; adding a
-// synonym would just duplicate it.
+// at api/webhooks/generic/[sourceId]).
+//
+// "website" IS its own first-class provider (a customer's own site form via
+// the embed.js snippet / a direct <form action>): unlike the server-to-
+// server "generic" webhook (which authenticates with a shared secret), a
+// website form is submitted from the visitor's browser, so it can't carry a
+// secret and instead relies on a public source id + spam protection
+// (honeypot + rate limit + optional CAPTCHA). See api/forms/[sourceId].
 export const sourcePlatformEnum = pgEnum("source_platform", [
   "facebook",
   "google",
@@ -50,6 +55,7 @@ export const sourcePlatformEnum = pgEnum("source_platform", [
   "linkedin",
   "microsoft",
   "generic",
+  "website",
   "typeform",
   "gravityforms",
   "jotform",
