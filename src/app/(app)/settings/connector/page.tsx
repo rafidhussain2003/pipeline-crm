@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import ImportHistoricalLeads from "@/components/ImportHistoricalLeads";
 
 type SourceStatus = "connected" | "token_expired" | "permission_revoked" | "not_found" | "error" | "disconnected";
 
@@ -774,6 +775,7 @@ function ConnectorContent() {
                                 </label>
                               ))}
                             </div>
+                            <ImportHistoricalLeads sourceId={s.id} pageName={s.pageName || "this Page"} />
                           </div>
                         );
                       })}

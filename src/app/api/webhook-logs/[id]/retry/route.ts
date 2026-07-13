@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { webhookLogs, leadSources, leads } from "@/db/schema";
 import { getSession } from "@/lib/auth";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { mapPayloadToLead, FieldMapping } from "@/lib/field-mapping";
 import { assignLead } from "@/lib/assignment";
 import { findDuplicateLead } from "@/lib/duplicates";
@@ -47,6 +47,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     let phone: string | null;
     let email: string | null;
     let rawPayload: unknown;
+    // Set only for Facebook — feeds the same (sourceId, externalLeadId)
+    // unique dedup index ingestLead() uses, so a retry can never create a
+    // duplicate of a lead that already arrived live (or via import) for the
+    // same leadgen_id.
+    let externalLeadId: string | null = null;
 
     if (source.platform === "facebook") {
       const leadgenId = (log.payload as { leadgen_id?: string }).leadgen_id;
@@ -58,6 +63,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       phone = fbLead.phone;
       email = fbLead.email;
       rawPayload = fbLead.raw;
+      externalLeadId = leadgenId;
     } else {
       const mapping = (source.fieldMapping as FieldMapping) || { name: "name", phone: "phone", email: "email" };
       const mapped = mapPayloadToLead(log.payload, mapping);
@@ -74,6 +80,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       .values({
         companyId: source.companyId,
         sourceId: source.id,
+        externalLeadId,
         name,
         phone,
         email,
@@ -82,7 +89,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         isDuplicate: !!duplicateOfLeadId,
         duplicateOfLeadId,
       })
+      .onConflictDoNothing({ target: [leads.sourceId, leads.externalLeadId], where: sql`${leads.externalLeadId} IS NOT NULL` })
       .returning();
+
+    // Conflict → this leadgen_id already became a lead (e.g. a live delivery
+    // landed first). Idempotent success: mark the log resolved, don't create
+    // a second lead.
+    if (!lead) {
+      await db.update(webhookLogs).set({ status: "retried", retryCount: log.retryCount + 1, error: null }).where(eq(webhookLogs.id, id));
+      return NextResponse.json({ ok: true, deduped: true });
+    }
 
     let assignmentError: string | null = null;
     try {

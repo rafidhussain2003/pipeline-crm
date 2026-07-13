@@ -11,7 +11,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 // "manager" sits between admin and agent (Leads + Agents + Reports, but not
 // company-wide settings/API keys/audit log/integrations — see
@@ -412,6 +412,95 @@ export const leadForms = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Historical lead imports — one row per "import my past leads" run for one
+// connected Page. Deliberately NOT an in-memory job: everything the running
+// import needs to resume (which form it's on, Meta's pagination cursor) is
+// persisted here after every batch, because the app runs as a single
+// persistent process on Render that restarts on every deploy — an
+// in-memory-only job would silently die and lose all progress on the next
+// deploy. See lib/lead-sources/import-engine.ts.
+// ---------------------------------------------------------------------------
+export const leadImportStatusEnum = pgEnum("lead_import_status", [
+  "running",
+  "paused",
+  "completed",
+  "cancelled",
+  "failed",
+]);
+
+export const leadImportRangeEnum = pgEnum("lead_import_range", ["7d", "30d", "90d", "180d", "365d", "all"]);
+
+export const leadImports = pgTable(
+  "lead_imports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    sourceId: uuid("source_id").references(() => leadSources.id, { onDelete: "cascade" }).notNull(),
+    status: leadImportStatusEnum("status").notNull().default("running"),
+    range: leadImportRangeEnum("range").notNull(),
+    // The exact set of form ids this run covers, decided once at start —
+    // adding/removing enabled forms mid-import doesn't retroactively change
+    // an already-running job.
+    formIds: jsonb("form_ids").notNull(),
+    // Resume checkpoint: { formIndex: number, afterCursor: string | null }.
+    // Re-read at the top of every loop iteration (not just on restart) so a
+    // Cancel request or an externally-updated row is always respected.
+    checkpoint: jsonb("checkpoint").notNull(),
+    totalFound: integer("total_found").notNull().default(0),
+    totalImported: integer("total_imported").notNull().default(0),
+    totalSkipped: integer("total_skipped").notNull().default(0), // duplicates
+    totalFailed: integer("total_failed").notNull().default(0),
+    currentFormId: varchar("current_form_id", { length: 255 }),
+    currentFormName: varchar("current_form_name", { length: 255 }),
+    // Set by the customer clicking Cancel — the running loop (or a resumed
+    // one) checks this every iteration and stops gracefully rather than
+    // being killed mid-write.
+    cancelRequested: boolean("cancel_requested").notNull().default(false),
+    // Updated after every processed batch — the cron resume-sweep uses
+    // "status=running AND lastProcessedAt older than N minutes" to detect a
+    // job whose in-process loop died (e.g. a Render restart) and needs
+    // resuming from `checkpoint`, not a real still-running job.
+    lastProcessedAt: timestamp("last_processed_at").notNull().defaultNow(),
+    error: text("error"), // set only on status="failed"
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    startedAt: timestamp("started_at").notNull().defaultNow(),
+    completedAt: timestamp("completed_at"),
+  },
+  (t) => ({
+    sourceIdx: index("lead_imports_source_idx").on(t.sourceId),
+    companyIdx: index("lead_imports_company_idx").on(t.companyId),
+    // The resume sweep's exact query shape.
+    statusHeartbeatIdx: index("lead_imports_status_heartbeat_idx").on(t.status, t.lastProcessedAt),
+  })
+);
+
+// Per-lead journal for one import — satisfies "if one lead fails, log it
+// and continue" with a real queryable row per outcome, not just aggregate
+// counters on lead_imports. Not the same table as webhookLogs: an imported
+// lead ALSO gets a normal webhookLogs/Delivery Log row via the same
+// ingestLead() pipeline live leads use — this table is the import-specific
+// journal (which historical leadgen_id mapped to which outcome), not a
+// replacement for the Delivery Log.
+export const leadImportLogStatusEnum = pgEnum("lead_import_log_status", ["imported", "duplicate", "failed"]);
+
+export const leadImportLogs = pgTable(
+  "lead_import_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    importId: uuid("import_id").references(() => leadImports.id, { onDelete: "cascade" }).notNull(),
+    leadgenId: varchar("leadgen_id", { length: 255 }).notNull(),
+    formId: varchar("form_id", { length: 255 }),
+    status: leadImportLogStatusEnum("status").notNull(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    error: text("error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    importIdx: index("lead_import_logs_import_idx").on(t.importId),
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Webhook delivery logs (every inbound call, success or failure + retries)
 // ---------------------------------------------------------------------------
 export const webhookLogs = pgTable(
@@ -506,6 +595,18 @@ export const leads = pgTable(
       .references(() => companies.id, { onDelete: "cascade" })
       .notNull(),
     sourceId: uuid("source_id").references(() => leadSources.id, { onDelete: "set null" }),
+    // The provider's own globally-unique id for this lead (a Facebook
+    // leadgen_id). Populated only for provider-sourced leads that flow
+    // through ingestLead() — the live Facebook webhook AND the historical
+    // importer, which share that one function. Null for generic-webhook and
+    // CSV-imported leads (which dedup by phone/email instead). The partial
+    // unique index below on (sourceId, externalLeadId) is what makes "never
+    // create a duplicate lead" a DATABASE guarantee rather than an
+    // application-level check-then-insert that can race under concurrency
+    // (e.g. a live webhook delivery arriving for the same lead a historical
+    // import is fetching at that moment). See ingestLead()'s
+    // insert-on-conflict.
+    externalLeadId: varchar("external_lead_id", { length: 255 }),
     name: varchar("name", { length: 255 }),
     phone: varchar("phone", { length: 50 }),
     email: varchar("email", { length: 255 }),
@@ -547,6 +648,15 @@ export const leads = pgTable(
     // (total/today/week/month lead counts) — nothing queried `leads` by
     // sourceId before this, so there was no covering index.
     sourceIdx: index("leads_source_idx").on(t.sourceId),
+    // Database-level "never create a duplicate lead" guarantee: no two
+    // leads on the same source can share a provider lead id. Partial
+    // (WHERE external_lead_id IS NOT NULL) so it applies ONLY to
+    // provider-sourced leads and never constrains generic-webhook/CSV
+    // leads, whose external_lead_id is always null. ingestLead() relies on
+    // this index for its atomic insert-on-conflict dedup.
+    externalLeadUniq: uniqueIndex("leads_source_external_lead_uniq")
+      .on(t.sourceId, t.externalLeadId)
+      .where(sql`${t.externalLeadId} IS NOT NULL`),
     createdIdx: index("leads_created_idx").on(t.createdAt),
     phoneIdx: index("leads_phone_idx").on(t.companyId, t.phone),
     emailIdx: index("leads_email_idx").on(t.companyId, t.email),
@@ -898,7 +1008,20 @@ export const leadSourcesRelations = relations(leadSources, ({ one, many }) => ({
   leads: many(leads),
   webhookLogs: many(webhookLogs),
   forms: many(leadForms),
+  imports: many(leadImports),
   creator: one(users, { fields: [leadSources.createdBy], references: [users.id] }),
+}));
+
+export const leadImportsRelations = relations(leadImports, ({ one, many }) => ({
+  company: one(companies, { fields: [leadImports.companyId], references: [companies.id] }),
+  source: one(leadSources, { fields: [leadImports.sourceId], references: [leadSources.id] }),
+  creator: one(users, { fields: [leadImports.createdBy], references: [users.id] }),
+  logs: many(leadImportLogs),
+}));
+
+export const leadImportLogsRelations = relations(leadImportLogs, ({ one }) => ({
+  import: one(leadImports, { fields: [leadImportLogs.importId], references: [leadImports.id] }),
+  lead: one(leads, { fields: [leadImportLogs.leadId], references: [leads.id] }),
 }));
 
 export const connectedAccountsRelations = relations(connectedAccounts, ({ one, many }) => ({

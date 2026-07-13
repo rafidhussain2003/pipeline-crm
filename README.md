@@ -128,6 +128,23 @@ minutes of inactivity to a different agent. This runs when something calls
 Set up a **Render Cron Job** (or a free external scheduler like
 cron-job.org) to hit that URL every 15–30 minutes.
 
+**Historical Lead Import** — from a connected Meta Page's "View Details"
+panel (Lead Sources), an admin can import that Page's past leads (last 7 /
+30 / 90 / 180 / 365 days, or all available) through the exact same
+store/assign/audit/Delivery-Log pipeline live leads use. It runs as a real
+background loop in this app's own Node process (Render isn't serverless —
+`next start` is a normal persistent server), checkpointing progress to
+`lead_imports` after every page of results so it can resume instead of
+restarting from zero. Two things keep a run moving: the browser polling its
+progress (nudges it forward while someone's watching) and
+`POST /api/cron/resume-imports` (same `X-Cron-Secret` pattern as
+recycle-leads above) picking up any import whose heartbeat has gone stale
+— which is what makes a run survive a Render restart/deploy mid-import, not
+just a closed browser tab. Add that URL to the same scheduler as
+`recycle-leads`, on a **1–2 minute** interval (this one needs to be
+frequent — a stalled import shouldn't sit for 15–30 minutes before
+resuming).
+
 ## Billing (Stripe)
 
 Every company gets a **7-day free trial** the moment it's created (public
@@ -208,6 +225,10 @@ running), so this rollout never silently locks out an existing customer.
    Render Postgres's External Database URL): `npm run db:push && npm run db:seed`.
 4. Optional: add a **Render Cron Job** hitting `https://YOUR_DOMAIN/api/cron/recycle-leads`
    with header `X-Cron-Secret: <your CRON_SECRET>` on whatever schedule you want auto-recycle to run.
+   If you'll use Historical Lead Import, also add
+   `https://YOUR_DOMAIN/api/cron/resume-imports` (same header) on a 1–2 minute
+   schedule — see "Historical Lead Import" above for why it needs to be that
+   frequent.
 5. Custom domains: Render supports adding one under Settings > Custom
    Domains for your main platform domain. Per-company custom domains are
    stored (`companies.customDomain`) and shown in Super Admin, but live

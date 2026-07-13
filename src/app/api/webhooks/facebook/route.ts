@@ -4,11 +4,9 @@ import { leadSources, leadForms, leads } from "@/db/schema";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { decrypt } from "@/lib/crypto";
 import { getProvider } from "@/lib/lead-sources/registry";
-import { assignLead } from "@/lib/assignment";
-import { findDuplicateLead } from "@/lib/duplicates";
-import { recordAudit } from "@/lib/audit";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 import { recordDeliveryLog } from "@/lib/delivery-log";
+import { ingestLead } from "@/lib/lead-sources/ingest-lead";
 
 const metaProvider = getProvider("facebook")!;
 
@@ -161,67 +159,14 @@ async function processLeadgenChange(value: LeadgenValue, startedAt: number, webh
     return;
   }
 
-  const duplicateOfLeadId = await findDuplicateLead(source.companyId, fbLead.phone, fbLead.email);
-
-  const [lead] = await db
-    .insert(leads)
-    .values({
-      companyId: source.companyId,
-      sourceId: source.id,
-      name: fbLead.name || "Unknown",
-      phone: fbLead.phone,
-      email: fbLead.email,
-      disposition: "New Lead",
-      rawPayload: fbLead.raw,
-      isDuplicate: !!duplicateOfLeadId,
-      duplicateOfLeadId,
-    })
-    .returning();
-
-  let assignmentError: string | null = null;
-  try {
-    await assignLead(lead.id, source.companyId);
-  } catch (err) {
-    // The lead was already created — kept, not rolled back, since Facebook
-    // would otherwise retry this delivery and risk a duplicate on the next
-    // attempt. What changes here vs. before: this is now reported as a
-    // failed delivery (stage="lead_stored", one step short of
-    // "lead_assigned") instead of being silently counted as a success.
-    console.error(`Lead assignment failed for Facebook lead ${lead.id}:`, err);
-    assignmentError = err instanceof Error ? err.message : "Assignment failed";
-  }
-
-  await db
-    .update(leadSources)
-    .set({ lastSyncedAt: new Date(), status: "connected", webhookStatus: "active", lastError: null })
-    .where(eq(leadSources.id, source.id));
-
-  await recordDeliveryLog({
-    sourceId: source.id,
-    companyId: source.companyId,
-    status: assignmentError ? "failed" : "success",
-    stage: assignmentError ? "lead_stored" : "completed",
-    startedAt,
-    leadId: lead.id,
+  await ingestLead({
+    source,
+    leadgenId,
     formId: formId ?? null,
-    payload: value,
+    fbLead,
+    startedAt,
     webhookLatencyMs,
-    error: assignmentError,
-  });
-
-  await recordAudit({
-    companyId: source.companyId,
-    userId: null,
-    action: "lead.created_from_facebook",
-    entityType: "lead",
-    entityId: lead.id,
-    metadata: {
-      sourceId: source.id,
-      pageId,
-      formId: formId || null,
-      isDuplicate: !!duplicateOfLeadId,
-      assignmentFailed: !!assignmentError,
-    },
+    retryPayload: value,
   });
 }
 

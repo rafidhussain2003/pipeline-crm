@@ -1,0 +1,2 @@
+ALTER TABLE "leads" ADD COLUMN "external_lead_id" varchar(255);--> statement-breakpoint
+CREATE UNIQUE INDEX "leads_source_external_lead_uniq" ON "leads" USING btree ("source_id","external_lead_id") WHERE "leads"."external_lead_id" IS NOT NULL;
