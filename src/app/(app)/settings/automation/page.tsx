@@ -2,9 +2,21 @@
 
 import { useEffect, useState } from "react";
 
+type AssignmentMode =
+  | "round_robin"
+  | "weighted"
+  | "skill_based"
+  | "tier_based"
+  | "priority_based"
+  | "last_assigned"
+  | "least_active"
+  | "most_available"
+  | "random"
+  | "ai";
+
 type Settings = {
   autoAssignEnabled: boolean;
-  assignmentMode: "round_robin" | "weighted" | "skill_based";
+  assignmentMode: AssignmentMode;
   autoRecycleEnabled: boolean;
   recycleAfterMinutes: number;
   heartbeatTimeoutSeconds: number;
@@ -13,6 +25,19 @@ type Settings = {
   maxOpenLeadsPerAgent: number | null;
   maxRecycleCount: number;
 };
+
+const ASSIGNMENT_MODES: { id: AssignmentMode; label: string; description: string }[] = [
+  { id: "round_robin", label: "Round Robin", description: "Every available agent gets an equal share of leads, in turn." },
+  { id: "weighted", label: "Weighted (Tiers)", description: "Leads split by tier weight — set weights in Pipeline Settings." },
+  { id: "skill_based", label: "Skill Based", description: "Leads with a required skill only go to agents with that skill; falls back to the full pool if nobody matches." },
+  { id: "tier_based", label: "Tier Based", description: "Always routes to the highest tier that has an available agent; rotates equally within it." },
+  { id: "priority_based", label: "Priority Based", description: "High-priority leads go to your top tier; everyone else uses weighted rotation." },
+  { id: "last_assigned", label: "Last Assigned", description: "Sticky — keeps sending to the agent who got the previous lead while they stay available (burst affinity)." },
+  { id: "least_active", label: "Least Active", description: "Routes to whoever currently has the fewest open leads." },
+  { id: "most_available", label: "Most Available", description: "Routes to whoever has been idle longest (waiting most for a lead)." },
+  { id: "random", label: "Random", description: "Picks a random available agent each time." },
+  { id: "ai", label: "AI (Adaptive)", description: "Balances idle time, current workload, and tier automatically to pick the best agent." },
+];
 
 function minutesToTimeInput(minutes: number | null): string {
   if (minutes == null) return "";
@@ -80,19 +105,15 @@ export default function AutomationPage() {
         {settings.autoAssignEnabled && (
           <div className="mt-4 pt-4 border-t border-slate-100">
             <div className="text-sm font-medium text-slate-900 mb-2">Assignment mode</div>
-            <div className="flex gap-2">
-              {[
-                { id: "round_robin", label: "Round Robin" },
-                { id: "weighted", label: "Weighted (Tiers)" },
-                { id: "skill_based", label: "Skill Based" },
-              ].map((mode) => (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {ASSIGNMENT_MODES.map((mode) => (
                 <button
                   key={mode.id}
-                  onClick={() => update({ assignmentMode: mode.id as Settings["assignmentMode"] })}
-                  className={`text-xs font-medium rounded-md px-3 py-2 border ${
+                  onClick={() => update({ assignmentMode: mode.id })}
+                  className={`text-xs font-medium rounded-md px-3 py-2 border text-left ${
                     settings.assignmentMode === mode.id
                       ? "border-blue-500 bg-blue-50 text-blue-700"
-                      : "border-slate-200 text-slate-600"
+                      : "border-slate-200 text-slate-600 hover:border-slate-300"
                   }`}
                 >
                   {mode.label}
@@ -100,10 +121,7 @@ export default function AutomationPage() {
               ))}
             </div>
             <p className="text-xs text-slate-400 mt-2">
-              {settings.assignmentMode === "round_robin" && "Every active agent gets an equal share of leads."}
-              {settings.assignmentMode === "weighted" && "Leads split by tier weight — set weights in Pipeline Settings."}
-              {settings.assignmentMode === "skill_based" &&
-                "Leads with a required skill only go to agents with that skill; falls back to the full pool if nobody matches."}
+              {ASSIGNMENT_MODES.find((m) => m.id === settings.assignmentMode)?.description}
             </p>
           </div>
         )}

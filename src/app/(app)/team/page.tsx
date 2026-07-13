@@ -3,7 +3,17 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 
-type PresenceStatus = "online" | "idle" | "busy" | "break" | "offline";
+type PresenceStatus =
+  | "online"
+  | "idle"
+  | "busy"
+  | "break"
+  | "offline"
+  | "away"
+  | "lunch"
+  | "wrap_up"
+  | "locked"
+  | "heartbeat_lost";
 
 type Agent = {
   id: string;
@@ -54,8 +64,26 @@ const STATUS_STYLES: Record<PresenceStatus, string> = {
   online: "text-emerald-700 bg-emerald-50",
   idle: "text-amber-700 bg-amber-50",
   busy: "text-red-700 bg-red-50",
+  wrap_up: "text-blue-700 bg-blue-50",
   break: "text-slate-600 bg-slate-100",
+  away: "text-slate-600 bg-slate-100",
+  lunch: "text-slate-600 bg-slate-100",
+  locked: "text-slate-500 bg-slate-100",
+  heartbeat_lost: "text-red-600 bg-red-50",
   offline: "text-slate-400 bg-slate-50",
+};
+
+const STATUS_LABELS: Record<PresenceStatus, string> = {
+  online: "Online",
+  idle: "Idle",
+  busy: "Busy",
+  wrap_up: "Wrap Up",
+  break: "Break",
+  away: "Away",
+  lunch: "Lunch",
+  locked: "Locked",
+  heartbeat_lost: "Heartbeat Lost",
+  offline: "Offline",
 };
 
 function timeAgo(iso: string | null): string {
@@ -256,8 +284,12 @@ export default function TeamPage() {
                     {a.name} <span className="text-xs text-slate-400">Tier {a.tier || "1"}</span>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs font-medium rounded-full px-2.5 py-1 ${STATUS_STYLES[a.presenceStatus]}`}>
-                      {a.locked ? "Locked" : a.presenceStatus}
+                    <span
+                      className={`text-xs font-medium rounded-full px-2.5 py-1 ${
+                        a.locked ? STATUS_STYLES.locked : STATUS_STYLES[a.presenceStatus] ?? STATUS_STYLES.offline
+                      }`}
+                    >
+                      {a.locked ? "Locked" : STATUS_LABELS[a.presenceStatus] ?? a.presenceStatus}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-slate-500">{timeAgo(a.lastHeartbeatAt)}</td>

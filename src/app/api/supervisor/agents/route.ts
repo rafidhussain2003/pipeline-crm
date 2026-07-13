@@ -7,6 +7,8 @@ import { and, eq, gte, count, isNull, notInArray, inArray, desc } from "drizzle-
 import { resolveDateRange } from "@/lib/analytics/range";
 import { WON_DISPOSITION, percentage } from "@/lib/analytics/kpis";
 import { TERMINAL_DISPOSITIONS } from "@/lib/assignment";
+import { deriveDisplayStatus, type PresenceStatus } from "@/lib/presence";
+import { automationSettings } from "@/db/schema";
 
 // Live presence table for the Team dashboard (Part 1). Polled from the
 // client every ~10s — kept to a handful of bounded, indexed queries (one
@@ -36,6 +38,16 @@ export async function GET() {
     .where(and(eq(users.companyId, session.companyId), eq(users.role, "agent"), eq(users.active, true), isNull(users.deletedAt)));
 
   if (agents.length === 0) return NextResponse.json({ agents: [] });
+
+  // Heartbeat timeout is per-company (defaults to 90s) — needed to derive
+  // the honest "heartbeat_lost" display state for an agent whose stored
+  // status still claims an active state but whose heartbeat has gone stale.
+  const [settingsRow] = await db
+    .select({ heartbeatTimeoutSeconds: automationSettings.heartbeatTimeoutSeconds })
+    .from(automationSettings)
+    .where(eq(automationSettings.companyId, session.companyId))
+    .limit(1);
+  const heartbeatTimeoutSeconds = settingsRow?.heartbeatTimeoutSeconds ?? 90;
 
   const agentIds = agents.map((a) => a.id);
 
@@ -82,6 +94,13 @@ export async function GET() {
     const wonToday = wonTodayMap.get(a.id) || 0;
     return {
       ...a,
+      // Show the derived state: a stale heartbeat on an
+      // otherwise-"online"/"busy"/etc agent surfaces as "heartbeat_lost"
+      // rather than a stale, misleading "online".
+      presenceStatus: deriveDisplayStatus(
+        { presenceStatus: a.presenceStatus as PresenceStatus, lastHeartbeatAt: a.lastHeartbeatAt },
+        heartbeatTimeoutSeconds
+      ),
       assignedToday,
       wonToday,
       conversionTodayPct: percentage(wonToday, assignedToday),

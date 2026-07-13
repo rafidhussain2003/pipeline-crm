@@ -175,7 +175,27 @@ export const companies = pgTable(
 // "offline" is both the default (never logged in) and what a stale
 // heartbeat is treated as — see src/lib/presence.ts for the derived
 // availability check that combines this with lastHeartbeatAt.
-export const presenceStatusEnum = pgEnum("presence_status", ["online", "idle", "busy", "break", "offline"]);
+// Stored states only. Two states from the presence spec are deliberately
+// DERIVED, never stored: "disconnected"/"heartbeat lost" is computed from
+// lastHeartbeatAt staleness (a crashed browser can't tell us anything — the
+// missing heartbeat IS the signal), see deriveDisplayStatus() in
+// src/lib/presence.ts. "locked" IS stored because the client can sometimes
+// report it (Idle Detection API, Chrome, permission-gated) — when it can't,
+// the heartbeat timeout catches a locked machine anyway.
+//
+// Assignment eligibility: ELIGIBLE_PRESENCE_STATUSES in src/lib/presence.ts
+// is the single source of truth for which of these can receive leads.
+export const presenceStatusEnum = pgEnum("presence_status", [
+  "online",
+  "idle",
+  "busy",
+  "break",
+  "offline",
+  "away",
+  "lunch",
+  "wrap_up",
+  "locked",
+]);
 
 export const users = pgTable(
   "users",
@@ -191,6 +211,11 @@ export const users = pgTable(
     active: boolean("active").notNull().default(true),
     presenceStatus: presenceStatusEnum("presence_status").notNull().default("offline"),
     lastHeartbeatAt: timestamp("last_heartbeat_at"),
+    // When this agent last received a lead — kept O(1)-readable here
+    // (updated inside the assignment lock) instead of MAX()-ing over
+    // assignment_log on every assignment. Drives the last_assigned /
+    // most_available selection modes and the "ai" mode's idle-time signal.
+    lastAssignedAt: timestamp("last_assigned_at"),
     // Supervisor kill-switch: a locked agent is excluded from assignment
     // regardless of presence/workload, until a supervisor unlocks them
     // (see src/lib/supervisor.ts). Defaults false so no existing agent is
@@ -749,7 +774,23 @@ export const assignmentRules = pgTable(
 // ---------------------------------------------------------------------------
 // Automation settings (one row per company): assignment mode, recycle rules
 // ---------------------------------------------------------------------------
-export const assignmentModeEnum = pgEnum("assignment_mode", ["round_robin", "weighted", "skill_based"]);
+// Every selection strategy the assignment engine supports — see
+// chooseAgent() in src/lib/assignment.ts for what each one actually does.
+// "ai" is an adaptive composite heuristic (workload + idle time + tier),
+// deliberately NOT an LLM call in the assignment hot path — it's the seam
+// where a learned model can plug in later without a schema change.
+export const assignmentModeEnum = pgEnum("assignment_mode", [
+  "round_robin",
+  "weighted",
+  "skill_based",
+  "tier_based",
+  "priority_based",
+  "last_assigned",
+  "least_active",
+  "most_available",
+  "random",
+  "ai",
+]);
 
 export const automationSettings = pgTable("automation_settings", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -807,6 +848,19 @@ export const assignmentLog = pgTable(
     assignedTo: uuid("assigned_to").references(() => users.id, { onDelete: "set null" }),
     assignedAt: timestamp("assigned_at").notNull().defaultNow(),
     ruleUsed: varchar("rule_used", { length: 100 }),
+    // "assigned" (success), "failed" (no eligible agent at arrival — logged
+    // once per lead arrival, NOT re-logged by every queue-sweep retry, which
+    // would flood this table), or "skipped" (lost the atomic claim race —
+    // another concurrent call assigned this lead first). Plain varchar, not
+    // an enum: an audit-trail vocabulary, not a state machine.
+    status: varchar("status", { length: 20 }).notNull().default("assigned"),
+    // The chosen agent's presence status at the moment of assignment.
+    presenceStatus: varchar("presence_status", { length: 20 }),
+    // Wall-clock duration of the whole assignLead() call, in milliseconds.
+    latencyMs: integer("latency_ms"),
+    // Human-readable detail: which pool the agent was picked from, why an
+    // attempt failed, etc.
+    reason: text("reason"),
   },
   (t) => ({
     leadIdx: index("assignment_log_lead_idx").on(t.leadId),

@@ -228,7 +228,26 @@ running), so this rollout never silently locks out an existing customer.
    If you'll use Historical Lead Import, also add
    `https://YOUR_DOMAIN/api/cron/resume-imports` (same header) on a 1–2 minute
    schedule — see "Historical Lead Import" above for why it needs to be that
-   frequent.
+   frequent. Add `https://YOUR_DOMAIN/api/cron/assign-queued` (same header) on
+   the same 1–2 minute schedule too — it is the scheduled backstop for the
+   auto-assignment queue (a lead that arrives while every agent is offline
+   waits as an unassigned row and is drained the moment an agent comes back;
+   the per-agent heartbeat is the primary trigger, this catches anything it
+   missed — see "Auto lead assignment" below).
+
+**Auto lead assignment** — every lead from every source (Meta webhook,
+historical import, website form, API) is routed to an agent with no manager
+involvement. An agent is eligible only when their presence is online/idle/
+busy/wrap-up AND their heartbeat is fresh; offline/away/break/lunch/locked/
+stale-heartbeat agents are skipped. If none is eligible at arrival, the lead
+stays unassigned (an `owner_id IS NULL` row — the queue is the leads table
+itself, so it survives restarts) and is assigned automatically when an agent
+next becomes available. Selection strategy is per-company
+(Settings → Automation): round robin, weighted (tier), tier-based,
+priority-based, skill-based, last-assigned (sticky), least-active,
+most-available, random, or AI (adaptive). Assignment is atomic
+(`UPDATE ... WHERE owner_id IS NULL` inside a per-company lock) so concurrent
+arrivals and the queue sweep can never double-assign a lead.
 5. Custom domains: Render supports adding one under Settings > Custom
    Domains for your main platform domain. Per-company custom domains are
    stored (`companies.customDomain`) and shown in Super Admin, but live
