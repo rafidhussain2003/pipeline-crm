@@ -12,6 +12,7 @@ import { assignLead } from "@/lib/assignment";
 import { findDuplicateLead } from "@/lib/duplicates";
 import { recordDeliveryLog } from "@/lib/delivery-log";
 import { recordAudit } from "@/lib/audit";
+import { metrics } from "@/lib/infra/metrics";
 
 type Source = typeof leadSources.$inferSelect;
 
@@ -82,6 +83,10 @@ export async function ingestInboundLead(params: {
     entityId: lead.id,
     metadata: { sourceId: source.id, platform: source.platform, isDuplicate: !!duplicateOfLeadId, assignmentFailed: !!assignmentError },
   });
+
+  // Phase 10 observability: end-to-end inbound ingest latency (dedup → store →
+  // assign → delivery log).
+  metrics.recordTiming("ingest.lead_ms", Date.now() - startedAt);
 
   return { leadId: lead.id, assignmentFailed: !!assignmentError };
 }

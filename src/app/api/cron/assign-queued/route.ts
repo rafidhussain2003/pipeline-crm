@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sweepAllCompanies } from "@/lib/assignment-queue";
+import { assignmentEngine } from "@/lib/assignment";
+import { runRecovery } from "@/lib/lifecycle/recovery";
+import { escalateOverdueSla } from "@/lib/lifecycle/sla";
 
 // Scheduled backstop for the auto-assignment engine. Hit by the same
 // external scheduler as the other cron routes (Render Cron Job / cron-job.org)
@@ -20,6 +23,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Two backstops run here, both idempotent and convergent on the same
+  // race-free atomic claim (so they can never double-assign):
+  //  1. sweepAllCompanies() — the reactive owner-NULL sweep (unchanged): the
+  //     fast path that drains any lead left unassigned.
+  //  2. assignmentEngine.processQueue() — drains DUE rows of the durable
+  //     assignment_jobs queue (failure-recovery retries with backoff). This
+  //     is the distributed-worker-ready path; in a multi-instance future each
+  //     instance's cron hit reserves a disjoint batch via SKIP LOCKED.
+  // Phase 4: recover first (reclaim stale reservations from crashed workers +
+  // re-queue any orphaned leads) so nothing is stuck, THEN drain.
+  const recovery = await runRecovery();
+  // Phase 5: escalate overdue-SLA queued leads (boost priority so they drain
+  // first) BEFORE draining, so an SLA breach jumps the queue this same pass.
+  const escalated = await escalateOverdueSla();
   const { companies, assigned } = await sweepAllCompanies();
-  return NextResponse.json({ ok: true, companiesSwept: companies, assigned });
+  const jobs = await assignmentEngine.processQueue(200);
+  return NextResponse.json({
+    ok: true,
+    companiesSwept: companies,
+    assigned,
+    queue: { processed: jobs.processed, assigned: jobs.assigned },
+    recovery,
+    slaEscalated: escalated,
+  });
 }

@@ -2,11 +2,33 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { leadSources, leadForms, leads } from "@/db/schema";
 import { and, eq, isNull, sql } from "drizzle-orm";
+import crypto from "crypto";
 import { decrypt } from "@/lib/crypto";
 import { getProvider } from "@/lib/lead-sources/registry";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 import { recordDeliveryLog } from "@/lib/delivery-log";
 import { ingestLead } from "@/lib/lead-sources/ingest-lead";
+import { createLogger } from "@/lib/logger";
+
+const logger = createLogger({ component: "facebook-webhook" });
+
+// Meta signs every webhook POST with the app secret in the X-Hub-Signature-256
+// header ("sha256=<hex hmac of the raw body>"). Phase 10 verifies it so a
+// forged leadgen event can't be injected. FAIL-OPEN when FACEBOOK_APP_SECRET is
+// unset: verification is skipped (with a warning) so live delivery is never
+// broken by a missing env var; ENFORCED (reject) the moment the secret is set.
+// Timing-safe comparison avoids a signature-timing side channel.
+function verifyMetaSignature(rawBody: string, header: string | null): { ok: boolean; enforced: boolean } {
+  const secret = process.env.FACEBOOK_APP_SECRET;
+  if (!secret) return { ok: true, enforced: false }; // fail-open, unconfigured
+  if (!header || !header.startsWith("sha256=")) return { ok: false, enforced: true };
+  const expected = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+  const provided = header.slice("sha256=".length);
+  const a = Buffer.from(expected, "hex");
+  const b = Buffer.from(provided, "hex");
+  if (a.length !== b.length) return { ok: false, enforced: true };
+  return { ok: crypto.timingSafeEqual(a, b), enforced: true };
+}
 
 const metaProvider = getProvider("facebook")!;
 
@@ -183,9 +205,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
   }
 
+  // Read the raw body ONCE — needed both for HMAC verification and JSON parse
+  // (calling req.json() would consume the stream and lose the exact bytes the
+  // signature was computed over).
+  const rawBody = await req.text();
+
+  // Verify Meta's X-Hub-Signature-256 (fail-open only when unconfigured).
+  const sig = verifyMetaSignature(rawBody, req.headers.get("x-hub-signature-256"));
+  if (!sig.ok) {
+    logger.warn("facebook_webhook_bad_signature", { ip: getClientIp(req) });
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+  if (!sig.enforced) {
+    logger.warn("facebook_webhook_signature_unverified", { reason: "FACEBOOK_APP_SECRET not set — signature verification skipped" });
+  }
+
   let body;
   try {
-    body = await req.json();
+    body = JSON.parse(rawBody);
   } catch (err) {
     // Log but still return 200 — Facebook retries aggressively on non-200s,
     // and we don't want a malformed payload to cause a retry storm.

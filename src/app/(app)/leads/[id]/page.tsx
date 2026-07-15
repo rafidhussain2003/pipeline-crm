@@ -22,6 +22,42 @@ type Attachment = { id: string; fileName: string; fileUrl: string; createdAt: st
 type Tag = { id: string; label: string; color: string };
 type TimelineEvent = { id: string; at: string; label: string; detail: string | null; actor: string | null };
 
+type Insight = {
+  score: number;
+  scoreLabel: string;
+  temperature: "hot" | "warm" | "cold";
+  tags: string[];
+  summary: string;
+  recommendation: string;
+  recommendationLabel: string;
+  recommendationReason: string;
+  followUpAt: string | null;
+  followUpLabel: string;
+  explanation: string[];
+  factors: { label: string; points: number; maxPoints: number; reason: string }[];
+  computedAt: string;
+};
+type CustomerInsights = {
+  leadSource: string;
+  firstContactAt: string;
+  lastContactAt: string;
+  daysOpen: number;
+  assignmentCount: number;
+  recycleCount: number;
+  currentOwner: string | null;
+  currentStatus: string;
+  scoreLabel: string;
+  recommendationLabel: string;
+};
+
+// Temperature → badge colors (the UI never string-matches the label; it uses
+// the coarse temperature bucket from the insight).
+const TEMP_STYLES: Record<string, { badge: string; ring: string; dot: string }> = {
+  hot: { badge: "text-red-700 bg-red-50", ring: "ring-red-200", dot: "bg-red-500" },
+  warm: { badge: "text-amber-700 bg-amber-50", ring: "ring-amber-200", dot: "bg-amber-500" },
+  cold: { badge: "text-sky-700 bg-sky-50", ring: "ring-sky-200", dot: "bg-sky-500" },
+};
+
 export default function LeadDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [lead, setLead] = useState<LeadDetail | null>(null);
@@ -33,6 +69,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const [attachName, setAttachName] = useState("");
   const [attachUrl, setAttachUrl] = useState("");
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [insight, setInsight] = useState<Insight | null>(null);
+  const [customerInsights, setCustomerInsights] = useState<CustomerInsights | null>(null);
+  const [showWhy, setShowWhy] = useState(false);
 
   async function load() {
     const [leadRes, notesRes, attRes, tagsRes, leadTagsRes, timelineRes] = await Promise.all([
@@ -57,6 +96,16 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     setTimeline(timelineData.events || []);
   }
 
+  // AI Insights load separately (it recomputes on read) so it never blocks the
+  // rest of the page rendering.
+  async function loadInsights() {
+    const res = await fetch(`/api/leads/${id}/insights`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setInsight(data.insight || null);
+    setCustomerInsights(data.customerInsights || null);
+  }
+
   async function updateLeadField(patch: Partial<Pick<LeadDetail, "priority" | "isBlacklisted">>) {
     setLead((prev) => (prev ? { ...prev, ...patch } : prev));
     await fetch(`/api/leads/${id}`, {
@@ -68,6 +117,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
   useEffect(() => {
     load();
+    loadInsights();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -150,6 +200,85 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           </button>
         </div>
       </div>
+
+      {/* AI Insights (Phase 9) — one card. Recommendations only; the agent/admin
+          stays in control. Everything shown is explained ("why"), never a bare score. */}
+      {insight && (
+        <div className={`bg-white border border-slate-200 rounded-lg p-5 mb-6 ring-1 ${(TEMP_STYLES[insight.temperature] || TEMP_STYLES.cold).ring}`}>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              <span className={`inline-block w-2 h-2 rounded-full ${(TEMP_STYLES[insight.temperature] || TEMP_STYLES.cold).dot}`} />
+              AI Insights
+            </h2>
+            <span className="text-[10px] uppercase tracking-wide text-slate-400">AI-assisted · you decide</span>
+          </div>
+
+          {/* Score + label + tags */}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <span className={`text-sm font-semibold rounded-full px-3 py-1 ${(TEMP_STYLES[insight.temperature] || TEMP_STYLES.cold).badge}`}>
+              {insight.scoreLabel} · {insight.score}/100
+            </span>
+            {insight.tags.map((t) => (
+              <span key={t} className="text-[11px] font-medium text-slate-600 bg-slate-100 rounded-full px-2.5 py-1">
+                {t}
+              </span>
+            ))}
+          </div>
+
+          {/* Summary */}
+          <p className="text-sm text-slate-800 mb-4">{insight.summary}</p>
+
+          {/* Next best action + follow-up */}
+          <div className="grid sm:grid-cols-2 gap-3 mb-4">
+            <div className="bg-slate-50 rounded-md p-3">
+              <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Next best action</div>
+              <div className="text-sm font-medium text-slate-900">{insight.recommendationLabel}</div>
+              <div className="text-xs text-slate-500 mt-1">{insight.recommendationReason}</div>
+            </div>
+            <div className="bg-slate-50 rounded-md p-3">
+              <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide mb-1">Follow-up</div>
+              <div className={`text-sm font-medium ${insight.followUpLabel === "Reminder overdue" ? "text-red-600" : "text-slate-900"}`}>{insight.followUpLabel}</div>
+              {insight.followUpAt && <div className="text-xs text-slate-500 mt-1">{new Date(insight.followUpAt).toLocaleString()}</div>}
+            </div>
+          </div>
+
+          {/* Why (explanation) — never just a score */}
+          <button onClick={() => setShowWhy((v) => !v)} className="text-xs font-medium text-blue-600">
+            {showWhy ? "Hide why" : "Why this score & recommendation?"}
+          </button>
+          {showWhy && (
+            <ul className="mt-2 space-y-1.5">
+              {insight.explanation.map((e, i) => (
+                <li key={i} className="text-xs text-slate-600 flex gap-2">
+                  <span className="text-slate-400">•</span>
+                  <span>{e}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Customer Insights */}
+          {customerInsights && (
+            <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
+              {[
+                ["Lead source", customerInsights.leadSource],
+                ["First contact", new Date(customerInsights.firstContactAt).toLocaleDateString()],
+                ["Last contact", new Date(customerInsights.lastContactAt).toLocaleDateString()],
+                ["Days open", String(customerInsights.daysOpen)],
+                ["Assignments", String(customerInsights.assignmentCount)],
+                ["Recycles", String(customerInsights.recycleCount)],
+                ["Current owner", customerInsights.currentOwner || "Unassigned"],
+                ["Current status", customerInsights.currentStatus],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-400">{label}</div>
+                  <div className="text-xs font-medium text-slate-800 truncate">{value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="bg-white border border-slate-200 rounded-lg p-5 mb-6">
         <h2 className="text-sm font-semibold text-slate-700 mb-3">Tags</h2>

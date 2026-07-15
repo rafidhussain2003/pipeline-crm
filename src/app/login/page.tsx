@@ -69,7 +69,12 @@ export default function LoginPage() {
               {submitting ? "Signing in…" : "Sign In"}
             </button>
           </form>
-          <p className="text-center text-sm text-slate-500 mt-4">
+          <p className="text-center text-sm mt-3">
+            <Link href="/forgot-password" className="text-slate-500 hover:text-slate-700">
+              Forgot password?
+            </Link>
+          </p>
+          <p className="text-center text-sm text-slate-500 mt-2">
             Don&apos;t have an account?{" "}
             <Link href="/signup" className="text-blue-600 font-medium">
               Sign up

@@ -77,6 +77,9 @@ export async function GET(req: NextRequest) {
     // a different Meta identity naturally creates a new row here, which is
     // the entire mechanism behind supporting unlimited connected accounts
     // without a dedicated "add another account" flow.
+    // Phase 11: store the long-lived USER token (encrypted) on the account so
+    // Conversions API can reuse this one OAuth grant — no second Meta login.
+    const accountTokenExpiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null;
     const [account] = await db
       .insert(connectedAccounts)
       .values({
@@ -85,11 +88,13 @@ export async function GET(req: NextRequest) {
         externalAccountId: identity.id,
         accountLabel: identity.label,
         status: "connected",
+        accessToken: encrypt(longLivedToken),
+        tokenExpiresAt: accountTokenExpiresAt,
         createdBy: session.userId,
       })
       .onConflictDoUpdate({
         target: [connectedAccounts.companyId, connectedAccounts.platform, connectedAccounts.externalAccountId],
-        set: { accountLabel: identity.label, status: "connected", deletedAt: null },
+        set: { accountLabel: identity.label, status: "connected", deletedAt: null, accessToken: encrypt(longLivedToken), tokenExpiresAt: accountTokenExpiresAt },
       })
       .returning();
 

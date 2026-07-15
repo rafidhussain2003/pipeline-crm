@@ -142,7 +142,7 @@ export async function storeMessage(params: {
         messageId: msg.id,
         filename: a.filename,
         contentType: a.contentType ?? null,
-        size: Math.floor((a.contentBase64.length * 3) / 4),
+        size: Buffer.from(a.contentBase64, "base64").length, // exact decoded byte count
         contentBase64: a.contentBase64,
       }))
     );

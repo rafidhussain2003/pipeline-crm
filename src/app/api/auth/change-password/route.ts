@@ -46,7 +46,9 @@ export async function POST(req: NextRequest) {
     }
 
     const newHash = await hashPassword(newPassword);
-    await db.update(users).set({ passwordHash: newHash, passwordChangedAt: new Date() }).where(eq(users.id, user.id));
+    // Phase 13: setting a real password clears the force-change flag — a
+    // temporary password can never become permanent.
+    await db.update(users).set({ passwordHash: newHash, passwordChangedAt: new Date(), mustChangePassword: false }).where(eq(users.id, user.id));
 
     // Force re-authentication everywhere else. The current tab's session
     // cookie is a stateless JWT and stays valid until it naturally expires

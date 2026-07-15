@@ -2,20 +2,27 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
-// Shared across every tab of the same origin: the chosen status (so all
-// tabs agree and don't fight) and a leader lease (so exactly one tab owns
-// the heartbeat interval instead of N tabs each sending — the "multiple
-// tabs" case the spec calls out).
+// Heartbeat cadence — configurable via NEXT_PUBLIC_PRESENCE_HEARTBEAT_MS so
+// the client and the server's presence config agree from one source.
+const HEARTBEAT_INTERVAL_MS = Number(process.env.NEXT_PUBLIC_PRESENCE_HEARTBEAT_MS) || 30_000;
+// Idle thresholds for the browser activity/lock heuristic (see
+// evaluateEffectiveStatus). Visible-but-idle downgrades to "away" after the
+// long threshold; a hidden tab (minimized, screen off, likely locked)
+// downgrades after the short one.
+const IDLE_AWAY_MS = Number(process.env.NEXT_PUBLIC_PRESENCE_IDLE_MS) || 5 * 60_000;
+const HIDDEN_AWAY_MS = 60_000;
+
+// Shared across every tab of the same origin: the chosen status (so all tabs
+// agree) and a leader lease (so exactly one tab owns the heartbeat interval).
 const STATUS_KEY = "ziplod_presence_status";
 const LEADER_KEY = "ziplod_presence_leader";
-const LEADER_TTL_MS = 12_000; // a leader lease older than this is stale (tab closed/crashed) and can be claimed
+const LEADER_TTL_MS = 12_000;
 const LEADER_RENEW_MS = 5_000;
 
-// Manually selectable states. Offline/locked/idle/disconnected/heartbeat-lost
-// are NOT here: offline is sent automatically on tab close, and the other
-// three are derived server-side from heartbeat staleness (a crashed or
-// locked machine can't self-report — the missing heartbeat is the signal).
+// Manually selectable states. Offline/locked/idle are NOT here: offline is
+// sent automatically on tab close, "away" is applied automatically by the
+// activity heuristic, and a crashed/locked machine can't self-report — the
+// missing heartbeat is the signal the server derives from.
 type Status = "online" | "busy" | "wrap_up" | "away" | "break" | "lunch";
 
 const STATUS_OPTIONS: { value: Status; label: string }[] = [
@@ -35,34 +42,59 @@ function readStatus(): Status {
   return v && (VALID as string[]).includes(v) ? (v as Status) : "online";
 }
 
+// --- Browser activity / lock heuristic ---
+//
+// The single, cleanly-abstracted place that turns raw browser signals (chosen
+// status, last activity time, tab visibility) into the status to report. A
+// future desktop agent replaces THIS function with real OS-level detection
+// (actual lock/unlock, session change) and nothing else changes.
+//
+// Only the default "online" is subject to automatic downgrade; any explicitly
+// chosen status (busy/away/break/lunch/wrap_up) is the user's intent and is
+// left untouched. A truly locked/asleep machine can't run this at all — its
+// heartbeats simply stop and the server derives AWAY -> OFFLINE from staleness.
+function evaluateEffectiveStatus(chosen: Status, lastActivityMs: number, now: number): Status {
+  if (chosen !== "online") return chosen;
+  const idleMs = now - lastActivityMs;
+  const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+  if (idleMs > IDLE_AWAY_MS) return "away";
+  if (hidden && idleMs > HIDDEN_AWAY_MS) return "away";
+  return "online";
+}
+
 // Mounted once inside Sidebar for any company member (not super_admin — they
-// don't take leads). One tab (the leader) heartbeats every 30s carrying the
-// shared status; every tab beats immediately on regaining focus/visibility/
-// network so a laptop waking from sleep, a reconnecting network, or an
-// unlocked machine is marked available again within a second instead of
-// waiting out the server-side timeout. On tab close it best-effort beacons
-// "offline"; if that never arrives (browser killed, power lost), the
-// server-side heartbeat timeout is what guarantees correctness.
+// don't take leads). One tab (the leader) heartbeats on the configured
+// interval carrying the effective status; every tab beats immediately on
+// regaining focus/visibility/network and on returning from idle, so a laptop
+// waking from sleep, a reconnecting network, or an unlocked machine is marked
+// available again within a second instead of waiting out the server timeout.
+// On tab close it best-effort beacons "offline".
 export default function PresenceHeartbeat() {
   const [status, setStatus] = useState<Status>("online");
   const statusRef = useRef<Status>("online");
+  const lastActivityRef = useRef<number>(Date.now());
+  const autoAwayRef = useRef<boolean>(false);
   const tabId = useRef<string>(Math.random().toString(36).slice(2) + Date.now().toString(36));
 
   useEffect(() => {
-    // Sync initial status from any tab that already picked one.
     const initial = readStatus();
     statusRef.current = initial;
     setStatus(initial);
 
-    const send = (currentStatus: Status) => {
+    // Send a beat carrying the EFFECTIVE status (chosen status folded through
+    // the activity/lock heuristic) plus timing signals for the server.
+    const beat = () => {
+      const now = Date.now();
+      const effective = evaluateEffectiveStatus(statusRef.current, lastActivityRef.current, now);
+      autoAwayRef.current = effective !== statusRef.current;
       fetch("/api/presence/heartbeat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: currentStatus }),
+        body: JSON.stringify({ status: effective, sentAt: now, activeAt: lastActivityRef.current }),
         keepalive: true,
       }).catch(() => {
         // A missed heartbeat is expected sometimes (flaky connection); the
-        // server-side timeout handles it and the next tick/focus retries.
+        // server-side staleness timeout handles it, the next tick/focus retries.
       });
     };
 
@@ -71,8 +103,7 @@ export default function PresenceHeartbeat() {
       try {
         const raw = window.localStorage.getItem(LEADER_KEY);
         if (!raw) return false;
-        const { id } = JSON.parse(raw) as { id: string; ts: number };
-        return id === tabId.current;
+        return (JSON.parse(raw) as { id: string }).id === tabId.current;
       } catch {
         return false;
       }
@@ -83,61 +114,69 @@ export default function PresenceHeartbeat() {
         const now = Date.now();
         if (raw) {
           const lease = JSON.parse(raw) as { id: string; ts: number };
-          // Someone else holds a fresh lease — leave it alone.
           if (lease.id !== tabId.current && now - lease.ts < LEADER_TTL_MS) return;
         }
         window.localStorage.setItem(LEADER_KEY, JSON.stringify({ id: tabId.current, ts: now }));
       } catch {
-        // localStorage unavailable (private mode edge cases) — every tab
-        // just heartbeats itself; harmless duplication, still correct.
+        // localStorage unavailable — every tab heartbeats itself; harmless.
       }
     };
 
     tryClaimLeadership();
-    send(statusRef.current); // one immediate beat on mount regardless of leadership
+    beat(); // one immediate beat on mount regardless of leadership
 
     const heartbeat = setInterval(() => {
       tryClaimLeadership();
       // Only the leader sends the periodic beat; if localStorage is blocked,
-      // isLeader() is false everywhere so every tab falls back to sending —
-      // still correct, just not deduped.
-      if (isLeader() || !window.localStorage.getItem(LEADER_KEY)) {
-        send(statusRef.current);
-      }
+      // isLeader() is false everywhere so every tab falls back to sending.
+      // Note: this interval firing late after the event loop was paused (the
+      // machine slept) is itself the wake signal — it beats on resume.
+      if (isLeader() || !window.localStorage.getItem(LEADER_KEY)) beat();
     }, HEARTBEAT_INTERVAL_MS);
 
-    // Renew the leader lease more often than the heartbeat so a dead leader
-    // is taken over within ~a lease TTL, not a full heartbeat interval.
-    const renew = setInterval(() => {
-      if (isLeader()) tryClaimLeadership();
-      else tryClaimLeadership(); // claims only if the current lease is stale
-    }, LEADER_RENEW_MS);
+    const renew = setInterval(() => tryClaimLeadership(), LEADER_RENEW_MS);
 
-    // --- Fast recovery: beat immediately when the tab regains the ability
-    // to reach the network (wake from sleep, unlock, tab refocus, reconnect) ---
-    const beatNow = () => send(statusRef.current);
+    // --- Activity detection: mouse, keyboard, scroll, touch ---
+    // Records real user activity; when returning from an auto-"away" idle,
+    // beats immediately so availability is restored without waiting a full
+    // interval. Updating a ref on every event is negligible; beat() only fires
+    // on the transition back from idle (autoAwayRef), so it can't spam.
+    const markActivity = () => {
+      lastActivityRef.current = Date.now();
+      if (autoAwayRef.current) beat();
+    };
+    const activityEvents: (keyof WindowEventMap)[] = ["mousemove", "mousedown", "keydown", "wheel", "touchstart"];
+    for (const ev of activityEvents) window.addEventListener(ev, markActivity, { passive: true });
+    window.addEventListener("scroll", markActivity, { passive: true, capture: true });
+
+    // --- Fast recovery: beat immediately when the tab regains the ability to
+    // reach the network (wake from sleep, unlock, refocus, reconnect) ---
     const onVisibility = () => {
-      if (document.visibilityState === "visible") beatNow();
+      if (document.visibilityState === "visible") {
+        lastActivityRef.current = Date.now();
+        beat();
+      } else {
+        // Became hidden — re-evaluate now so a minimized/locked tab downgrades
+        // promptly rather than only on the next interval.
+        beat();
+      }
     };
     const onStorage = (e: StorageEvent) => {
-      // Another tab changed the shared status — reflect it here so the
-      // dropdown stays consistent across tabs.
       if (e.key === STATUS_KEY && e.newValue && (VALID as string[]).includes(e.newValue)) {
         statusRef.current = e.newValue as Status;
         setStatus(e.newValue as Status);
       }
     };
-    window.addEventListener("focus", beatNow);
-    window.addEventListener("online", beatNow);
+    window.addEventListener("focus", beat);
+    window.addEventListener("online", beat);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("storage", onStorage);
 
-    // --- Tab closing: best-effort "offline" beacon. pagehide is more
-    // reliable than beforeunload (fires on mobile/bfcache); both are wired. ---
+    // --- Tab closing: best-effort "offline" beacon ---
     const sendOfflineBeacon = () => {
       navigator.sendBeacon?.(
         "/api/presence/heartbeat",
-        new Blob([JSON.stringify({ status: "offline" })], { type: "application/json" })
+        new Blob([JSON.stringify({ status: "offline", sentAt: Date.now() })], { type: "application/json" })
       );
     };
     window.addEventListener("pagehide", sendOfflineBeacon);
@@ -146,8 +185,10 @@ export default function PresenceHeartbeat() {
     return () => {
       clearInterval(heartbeat);
       clearInterval(renew);
-      window.removeEventListener("focus", beatNow);
-      window.removeEventListener("online", beatNow);
+      for (const ev of activityEvents) window.removeEventListener(ev, markActivity);
+      window.removeEventListener("scroll", markActivity, { capture: true } as EventListenerOptions);
+      window.removeEventListener("focus", beat);
+      window.removeEventListener("online", beat);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("pagehide", sendOfflineBeacon);
@@ -158,6 +199,8 @@ export default function PresenceHeartbeat() {
   function selectStatus(next: Status) {
     setStatus(next);
     statusRef.current = next;
+    lastActivityRef.current = Date.now(); // choosing a status is itself activity
+    autoAwayRef.current = false;
     try {
       window.localStorage.setItem(STATUS_KEY, next); // shared across tabs
     } catch {
@@ -166,7 +209,7 @@ export default function PresenceHeartbeat() {
     fetch("/api/presence/heartbeat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: next }),
+      body: JSON.stringify({ status: next, sentAt: Date.now(), activeAt: Date.now() }),
     }).catch(() => {});
   }
 

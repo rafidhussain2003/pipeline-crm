@@ -6,6 +6,7 @@ import { mapPayloadToLead, FieldMapping } from "@/lib/field-mapping";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 import { recordDeliveryLog } from "@/lib/delivery-log";
 import { ingestInboundLead } from "@/lib/lead-sources/ingest-inbound";
+import { getWebsiteConfig, isOriginAllowed, checkReplay } from "@/lib/website";
 
 // Public Website-Forms endpoint. Submitted straight from a visitor's browser
 // (the embed.js snippet's fetch, or a plain <form action="…"> POST), so —
@@ -100,7 +101,25 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
     return NextResponse.json({ error: "Unknown or inactive form" }, { status: 404, headers: CORS });
   }
 
+  // Phase 8 — Origin allow-list: if the connection configured allowed domains,
+  // the browser's Origin/Referer must match one (empty list = allow any, so
+  // existing connections are unaffected). Blocks submissions from a stolen key
+  // embedded on an unauthorized site.
+  const cfg = getWebsiteConfig(source);
+  if (!isOriginAllowed(req.headers.get("origin"), req.headers.get("referer"), cfg.allowedDomains)) {
+    await recordDeliveryLog({ sourceId: source.id, companyId: source.companyId, status: "failed", stage: "received", startedAt, error: "Origin not allowed" });
+    return NextResponse.json({ error: "This form is not permitted on this domain." }, { status: 403, headers: CORS });
+  }
+
   const { fields, isForm } = await readBody(req);
+
+  // Phase 8 — Replay protection: reject a re-fired (same nonce) or stale
+  // submission. Only engages when the SDK supplied a nonce + timestamp.
+  const rmeta = (fields._meta && typeof fields._meta === "object" ? fields._meta : {}) as { nonce?: string; ts?: number };
+  const replay = checkReplay(sourceId, typeof rmeta.nonce === "string" ? rmeta.nonce : null, typeof rmeta.ts === "number" ? rmeta.ts : null);
+  if (!replay.ok) {
+    return NextResponse.json({ error: "Duplicate or expired submission." }, { status: 409, headers: CORS });
+  }
   const redirectTo = typeof fields._redirect === "string" ? fields._redirect : null;
 
   const done = (ok: boolean) => {

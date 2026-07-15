@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCompanySession } from "@/lib/auth";
 import { checkPolicy } from "@/lib/rate-limit";
-import { recordHeartbeat, type PresenceStatus } from "@/lib/presence";
+import { presenceService, type PresenceStatus } from "@/lib/presence";
 import { kickCompanySweep } from "@/lib/assignment-queue";
 
 // The full set of client-reportable states. "offline" is included because
@@ -46,10 +46,22 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const status = VALID_STATUSES.includes(body.status) ? (body.status as PresenceStatus) : "online";
+  // Optional client signals: sentAt for one-way heartbeat latency, activeAt
+  // for last real user activity (monitoring only).
+  const sentAt = typeof body.sentAt === "number" ? body.sentAt : undefined;
+  const activeAt = typeof body.activeAt === "number" ? body.activeAt : undefined;
 
-  const { becameAvailable, companyId } = await recordHeartbeat(auth.session.userId, status);
-  if (becameAvailable && companyId) {
-    kickCompanySweep(companyId);
+  // The presence service is the single writer of agent presence.
+  const { becameAvailable, companyId } = await presenceService.heartbeat(auth.session.userId, { status, sentAt, activeAt });
+
+  if (companyId) {
+    // Piggyback a (throttled) reconcile so time-based transitions for this
+    // company's other agents are detected/emitted here — event-driven, no
+    // polling loop. Fire-and-forget; never blocks the heartbeat response.
+    void presenceService.reconcile(companyId).catch(() => {});
+    // When THIS beat brought the agent back to eligible, drain any leads that
+    // queued while everyone was away (manager-independence) — unchanged.
+    if (becameAvailable) kickCompanySweep(companyId);
   }
 
   return NextResponse.json({ ok: true, status });

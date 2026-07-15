@@ -72,36 +72,46 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ mail
   }
 
   // Folder view: one row per thread (its latest message in this folder), so a
-  // long conversation appears once. DISTINCT ON (thread) ordered by recency.
-  const rows = await db
-    .select({
-      id: emailMessages.id,
-      threadId: emailMessages.threadId,
-      folder: emailMessages.folder,
-      fromAddress: emailMessages.fromAddress,
-      toAddresses: emailMessages.toAddresses,
-      subject: emailMessages.subject,
-      snippet: emailMessages.snippet,
-      isRead: emailMessages.isRead,
-      isStarred: emailMessages.isStarred,
-      isDraft: emailMessages.isDraft,
-      direction: emailMessages.direction,
-      createdAt: emailMessages.createdAt,
-      threadLastAt: emailThreads.lastMessageAt,
-      msgCount: sql<number>`(select count(*)::int from ${emailMessages} m2 where m2.thread_id = ${emailMessages.threadId})`,
-    })
-    .from(emailMessages)
-    .innerJoin(emailThreads, eq(emailMessages.threadId, emailThreads.id))
-    .where(and(eq(emailMessages.mailboxId, mailboxId), eq(emailMessages.folder, folder)))
-    .orderBy(emailMessages.threadId, desc(emailMessages.createdAt));
+  // long conversation appears once. Paginated at the THREAD level so a page is
+  // a bounded, correct window (a thread never splits across pages) — the
+  // previous version fetched every message in the folder. `DISTINCT ON (thread)`
+  // picks each thread's latest message; the outer query orders by thread
+  // recency and applies limit/offset for lazy "load more".
+  const limit = Math.min(Math.max(Number(req.nextUrl.searchParams.get("limit")) || 50, 1), 100);
+  const offset = Math.max(Number(req.nextUrl.searchParams.get("offset")) || 0, 0);
 
-  // De-dupe to the latest message per thread in JS (portable, avoids a
-  // DISTINCT ON + ordering mismatch), then sort by thread recency.
-  const latestPerThread = new Map<string, (typeof rows)[number]>();
-  for (const r of rows) if (!latestPerThread.has(r.threadId)) latestPerThread.set(r.threadId, r);
-  const list = [...latestPerThread.values()].sort(
-    (a, b) => new Date(b.threadLastAt).getTime() - new Date(a.threadLastAt).getTime()
-  );
+  const res = await db.execute(sql`
+    SELECT sub.*, (SELECT count(*)::int FROM email_messages m2 WHERE m2.thread_id = sub.thread_id) AS msg_count
+    FROM (
+      SELECT DISTINCT ON (m.thread_id)
+        m.id, m.thread_id, m.folder, m.from_address, m.to_addresses, m.subject, m.snippet,
+        m.is_read, m.is_starred, m.is_draft, m.direction, m.created_at,
+        t.last_message_at AS thread_last_at
+      FROM email_messages m
+      JOIN email_threads t ON t.id = m.thread_id
+      WHERE m.mailbox_id = ${mailboxId} AND m.folder = ${folder}
+      ORDER BY m.thread_id, m.created_at DESC
+    ) sub
+    ORDER BY sub.thread_last_at DESC
+    LIMIT ${limit} OFFSET ${offset}
+  `);
+  const raw = (res as unknown as { rows: Record<string, unknown>[] }).rows ?? [];
+  const messages = raw.map((r) => ({
+    id: r.id,
+    threadId: r.thread_id,
+    folder: r.folder,
+    fromAddress: r.from_address,
+    toAddresses: r.to_addresses,
+    subject: r.subject,
+    snippet: r.snippet,
+    isRead: r.is_read,
+    isStarred: r.is_starred,
+    isDraft: r.is_draft,
+    direction: r.direction,
+    createdAt: r.created_at,
+    threadLastAt: r.thread_last_at,
+    msgCount: Number(r.msg_count),
+  }));
 
-  return NextResponse.json({ messages: list, mode: "folder" });
+  return NextResponse.json({ messages, mode: "folder", page: { limit, offset, hasMore: messages.length === limit } });
 }

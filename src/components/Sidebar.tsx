@@ -24,6 +24,15 @@ const SUPERVISOR_NAV_ITEM = { href: "/team", label: "Team" };
 // shared navItems list, which every role sees.
 const AGENTS_NAV_ITEM = { href: "/settings/agents", label: "Agents" };
 
+// Website Forms (Phase 8) exposes the site's public/secret keys, the embed
+// snippet, allowed domains, and the hosted-form builder — all admin-only, so
+// it's gated like Agents rather than shown in the shared navItems list.
+const WEBSITE_FORMS_NAV_ITEM = { href: "/settings/website-forms", label: "Website Forms" };
+
+// Meta Conversions API (Phase 11) — pixel selection, event mapping, delivery
+// log, diagnostics. Admin + manager only (agents cannot configure it).
+const CONVERSIONS_NAV_ITEM = { href: "/settings/conversions", label: "Conversions API" };
+
 export default function Sidebar({ companyName, role }: { companyName: string; role: string }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -41,6 +50,16 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
         <div className="text-xs text-slate-500 mt-0.5 truncate">{companyName}</div>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
+        {(role === "admin" || role === "manager") && (
+          <Link
+            href="/operations"
+            className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              pathname === "/operations" ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            }`}
+          >
+            Operations
+          </Link>
+        )}
         {role === "admin" && (
           <Link
             href={SUPERVISOR_NAV_ITEM.href}
@@ -59,6 +78,26 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
             }`}
           >
             {AGENTS_NAV_ITEM.label}
+          </Link>
+        )}
+        {role === "admin" && (
+          <Link
+            href={WEBSITE_FORMS_NAV_ITEM.href}
+            className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              pathname === WEBSITE_FORMS_NAV_ITEM.href ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            }`}
+          >
+            {WEBSITE_FORMS_NAV_ITEM.label}
+          </Link>
+        )}
+        {(role === "admin" || role === "manager") && (
+          <Link
+            href={CONVERSIONS_NAV_ITEM.href}
+            className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+              pathname === CONVERSIONS_NAV_ITEM.href ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+            }`}
+          >
+            {CONVERSIONS_NAV_ITEM.label}
           </Link>
         )}
         {navItems.map((item) => {
@@ -92,6 +131,14 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
               }`}
             >
               Mailbox
+            </Link>
+            <Link
+              href="/super-admin/diagnostics"
+              className={`block px-3 py-2 rounded-md text-sm font-medium ${
+                pathname.startsWith("/super-admin/diagnostics") ? "bg-purple-50 text-purple-700" : "text-purple-700 hover:bg-purple-50"
+              }`}
+            >
+              Diagnostics
             </Link>
           </>
         )}

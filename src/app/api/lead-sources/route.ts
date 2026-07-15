@@ -77,11 +77,12 @@ export async function POST(req: NextRequest) {
   }
 
   const isWebsite = platform === "website";
-  // Website forms are submitted from the visitor's browser and can't carry a
-  // secret — they're protected by the public endpoint's honeypot + rate
-  // limits + optional CAPTCHA instead, so no webhookSecret is issued for
-  // them (see api/forms/[sourceId]). The generic webhook still gets one.
-  const webhookSecret = isWebsite ? null : crypto.randomBytes(24).toString("hex");
+  // Every connection gets a secret key. A website form's BROWSER submissions
+  // (embed SDK → /api/forms/[id]) can't carry a secret and are protected by
+  // honeypot + rate limits + optional CAPTCHA + origin allow-list + replay
+  // guard instead; the secret exists for the OPTIONAL server-to-server post to
+  // the generic webhook and so an admin can rotate it (see lib/website).
+  const webhookSecret = (isWebsite ? "wsk_" : "") + crypto.randomBytes(24).toString("hex");
   const defaultName = isWebsite ? "Website Form" : platform === "google" ? "Google Lead Form" : "Generic Webhook";
   const [source] = await db
     .insert(leadSources)

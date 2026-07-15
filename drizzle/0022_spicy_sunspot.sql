@@ -1,0 +1,2 @@
+CREATE INDEX "leads_company_created_idx" ON "leads" USING btree ("company_id","created_at");--> statement-breakpoint
+CREATE INDEX "webhook_logs_company_created_idx" ON "webhook_logs" USING btree ("company_id","created_at");

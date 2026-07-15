@@ -5,6 +5,9 @@ import { getSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import { and, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { transitionLifecycle } from "@/lib/lifecycle/service";
+import { dispositionToLifecycle } from "@/lib/lifecycle/stages";
+import { eventBus } from "@/lib/events/bus";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
@@ -50,6 +53,28 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       entityId: id,
       metadata: { from: before.disposition, to: body.disposition },
     });
+    // Phase 11: signal the disposition change so the Conversions API can send
+    // the mapped Meta event. Fire-and-forget — the CAPI listener only enqueues
+    // (never blocks this request), and it never sends synchronously.
+    await eventBus.emit("lead.disposition_changed", { leadId: id, companyId: session.companyId, from: before.disposition, to: String(body.disposition) });
+    // Phase 4: an agent changing the disposition advances the lifecycle
+    // (contacted / won / lost). Guarded so it never regresses a further-along
+    // stage. Best-effort — a lifecycle write must never fail the edit.
+    const nextStage = dispositionToLifecycle(body.disposition);
+    if (nextStage) {
+      try {
+        await transitionLifecycle({
+          leadId: id,
+          companyId: session.companyId,
+          toStage: nextStage,
+          reason: `disposition:${body.disposition}`,
+          actorUserId: session.userId,
+          onlyFrom: nextStage === "contacted" ? ["new", "queued", "assigned"] : undefined,
+        });
+      } catch (err) {
+        console.error("lifecycle transition failed for lead", id, err);
+      }
+    }
   }
   if ("ownerId" in body && body.ownerId !== before.ownerId) {
     // Any path that changes ownerId must also log to assignment_log — the

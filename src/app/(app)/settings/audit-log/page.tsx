@@ -29,6 +29,7 @@ const ACTION_LABELS: Record<string, string> = {
   "lead.attachment_added": "added an attachment",
   "lead.auto_recycled": "auto-recycled a lead",
   "lead.force_recycled": "force-recycled a lead",
+  "lead.rebalanced": "rebalanced a lead to another agent",
   "leads.imported": "imported leads",
   "agent.added": "added an agent",
   "agent.updated": "updated an agent",

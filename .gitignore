@@ -4,3 +4,9 @@ node_modules
 .env.local
 *.log
 *.tsbuildinfo
+
+# Local dev-tool config (Claude Code launch config) — not part of the product
+.claude/
+
+# Local database backup output (scripts/backup.mjs)
+backups/

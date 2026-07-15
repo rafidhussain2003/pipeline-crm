@@ -4,6 +4,7 @@ import { mailboxes, emailMessages, emailLabels } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { requireSuperAdmin } from "@/lib/auth";
 import { isMailboxSendConfigured } from "@/lib/mailbox/resend";
+import { ensureDefaultMailboxes } from "@/lib/mailbox/accounts";
 
 // Bootstrap payload for the mailbox UI: the operated addresses, the labels,
 // per-mailbox unread counts, and whether sending is configured yet (so the
@@ -11,6 +12,10 @@ import { isMailboxSendConfigured } from "@/lib/mailbox/resend";
 export async function GET() {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return auth.response;
+
+  // Guarantee the operated addresses exist (idempotent) so the mailbox works
+  // on a fresh deploy without a manual insert.
+  await ensureDefaultMailboxes();
 
   const boxes = await db.select().from(mailboxes).orderBy(mailboxes.address);
 

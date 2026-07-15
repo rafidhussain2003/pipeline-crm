@@ -1,16 +1,22 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { db } from "@/db";
-import { companies } from "@/db/schema";
+import { companies, users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import Sidebar from "@/components/Sidebar";
 import BillingBanner from "@/components/billing/BillingBanner";
 import BillingBlockScreen from "@/components/billing/BillingBlockScreen";
+import ForcePasswordChange from "@/components/auth/ForcePasswordChange";
 import { billingBlockReason, daysRemaining, isBillingBlocked } from "@/lib/billing";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect("/login");
+
+  // Phase 13: an invited user with a temporary password must create their own
+  // before doing anything else — a hard gate that blocks the whole app.
+  const [me] = await db.select({ mustChange: users.mustChangePassword }).from(users).where(eq(users.id, session.userId)).limit(1);
+  if (me?.mustChange) return <ForcePasswordChange />;
 
   let companyName = "Super Admin";
   let billing: { subscriptionStatus: "trial" | "active" | "past_due" | "cancelled"; daysRemaining: number } | null =

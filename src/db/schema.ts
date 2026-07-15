@@ -10,6 +10,7 @@ import {
   pgEnum,
   index,
   uniqueIndex,
+  real,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -21,7 +22,11 @@ import { relations, sql } from "drizzle-orm";
 // "admin" here — it's shown in the Agents UI as a computed label (the
 // earliest-created admin per company), not a stored role.
 export const roleEnum = pgEnum("role", ["super_admin", "admin", "manager", "agent"]);
-export const tierEnum = pgEnum("tier", ["1", "2", "3"]);
+// Tiers are a configurable priority band, not hardcoded logic — the ORDER/
+// weight of each tier comes from assignment_rules + the AI tier factor's
+// config, never from the enum values themselves. "senior"/"supervisor" (Phase
+// 5) are additive; give them a weight in config to prioritize them.
+export const tierEnum = pgEnum("tier", ["1", "2", "3", "senior", "supervisor"]);
 export const companyStatusEnum = pgEnum("company_status", [
   "pending", // signed up, awaiting super-admin activation (manual billing phase)
   "active",
@@ -160,6 +165,20 @@ export const companies = pgTable(
     currentPeriodEnd: timestamp("current_period_end"),
     stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
     stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
+    // Phase 13 seat-based billing: how many seats the admin purchased. Billing
+    // charges seats × the plan's per-agent price; usage is the count of ACTIVE
+    // agents (suspended agents don't consume a seat). `plan` (varchar above)
+    // now holds basic|professional|premium (legacy values map to basic).
+    seats: integer("seats").notNull().default(1),
+    // Phase 13: first-run setup wizard completion (company profile → invite →
+    // Meta → import → dashboard). Nulls/false show the wizard on next login.
+    onboardingCompleted: boolean("onboarding_completed").notNull().default(false),
+    // Phase 13 company settings (localization + business hours as minutes since
+    // midnight in the company timezone). Language is future-ready (en today).
+    dateFormat: varchar("date_format", { length: 20 }).notNull().default("MM/DD/YYYY"),
+    language: varchar("language", { length: 10 }).notNull().default("en"),
+    businessHoursStart: integer("business_hours_start"),
+    businessHoursEnd: integer("business_hours_end"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
     deletedAt: timestamp("deleted_at"), // soft delete
@@ -235,6 +254,16 @@ export const users = pgTable(
     // recent "auth.login" row for this user), which already records this
     // reliably with no new field needed.
     passwordChangedAt: timestamp("password_changed_at"),
+    // Phase 13: an invited agent gets a temporary password + this flag set, and
+    // is forced to create their own password on first login (temp passwords can
+    // never become permanent). Cleared the moment they set a real password.
+    mustChangePassword: boolean("must_change_password").notNull().default(false),
+    // Phase 5 per-agent routing profile: capacity limits (max active leads,
+    // daily assignments, concurrent conversations, queue size, recycled) and a
+    // working schedule (days, start/end, timezone, lunch, vacation ranges).
+    // Null = company defaults (see src/lib/assignment/ai/agent-profile.ts). A
+    // jsonb blob so new limits/schedule fields never need a migration.
+    routingConfig: jsonb("routing_config"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     deletedAt: timestamp("deleted_at"), // soft delete
   },
@@ -330,6 +359,14 @@ export const connectedAccounts = pgTable(
     // display name.
     accountLabel: varchar("account_label", { length: 255 }),
     status: connectedAccountStatusEnum("status").notNull().default("connected"),
+    // Phase 11 (Conversions API): the long-lived USER access token from this
+    // OAuth grant, encrypted (AES-256-GCM, see lib/crypto). Lead Ads uses
+    // per-page tokens; CAPI needs a token that can read the account's
+    // businesses/ad accounts/pixels and POST events — the same grant covers
+    // both once ads scopes are granted. Reused, never a second Meta login.
+    // Null for accounts connected before Phase 11 (reconnect to populate).
+    accessToken: text("access_token"),
+    tokenExpiresAt: timestamp("token_expires_at"),
     // Escape hatch for whatever a future provider needs that doesn't
     // justify its own column (a Google Ads manager-account hierarchy id, a
     // LinkedIn organization URN, a GoHighLevel location id, ...) — added
@@ -413,6 +450,38 @@ export const leadSources = pgTable(
   (t) => ({
     companyIdx: index("lead_sources_company_idx").on(t.companyId),
     accountIdx: index("lead_sources_account_idx").on(t.accountId),
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Hosted forms (Phase 8 form builder) — simple forms built inside Ziplod and
+// embedded anywhere. Each belongs to a company's Website connection
+// (leadSources row, platform "website"); a submission goes through the exact
+// same ingestInboundLead pipeline as an embedded site form, so nothing about
+// queue/AI/lifecycle/delivery-log is duplicated. `fields` is a small jsonb
+// schema ([{ type, name, label, required, options? }]) — deliberately simple
+// (text/email/phone/textarea/dropdown/checkbox), no landing-page builder.
+// ---------------------------------------------------------------------------
+export const hostedForms = pgTable(
+  "hosted_forms",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    // The Website connection this form submits through (its id is the public key).
+    sourceId: uuid("source_id").references(() => leadSources.id, { onDelete: "cascade" }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    fields: jsonb("fields").notNull(), // FormField[]
+    submitText: varchar("submit_text", { length: 100 }).notNull().default("Submit"),
+    successMessage: text("success_message"),
+    redirectUrl: text("redirect_url"),
+    active: boolean("active").notNull().default(true),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (t) => ({
+    companyIdx: index("hosted_forms_company_idx").on(t.companyId),
+    sourceIdx: index("hosted_forms_source_idx").on(t.sourceId),
   })
 );
 
@@ -565,6 +634,11 @@ export const webhookLogs = pgTable(
   (t) => ({
     sourceIdx: index("webhook_logs_source_idx").on(t.sourceId),
     companyIdx: index("webhook_logs_company_idx").on(t.companyId),
+    // Phase 10: the Delivery Log page (WHERE company_id = ? ORDER BY created_at
+    // DESC LIMIT 200) previously used the company-only index and then sorted.
+    // This composite serves the ordered pagination directly — matters once a
+    // busy tenant has hundreds of thousands of delivery rows.
+    companyCreatedIdx: index("webhook_logs_company_created_idx").on(t.companyId, t.createdAt),
   })
 );
 
@@ -618,6 +692,22 @@ export const leadTags = pgTable(
 // ---------------------------------------------------------------------------
 // Leads
 // ---------------------------------------------------------------------------
+// Formal lead LIFECYCLE (Phase 4) — a fixed, engine-owned progression,
+// distinct from the company-configurable `disposition`. Every transition is
+// timestamped in lead_lifecycle_events; the current stage is denormalized onto
+// leads.lifecycle_stage for cheap filtering (recycling/rebalancing).
+export const lifecycleStageEnum = pgEnum("lifecycle_stage", [
+  "new",
+  "queued",
+  "assigned",
+  "contacted",
+  "in_progress",
+  "follow_up",
+  "won",
+  "lost",
+  "closed",
+]);
+
 export const leads = pgTable(
   "leads",
   {
@@ -645,6 +735,11 @@ export const leads = pgTable(
     disposition: varchar("disposition", { length: 100 }).notNull().default("New Lead"),
     ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
     requiredSkillId: uuid("required_skill_id").references(() => skills.id, { onDelete: "set null" }),
+    // Phase 5 multi-skill requirements: { required: skillId[], preferred:
+    // skillId[], priority: skillId[] }. The skill-matching factor grades an
+    // agent perfect/preferred/partial/fallback against these. Backward
+    // compatible: requiredSkillId (single) is still honored when this is null.
+    skillRequirements: jsonb("skill_requirements"),
     followUpAt: timestamp("follow_up_at"),
     rawPayload: jsonb("raw_payload"),
     isDuplicate: boolean("is_duplicate").notNull().default(false),
@@ -656,6 +751,13 @@ export const leads = pgTable(
     // still applies. Plain varchar rather than a pgEnum: this is a routing
     // hint, not a fixed taxonomy a migration should have to grow later.
     priority: varchar("priority", { length: 20 }).notNull().default("normal"),
+    // Phase 4 lifecycle: the current stage (see lifecycleStageEnum) and when
+    // the lead was last assigned to an agent (drives the SLA-based recycling —
+    // "assigned but never contacted within N minutes"). assignedAt is set by
+    // the assignment pipeline; lifecycleStage only ever changes through the
+    // lifecycle service (nothing sets it silently).
+    lifecycleStage: lifecycleStageEnum("lifecycle_stage").notNull().default("new"),
+    assignedAt: timestamp("assigned_at"),
     // Blacklisted leads are skipped entirely by auto-assignment (see
     // assignLead()) — e.g. a DNC request or a lead a company never wants
     // routed automatically. A supervisor/admin can still assign manually.
@@ -675,6 +777,15 @@ export const leads = pgTable(
     // (assignment.ts) and the "last active lead" query
     // (/api/supervisor/agents) actually filter by.
     companyOwnerIdx: index("leads_company_owner_idx").on(t.companyId, t.ownerId),
+    // Phase 10: the leads-list query (WHERE company_id = ? [AND deleted_at IS
+    // NULL] ORDER BY created_at DESC LIMIT/OFFSET) is the single most-hit read
+    // in the app. Without this composite, Postgres had to sort a company's
+    // whole lead set on every page load (or scan the global created_at index
+    // across all tenants). (company_id, created_at) makes it an ordered
+    // index scan — the key scalability index for 100k+ leads/day per tenant.
+    // Applied CONCURRENTLY (see the Phase 10 index migration) so it never
+    // locked the live leads table.
+    companyCreatedIdx: index("leads_company_created_idx").on(t.companyId, t.createdAt),
     // Added for the Lead Delivery Health panel's per-source aggregates
     // (total/today/week/month lead counts) — nothing queried `leads` by
     // sourceId before this, so there was no covering index.
@@ -841,6 +952,15 @@ export const automationSettings = pgTable("automation_settings", {
   // manual/supervisor reassignments don't touch it (see the Phase 10
   // report for why that's a considered choice, not an oversight).
   assignmentCursor: integer("assignment_cursor").notNull().default(0),
+  // Per-company AI scoring configuration (Phase 3). Null = use the built-in
+  // defaults (see src/lib/assignment/ai/config.ts). A jsonb blob rather than a
+  // column-per-knob so new factors/weights/thresholds never require a
+  // migration — "no hardcoded business logic, everything configurable."
+  aiConfig: jsonb("ai_config"),
+  // Phase 4 queue/lifecycle tunables (reservation timeout, retry limit,
+  // recycle SLA/untouched/offline thresholds, rebalance thresholds, priority
+  // weights). Null = built-in defaults (see src/lib/lifecycle/config.ts).
+  queueConfig: jsonb("queue_config"),
 });
 
 // ---------------------------------------------------------------------------
@@ -871,6 +991,246 @@ export const assignmentLog = pgTable(
   (t) => ({
     leadIdx: index("assignment_log_lead_idx").on(t.leadId),
     assignedToIdx: index("assignment_log_assigned_to_idx").on(t.assignedTo),
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Assignment Engine (Phase 1 foundation) — a durable work queue + a
+// permanent decision store, both feeding the single AssignmentEngine
+// service in src/lib/assignment/. These are ADDITIVE: nothing that existed
+// before reads or writes them, so they cannot change existing behavior.
+// See src/lib/assignment/README-ish comments for how each column is used.
+// ---------------------------------------------------------------------------
+
+// Lifecycle of one queued assignment job. `failed` is a transient state
+// (will be retried after a backoff); `dead_letter` is terminal for the JOB
+// only — the underlying lead is never lost (it keeps ownerId=NULL and the
+// reactive owner-NULL sweep in assignment-queue.ts remains its ultimate
+// backstop), this just stops the job from being retried forever.
+export const assignmentJobStatusEnum = pgEnum("assignment_job_status", [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+  "dead_letter",
+]);
+
+// The outcome recorded for every assignment DECISION in assignment_history.
+export const assignmentOutcomeEnum = pgEnum("assignment_outcome", [
+  "assigned",
+  "no_eligible_agent",
+  "claim_lost",
+  "skipped",
+  "error",
+]);
+
+// ---------------------------------------------------------------------------
+// Assignment jobs — the durable internal queue. A lead that needs assigning
+// is represented here as a row; workers reserve due rows with FOR UPDATE
+// SKIP LOCKED (so multiple future worker processes / app instances can drain
+// it concurrently with zero double-processing), run it through the engine
+// pipeline, and either complete it or reschedule it with exponential backoff.
+// This is the seam a Redis/BullMQ backend slots behind later — the queue
+// INTERFACE (src/lib/assignment/job-queue.ts) does not change when it does.
+// ---------------------------------------------------------------------------
+export const assignmentJobs = pgTable(
+  "assignment_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }).notNull(),
+    status: assignmentJobStatusEnum("status").notNull().default("pending"),
+    // How many times this job has been attempted, and the ceiling after
+    // which it is dead-lettered instead of retried forever.
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(10),
+    // When this job becomes eligible to (re)process — now for a fresh job,
+    // a point in the future after a failed attempt (exponential backoff).
+    availableAt: timestamp("available_at").notNull().defaultNow(),
+    // Worker coordination — which worker reserved this row and when, purely
+    // for observability / stuck-job detection (SKIP LOCKED does the real
+    // mutual exclusion).
+    lockedAt: timestamp("locked_at"),
+    lockedBy: varchar("locked_by", { length: 100 }),
+    // Assignment parameters carried from the original request so a retry
+    // reproduces the same decision inputs (skill requirement, agent to avoid
+    // on a reassignment, and where the work originated).
+    requiredSkillId: uuid("required_skill_id"),
+    excludeAgentId: uuid("exclude_agent_id"),
+    source: varchar("source", { length: 20 }).notNull().default("arrival"),
+    // Phase 4 queue priority — higher is drained first (fresh Facebook lead,
+    // VIP, expired follow-up, manual override, ...). Computed by
+    // lifecycle/priority.ts at enqueue time; 0 = normal.
+    priority: integer("priority").notNull().default(0),
+    // Phase 5 SLA: the time-to-assign deadline for this lead (from the SLA
+    // config for its class). Used to escalate overdue queued leads and to
+    // measure SLA compliance. Null = no SLA target.
+    slaDeadline: timestamp("sla_deadline"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // The worker's hot path: due rows first. SKIP LOCKED handles concurrency.
+    dueIdx: index("assignment_jobs_due_idx").on(t.status, t.availableAt),
+    // Priority-aware draining: due rows, highest priority first, then oldest.
+    priorityDueIdx: index("assignment_jobs_priority_due_idx").on(t.status, t.priority, t.availableAt),
+    companyIdx: index("assignment_jobs_company_idx").on(t.companyId),
+    // At most one LIVE job per lead — makes enqueue idempotent (a second
+    // enqueue for a lead already queued is a no-op via ON CONFLICT DO
+    // NOTHING). Partial: completed/dead_letter rows don't block a fresh job.
+    leadActiveUniq: uniqueIndex("assignment_jobs_lead_active_uniq")
+      .on(t.leadId)
+      .where(sql`status in ('pending','processing','failed')`),
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Assignment history — the permanent, append-only record of every
+// assignment DECISION (not every retry). Richer than assignment_log (which
+// stays for backward compatibility): it captures the candidate pool the
+// decision was made from, the strategy used, processing time, attempt
+// number and failure reason — the raw material future AI/analytics phases
+// learn from. Never read by existing code; purely additive.
+// ---------------------------------------------------------------------------
+export const assignmentHistory = pgTable(
+  "assignment_history",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }).notNull(),
+    assignedTo: uuid("assigned_to").references(() => users.id, { onDelete: "set null" }),
+    outcome: assignmentOutcomeEnum("outcome").notNull(),
+    strategyUsed: varchar("strategy_used", { length: 50 }),
+    // The eligible agent ids the decision chose among (jsonb array), plus its
+    // size denormalized for cheap aggregation without unpacking the array.
+    candidateIds: jsonb("candidate_ids"),
+    candidateCount: integer("candidate_count").notNull().default(0),
+    presenceStatus: varchar("presence_status", { length: 20 }),
+    processingTimeMs: integer("processing_time_ms"),
+    attempt: integer("attempt").notNull().default(1),
+    source: varchar("source", { length: 20 }),
+    failureReason: text("failure_reason"),
+    // AI decision audit (Phase 3), null for non-AI strategies. finalScore is
+    // the chosen agent's composite AI score; decisionDetail is the full
+    // explainability + training-data blob: per-factor scores for the winner,
+    // the scored/rejected candidates and why, and the decision duration.
+    finalScore: real("final_score"),
+    decisionDetail: jsonb("decision_detail"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyCreatedIdx: index("assignment_history_company_created_idx").on(t.companyId, t.createdAt),
+    leadIdx: index("assignment_history_lead_idx").on(t.leadId),
+    assignedToIdx: index("assignment_history_assigned_to_idx").on(t.assignedTo),
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Lead lifecycle events (Phase 4) — the timestamped, append-only audit of
+// every lifecycle transition. "Nothing should silently change state": the
+// lifecycle service writes exactly one row here per transition and updates
+// leads.lifecycle_stage in the same step. Feeds the self-optimization metrics
+// (queue wait, recycle time, abandonment).
+// ---------------------------------------------------------------------------
+export const leadLifecycleEvents = pgTable(
+  "lead_lifecycle_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }).notNull(),
+    fromStage: varchar("from_stage", { length: 20 }), // null for the very first (creation)
+    toStage: lifecycleStageEnum("to_stage").notNull(),
+    // Why the transition happened: "assigned", "recycled:sla_exceeded",
+    // "recycled:agent_offline", "rebalanced", "disposition:Won", etc.
+    reason: varchar("reason", { length: 100 }),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    leadIdx: index("lead_lifecycle_events_lead_idx").on(t.leadId),
+    companyCreatedIdx: index("lead_lifecycle_events_company_created_idx").on(t.companyId, t.createdAt),
+    toStageIdx: index("lead_lifecycle_events_to_stage_idx").on(t.companyId, t.toStage),
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Lead Insights (Phase 9) — a per-lead CACHE of the deterministic, explainable
+// AI insight (score + label + summary + next-best-action + follow-up timing +
+// "why" explanation). One row per lead. It is NOT a source of truth: every
+// field is recomputed from existing CRM data by src/lib/insights, so this row
+// can be dropped and rebuilt at any time. It exists purely so the Lead Details
+// card reads O(1) instead of recomputing on every view, and so the recompute
+// can run asynchronously off the assignment/API path (never blocking either).
+// ---------------------------------------------------------------------------
+export const leadInsights = pgTable(
+  "lead_insights",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }).notNull().unique(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    score: integer("score").notNull(), // 0-100
+    // "Hot" | "Warm" | "Cold" (+ occasionally "Very High Potential") — the
+    // human-facing headline label; `temperature` is the coarse bucket used for
+    // coloring so the UI never string-matches the label.
+    scoreLabel: varchar("score_label", { length: 40 }).notNull(),
+    temperature: varchar("temperature", { length: 10 }).notNull(), // hot | warm | cold
+    // Non-exclusive descriptors: ["Returning Customer","High Value",...].
+    tags: jsonb("tags").notNull().default(sql`'[]'::jsonb`),
+    summary: text("summary").notNull(),
+    // The next-best-action: a stable key + a human label + the reasoning. These
+    // are RECOMMENDATIONS only — nothing acts on them automatically.
+    recommendation: varchar("recommendation", { length: 40 }).notNull(),
+    recommendationLabel: varchar("recommendation_label", { length: 60 }).notNull(),
+    recommendationReason: text("recommendation_reason").notNull(),
+    // Recommended follow-up moment + its human label ("Call within 5 minutes",
+    // "Reminder overdue", ...). followUpAt is null when no follow-up applies
+    // (already won / archived).
+    followUpAt: timestamp("follow_up_at"),
+    followUpLabel: varchar("follow_up_label", { length: 60 }).notNull(),
+    // The "why": an ordered array of short plain-language reason strings, plus
+    // the full ScoreFactor[] breakdown for the expandable detail.
+    explanation: jsonb("explanation").notNull().default(sql`'[]'::jsonb`),
+    factors: jsonb("factors").notNull().default(sql`'[]'::jsonb`),
+    version: integer("version").notNull().default(1), // engine version, for future re-computes
+    computedAt: timestamp("computed_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyIdx: index("lead_insights_company_idx").on(t.companyId),
+    temperatureIdx: index("lead_insights_temperature_idx").on(t.companyId, t.temperature),
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Agent overrides (Phase 5) — temporary, AUTO-EXPIRING manual controls a
+// supervisor can apply to routing. Expiry is enforced at read time (queries
+// filter expiresAt > now), so no cron is needed to clean them up.
+//   pause          — skip this agent for assignment
+//   lock           — same as pause but "hard" (kill-switch semantics)
+//   reserve        — route ONLY to this agent (company-wide reservation)
+//   force          — force the next assignment(s) to this agent
+//   capacity_boost — temporarily raise this agent's max-active-leads (value.boost)
+// ---------------------------------------------------------------------------
+export const agentOverrideTypeEnum = pgEnum("agent_override_type", ["pause", "lock", "reserve", "force", "capacity_boost"]);
+
+export const agentOverrides = pgTable(
+  "agent_overrides",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    // Null for a company-wide override (none today use it, but reserve/force
+    // are naturally agent-scoped; kept nullable for future company-wide rules).
+    agentId: uuid("agent_id").references(() => users.id, { onDelete: "cascade" }),
+    type: agentOverrideTypeEnum("type").notNull(),
+    value: jsonb("value"), // e.g. { boost: 10 } for capacity_boost
+    expiresAt: timestamp("expires_at").notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyActiveIdx: index("agent_overrides_company_active_idx").on(t.companyId, t.expiresAt),
+    agentIdx: index("agent_overrides_agent_idx").on(t.agentId),
   })
 );
 
@@ -1303,3 +1663,151 @@ export const emailMessageLabelsRelations = relations(emailMessageLabels, ({ one 
 export const emailAttachmentsRelations = relations(emailAttachments, ({ one }) => ({
   message: one(emailMessages, { fields: [emailAttachments.messageId], references: [emailMessages.id] }),
 }));
+
+// ===========================================================================
+// Phase 11 — Meta Conversions API (CAPI)
+// Sends CRM conversion events back to Meta to improve Event Match Quality,
+// attribution and campaign optimization. Built ON TOP of the existing Meta
+// OAuth (connectedAccounts) — no second login. Fully isolated: nothing here
+// changes Lead Ads, the Assignment Engine, Website Forms, or AI.
+// ===========================================================================
+
+export const capiEventStatusEnum = pgEnum("capi_event_status", ["pending", "processing", "sent", "failed", "dead_letter"]);
+
+// A selected Pixel/Dataset a company sends conversions to. One company can
+// connect several (multiple Meta accounts / ad accounts / pixels).
+export const capiPixels = pgTable(
+  "capi_pixels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    // The reused Meta OAuth identity this pixel was discovered through.
+    accountId: uuid("account_id").references(() => connectedAccounts.id, { onDelete: "set null" }),
+    businessId: varchar("business_id", { length: 255 }),
+    businessName: varchar("business_name", { length: 255 }),
+    adAccountId: varchar("ad_account_id", { length: 255 }),
+    adAccountName: varchar("ad_account_name", { length: 255 }),
+    // The pixel (a.k.a. dataset) events are POSTed to: /{pixelId}/events.
+    pixelId: varchar("pixel_id", { length: 255 }).notNull(),
+    pixelName: varchar("pixel_name", { length: 255 }),
+    datasetId: varchar("dataset_id", { length: 255 }),
+    // The access token used to POST events, encrypted (AES-256-GCM). Defaults
+    // to the connected account's user token; an admin may override with a
+    // system-user token. NEVER stored or logged in plaintext.
+    accessToken: text("access_token"),
+    // Optional Events Manager "Test Events" code — routes events to the test
+    // view instead of production, for verifying the connection.
+    testEventCode: varchar("test_event_code", { length: 100 }),
+    active: boolean("active").notNull().default(true),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (t) => ({
+    companyIdx: index("capi_pixels_company_idx").on(t.companyId),
+    // One live config per (company, pixel).
+    liveUniq: uniqueIndex("capi_pixels_company_pixel_uniq").on(t.companyId, t.pixelId).where(sql`deleted_at is null`),
+  })
+);
+
+// CRM trigger -> Meta event mapping, per pixel. `trigger` is a disposition
+// label, a lifecycle stage, or a system trigger ("lead_created"/"lead_assigned").
+// metaEvent null = "No Event" (explicitly do not send). Fully configurable.
+export const capiEventMappings = pgTable(
+  "capi_event_mappings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    pixelId: uuid("pixel_id").references(() => capiPixels.id, { onDelete: "cascade" }).notNull(),
+    trigger: varchar("trigger", { length: 120 }).notNull(),
+    metaEvent: varchar("meta_event", { length: 120 }), // null = No Event
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    pixelTriggerUniq: uniqueIndex("capi_mappings_pixel_trigger_uniq").on(t.pixelId, t.trigger),
+    companyIdx: index("capi_mappings_company_idx").on(t.companyId),
+  })
+);
+
+// The durable event store: simultaneously the send QUEUE (status/attempts/
+// availableAt worked by a SKIP LOCKED worker) AND the Conversions Delivery Log
+// (every row kept with response/latency/retry count). payload holds ONLY hashed
+// user_data + non-PII custom_data — never raw PII.
+export const capiEvents = pgTable(
+  "capi_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    pixelConfigId: uuid("pixel_config_id").references(() => capiPixels.id, { onDelete: "cascade" }).notNull(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    eventName: varchar("event_name", { length: 120 }).notNull(),
+    // Deterministic dedup key sent to Meta as `event_id` AND enforced by the
+    // partial unique index below — resending the same conversion (live or
+    // historical) is deduplicated on both ends.
+    eventId: varchar("event_id", { length: 200 }).notNull(),
+    eventTime: timestamp("event_time").notNull(),
+    actionSource: varchar("action_source", { length: 40 }).notNull().default("system_generated"),
+    trigger: varchar("trigger", { length: 120 }),
+    origin: varchar("origin", { length: 20 }).notNull().default("live"), // live | historical
+    status: capiEventStatusEnum("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(8),
+    availableAt: timestamp("available_at").notNull().defaultNow(),
+    lockedAt: timestamp("locked_at"),
+    lockedBy: varchar("locked_by", { length: 100 }),
+    payload: jsonb("payload"), // hashed user_data + custom_data (no raw PII)
+    matchKeys: jsonb("match_keys"), // which match params were present (for EMQ)
+    eventMatchQuality: varchar("event_match_quality", { length: 20 }), // excellent|good|fair|poor
+    httpStatus: integer("http_status"),
+    metaResponse: jsonb("meta_response"),
+    latencyMs: integer("latency_ms"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // Worker hot path: due rows first (SKIP LOCKED handles concurrency).
+    dueIdx: index("capi_events_due_idx").on(t.status, t.availableAt),
+    // Delivery Log pagination (WHERE company_id ORDER BY created_at DESC).
+    companyCreatedIdx: index("capi_events_company_created_idx").on(t.companyId, t.createdAt),
+    leadIdx: index("capi_events_lead_idx").on(t.leadId),
+    // Absolute dedup: at most one row per (pixel, event_id).
+    dedupUniq: uniqueIndex("capi_events_pixel_event_uniq").on(t.pixelConfigId, t.eventId),
+  })
+);
+
+// ===========================================================================
+// Phase 13 — Email verification codes (signup + password reset)
+// A short-lived 6-digit code emailed to the user. Stored hashed (never in
+// plaintext). One active row per (email, purpose) is used; expiry, attempt,
+// and resend limits are enforced in src/lib/auth/verification.ts.
+// ===========================================================================
+export const verificationPurposeEnum = pgEnum("verification_purpose", ["signup", "password_reset"]);
+
+export const emailVerifications = pgTable(
+  "email_verifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    email: varchar("email", { length: 255 }).notNull(),
+    purpose: verificationPurposeEnum("purpose").notNull(),
+    // SHA-256 of the 6-digit code — the code itself is only ever emailed.
+    codeHash: text("code_hash").notNull(),
+    // Signup carries the pending name + company name here until the code is
+    // verified and the account is actually created.
+    payload: jsonb("payload"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    resendCount: integer("resend_count").notNull().default(0),
+    maxResends: integer("max_resends").notNull().default(5),
+    lastSentAt: timestamp("last_sent_at").notNull().defaultNow(),
+    expiresAt: timestamp("expires_at").notNull(),
+    consumedAt: timestamp("consumed_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    emailPurposeIdx: index("email_verifications_email_purpose_idx").on(t.email, t.purpose),
+  })
+);

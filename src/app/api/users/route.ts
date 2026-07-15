@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { users } from "@/db/schema";
+import { users, companies } from "@/db/schema";
 import { getSession, hashPassword } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
 import { and, eq, isNull, ilike, or, asc } from "drizzle-orm";
@@ -8,6 +8,8 @@ import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 import { checkAgentQuota } from "@/lib/tenant/limits";
 import { eventBus } from "@/lib/events/bus";
+import { sendInvitationEmail } from "@/lib/email/send";
+import { sendNotification } from "@/lib/notifications/service";
 
 // Assignable roles via this endpoint — "super_admin" is platform-level and
 // never created here. There is no separate "owner" role (see schema.ts);
@@ -133,6 +135,9 @@ export async function POST(req: NextRequest) {
       role: requestedRole,
       tier: tier || "1",
       active: true,
+      // Phase 13: an invited user's temporary password can never become
+      // permanent — they're forced to set their own on first login.
+      mustChangePassword: true,
     })
     .returning();
 
@@ -146,6 +151,17 @@ export async function POST(req: NextRequest) {
   });
 
   await eventBus.emit("user.created", { userId: user.id, companyId: session.companyId, role: user.role });
+
+  // Phase 13: send the invitation email with the temporary password + notify
+  // the inviting admin. Both best-effort — a mail/notify failure never fails
+  // the creation (the admin can resend/copy the temp password from the UI).
+  try {
+    const [co] = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, session.companyId)).limit(1);
+    await sendInvitationEmail({ email, name: name.trim(), companyName: co?.name || "your team", tempPassword: password });
+  } catch (err) {
+    console.error("Failed to send invitation email:", err);
+  }
+  await sendNotification({ companyId: session.companyId, userId: session.userId, type: "agent.invited", title: "Agent invited", body: `${name.trim()} (${email}) was invited to the team.`, metadata: { userId: user.id } }).catch(() => {});
 
   return NextResponse.json({
     user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, tier: user.tier, active: user.active },

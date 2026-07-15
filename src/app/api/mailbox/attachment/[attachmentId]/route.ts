@@ -20,7 +20,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ att
     status: 200,
     headers: {
       "Content-Type": att.contentType || "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${att.filename.replace(/"/g, "")}"`,
+      // Force a download (never inline-render) AND stop the browser from
+      // MIME-sniffing a mislabeled attachment into executable HTML — together
+      // these neutralize XSS via a malicious HTML/SVG attachment.
+      "Content-Disposition": `attachment; filename="${att.filename.replace(/[\r\n"]/g, "")}"`,
+      "X-Content-Type-Options": "nosniff",
       "Content-Length": String(bytes.length),
     },
   });

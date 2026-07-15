@@ -23,6 +23,29 @@ export type EventType =
   | "lead.assigned"
   | "lead.imported"
   | "lead.exported"
+  // Assignment Engine lifecycle (Phase 1). These are additive and power
+  // future analytics; `lead.assigned` is kept and still emitted on success
+  // so existing notification/AI listeners are unaffected.
+  | "lead.queued"
+  | "assignment.started"
+  | "assignment.candidate_selected"
+  | "assignment.completed"
+  | "assignment.failed"
+  | "lead.recycled"
+  | "lead.lifecycle_changed"
+  | "lead.disposition_changed"
+  | "lead.rebalanced"
+  | "assignment.sla_breached"
+  // Agent Presence Service lifecycle (Phase 2). Emitted only by the presence
+  // service on an actual state TRANSITION, never on every heartbeat.
+  | "presence.online"
+  | "presence.offline"
+  | "presence.away"
+  | "presence.busy"
+  | "presence.locked"
+  | "presence.logged_out"
+  | "presence.heartbeat_lost"
+  | "presence.heartbeat_restored"
   | "user.created"
   | "user.updated"
   | "user.deleted"
@@ -38,6 +61,27 @@ export type EventPayloads = {
   "lead.assigned": { leadId: string; companyId: string; agentId: string };
   "lead.imported": { companyId: string; createdCount: number; duplicateCount: number; skippedCount: number };
   "lead.exported": { companyId: string; count: number };
+  "lead.queued": { leadId: string; companyId: string; source: string };
+  "assignment.started": { leadId: string; companyId: string; source: string };
+  "assignment.candidate_selected": { leadId: string; companyId: string; agentId: string; strategy: string };
+  "assignment.completed": { leadId: string; companyId: string; agentId: string; strategy: string; processingTimeMs: number };
+  "assignment.failed": { leadId: string; companyId: string; reason: string; attempt: number };
+  "lead.recycled": { leadId: string; companyId: string; fromAgentId: string | null };
+  "lead.lifecycle_changed": { leadId: string; companyId: string; from: string | null; to: string; reason: string | null };
+  // Phase 11: emitted whenever a lead's disposition changes (the business
+  // trigger the Conversions API maps to Meta events). `to` is the new
+  // disposition label.
+  "lead.disposition_changed": { leadId: string; companyId: string; from: string; to: string };
+  "lead.rebalanced": { leadId: string; companyId: string; fromAgentId: string | null; toAgentId: string };
+  "assignment.sla_breached": { leadId: string; companyId: string };
+  "presence.online": { userId: string; companyId: string | null };
+  "presence.offline": { userId: string; companyId: string | null };
+  "presence.away": { userId: string; companyId: string | null };
+  "presence.busy": { userId: string; companyId: string | null };
+  "presence.locked": { userId: string; companyId: string | null };
+  "presence.logged_out": { userId: string; companyId: string | null };
+  "presence.heartbeat_lost": { userId: string; companyId: string | null };
+  "presence.heartbeat_restored": { userId: string; companyId: string | null };
   "user.created": { userId: string; companyId: string; role: string };
   "user.updated": { userId: string; companyId: string };
   "user.deleted": { userId: string; companyId: string };

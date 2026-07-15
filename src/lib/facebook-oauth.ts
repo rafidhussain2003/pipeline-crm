@@ -32,6 +32,13 @@ const SCOPES = [
   "leads_retrieval",
   "pages_read_engagement",
   "business_management",
+  // Phase 11 (Conversions API): the SAME OAuth grant now also covers CAPI —
+  // ads_read lists the account's ad accounts + pixels for selection, and
+  // ads_management authorizes POSTing conversion events to a pixel. Advanced
+  // Access (App Review) like business_management; existing connections keep
+  // working for Lead Ads and gain CAPI on their next reconnect.
+  "ads_read",
+  "ads_management",
   "email",
 ].join(",");
 
