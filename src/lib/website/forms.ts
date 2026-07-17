@@ -91,6 +91,7 @@ export async function getPublicHostedForm(formId: string) {
       active: hostedForms.active,
       publicKey: hostedForms.sourceId,
       sourceStatus: leadSources.status,
+      companyId: leadSources.companyId,
     })
     .from(hostedForms)
     .innerJoin(leadSources, eq(leadSources.id, hostedForms.sourceId))

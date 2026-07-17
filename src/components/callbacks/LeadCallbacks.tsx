@@ -22,12 +22,19 @@ type Callback = {
 export default function LeadCallbacks({ leadId, leadName }: { leadId: string; leadName: string | null }) {
   const [items, setItems] = useState<Callback[]>([]);
   const [modal, setModal] = useState<{ existingId?: string; initial?: Callback } | null>(null);
+  // null = first load in flight; false = module disabled for this company
+  // (Phase 18) — render nothing at all, the card must not exist for them.
+  const [available, setAvailable] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/callbacks?leadId=${leadId}`);
-    if (!res.ok) return;
+    if (!res.ok) {
+      setAvailable(false);
+      return;
+    }
     const data = await res.json();
     setItems(data.items || []);
+    setAvailable(true);
   }, [leadId]);
 
   useEffect(() => {
@@ -45,6 +52,8 @@ export default function LeadCallbacks({ leadId, leadName }: { leadId: string; le
 
   const open = items.filter((c) => c.status === "scheduled" || c.status === "due" || c.status === "missed");
   const past = items.filter((c) => !open.includes(c));
+
+  if (available !== true) return null;
 
   return (
     <div className="bg-white border border-slate-200 rounded-lg p-5 mb-6">

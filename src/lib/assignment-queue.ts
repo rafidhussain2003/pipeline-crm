@@ -20,6 +20,7 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { assignLead, TERMINAL_DISPOSITIONS } from "./assignment";
 import { getProgressiveConfig } from "./assignment/progressive/config";
 import { runProgressiveCycle } from "./assignment/progressive/engine";
+import { featureService } from "./features";
 import { notInArray } from "drizzle-orm";
 import { createLogger } from "./logger";
 import { metrics } from "./infra/metrics";
@@ -45,8 +46,13 @@ export async function sweepCompanyQueuedLeads(companyId: string): Promise<{ assi
   // full drain. Both triggers that reach here (heartbeat kick + cron) flow
   // through unchanged — no new workers, no polling. OFF = the loop below,
   // byte-for-byte as before.
+  //
+  // Phase 18: the module must also be ENTITLED (featureService) — if the
+  // Platform Owner disables Progressive Lead Release for this company, the
+  // engine behaves exactly as if the company toggle were off, even though
+  // their saved settings still say enabled. Both checks are cached reads.
   const progressive = await getProgressiveConfig(companyId);
-  if (progressive.enabled) {
+  if (progressive.enabled && (await featureService.isEnabled(companyId, "progressive_lead_release"))) {
     const cycle = await runProgressiveCycle(companyId, progressive);
     return { assigned: cycle.assigned, attempted: cycle.attempted };
   }

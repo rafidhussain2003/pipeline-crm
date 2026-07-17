@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { leadSources } from "@/db/schema";
+import { featureService } from "@/lib/features";
 import { eq } from "drizzle-orm";
 import { mapPayloadToLead, FieldMapping } from "@/lib/field-mapping";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
@@ -98,6 +99,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
 
   const [source] = await db.select().from(leadSources).where(eq(leadSources.id, sourceId)).limit(1);
   if (!source || source.status !== "connected" || source.platform !== "website") {
+    return NextResponse.json({ error: "Unknown or inactive form" }, { status: 404, headers: CORS });
+  }
+
+  // Phase 18 feature gate — public endpoint, so entitlement comes from the
+  // SOURCE's company (there is no session). A company with Website Forms
+  // disabled must not keep collecting leads through an old embed.
+  if (!(await featureService.isEnabled(source.companyId, "website_forms"))) {
     return NextResponse.json({ error: "Unknown or inactive form" }, { status: 404, headers: CORS });
   }
 

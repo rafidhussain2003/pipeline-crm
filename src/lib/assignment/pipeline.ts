@@ -28,6 +28,7 @@ import { parseLeadRequirements } from "./ai/skills";
 import { recordStageEvent } from "@/lib/lifecycle/service";
 import type { LifecycleStage } from "@/lib/lifecycle/stages";
 import { getProgressiveConfig } from "./progressive/config";
+import { featureService } from "@/lib/features";
 import type { AssignmentOutcome, AssignmentRequest, AssignmentResult, AssignSource, CandidateAgent, DecisionDetail } from "./types";
 
 function nowMinuteOfDay(): number {
@@ -110,7 +111,11 @@ async function decide(
   // lead) stay immediate. Release-cycle calls carry allowedAgentIds and pass.
   if ((source === "queue" || source === "sweep") && !request.allowedAgentIds) {
     const progressive = await getProgressiveConfig(companyId);
-    if (progressive.enabled) {
+    // Phase 18: the module must be ENTITLED too — this must mirror the sweep's
+    // own branch exactly, or a company with progressive config ON but the
+    // feature disabled would have the full drain skip here while no release
+    // engine runs either, stranding the backlog.
+    if (progressive.enabled && (await featureService.isEnabled(companyId, "progressive_lead_release"))) {
       logger.debug("assignment_skipped", { reason: "progressive_release_active" });
       return result("skipped", startedAt, { reason: "progressive_release_active" });
     }

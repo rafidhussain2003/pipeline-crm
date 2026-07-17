@@ -76,10 +76,17 @@ export default function ImportHistoricalLeads({ sourceId, pageName }: { sourceId
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [startError, setStartError] = useState("");
+  // Phase 18: Historical Imports is its own module — when it's disabled for
+  // this company the import API 403s and this whole section must not exist.
+  const [available, setAvailable] = useState(true);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function loadCurrent() {
     const res = await fetch(`/api/lead-sources/${sourceId}/import/current`);
+    if (res.status === 403) {
+      setAvailable(false);
+      return null;
+    }
     const data = await res.json();
     setCurrent(data.import || null);
     return data.import as CurrentImport | null;
@@ -148,6 +155,8 @@ export default function ImportHistoricalLeads({ sourceId, pageName }: { sourceId
 
   const isRunning = current?.status === "running";
   const isFinished = current && !isRunning;
+
+  if (!available) return null;
 
   return (
     <div className="mt-3 pt-3 border-t border-slate-100">

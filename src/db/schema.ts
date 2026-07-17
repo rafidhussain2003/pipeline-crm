@@ -179,6 +179,12 @@ export const companies = pgTable(
     language: varchar("language", { length: 10 }).notNull().default("en"),
     businessHoursStart: integer("business_hours_start"),
     businessHoursEnd: integer("business_hours_end"),
+    // Phase 18 Feature Management: per-company module overrides as a jsonb
+    // map { featureKey: boolean }, merged over the registry defaults (see
+    // src/lib/features/registry.ts). Null = pure defaults — every existing
+    // company keeps exactly the modules it has today, and registering a new
+    // module never needs a migration or a backfill.
+    enabledFeatures: jsonb("enabled_features"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
     deletedAt: timestamp("deleted_at"), // soft delete

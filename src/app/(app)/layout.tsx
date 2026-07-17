@@ -9,6 +9,7 @@ import BillingBlockScreen from "@/components/billing/BillingBlockScreen";
 import ForcePasswordChange from "@/components/auth/ForcePasswordChange";
 import CallbackReminders from "@/components/callbacks/CallbackReminders";
 import { billingBlockReason, daysRemaining, isBillingBlocked } from "@/lib/billing";
+import { getEnabledFeatures, type FeatureMap } from "@/lib/features";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
@@ -22,8 +23,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   let companyName = "Super Admin";
   let billing: { subscriptionStatus: "trial" | "active" | "past_due" | "cancelled"; daysRemaining: number } | null =
     null;
+  // Phase 18: the company's entitled modules, resolved ONCE per render through
+  // the cached featureService — the sidebar and every layout-level surface key
+  // off this. Null for super_admin (no company; they manage features instead).
+  let features: FeatureMap | null = null;
 
   if (session.companyId) {
+    features = await getEnabledFeatures(session.companyId);
     const [company] = await db.select().from(companies).where(eq(companies.id, session.companyId)).limit(1);
     companyName = company?.name || "";
 
@@ -44,7 +50,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       {/* Presence heartbeat is rendered inside Sidebar (role-gated there) —
           only company members take leads and need presence tracked;
           super_admin has no companyId and doesn't participate in routing. */}
-      <Sidebar companyName={companyName} role={session.role} />
+      <Sidebar companyName={companyName} role={session.role} features={features} />
       <div className="flex-1 min-w-0 flex flex-col">
         {billing && (
           <BillingBanner
@@ -57,8 +63,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       </div>
       {/* Callback reminders (Phase 15) — one SSE connection per session, mounted
           once here so a reminder reaches the agent on whatever page they're on.
-          super_admin has no companyId and schedules no callbacks. */}
-      {session.companyId && <CallbackReminders />}
+          super_admin has no companyId and schedules no callbacks. Phase 18: not
+          mounted at all when the Callback Engine module is disabled, so the
+          stream is never even opened. */}
+      {session.companyId && features?.callback_engine && <CallbackReminders />}
     </div>
   );
 }

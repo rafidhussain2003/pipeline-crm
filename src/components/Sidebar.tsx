@@ -4,16 +4,20 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import PresenceHeartbeat from "./PresenceHeartbeat";
 
-const navItems = [
+// Phase 18: items tagged with a `feature` render only when the company's
+// feature profile has that module enabled (see lib/features). Untagged items
+// are core CRM. The server layout resolves the profile once and passes it in
+// — a disabled module's navigation simply doesn't exist for that company.
+const navItems: { href: string; label: string; feature?: string }[] = [
   { href: "/leads", label: "All Leads" },
   // Callbacks (Phase 15) is every role's tool — an agent works their own list,
   // a manager/admin sees the whole company's. Scope is decided server-side, so
   // this needs no role gate.
-  { href: "/callbacks", label: "Callbacks" },
-  { href: "/settings/connector", label: "Lead Sources" },
+  { href: "/callbacks", label: "Callbacks", feature: "callback_engine" },
+  { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration" },
   { href: "/settings/delivery-log", label: "Delivery Log" },
   { href: "/settings/pipeline", label: "Pipeline Settings" },
-  { href: "/settings/automation", label: "Automation" },
+  { href: "/settings/automation", label: "Automation", feature: "ai_assignment" },
   { href: "/settings/audit-log", label: "Audit Log" },
 ];
 
@@ -37,9 +41,20 @@ const WEBSITE_FORMS_NAV_ITEM = { href: "/settings/website-forms", label: "Websit
 // log, diagnostics. Admin + manager only (agents cannot configure it).
 const CONVERSIONS_NAV_ITEM = { href: "/settings/conversions", label: "Conversions API" };
 
-export default function Sidebar({ companyName, role }: { companyName: string; role: string }) {
+export default function Sidebar({
+  companyName,
+  role,
+  features,
+}: {
+  companyName: string;
+  role: string;
+  // Enabled-module map from the server layout; null = no company context
+  // (super_admin), which shows everything — the owner is never feature-gated.
+  features?: Record<string, boolean> | null;
+}) {
   const pathname = usePathname();
   const router = useRouter();
+  const has = (feature?: string) => !feature || !features || features[feature] === true;
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -54,7 +69,7 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
         <div className="text-xs text-slate-500 mt-0.5 truncate">{companyName}</div>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {(role === "admin" || role === "manager") && (
+        {(role === "admin" || role === "manager") && has("operations_center") && (
           <Link
             href="/operations"
             className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -84,7 +99,7 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
             {AGENTS_NAV_ITEM.label}
           </Link>
         )}
-        {role === "admin" && (
+        {role === "admin" && has("website_forms") && (
           <Link
             href={WEBSITE_FORMS_NAV_ITEM.href}
             className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -94,7 +109,7 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
             {WEBSITE_FORMS_NAV_ITEM.label}
           </Link>
         )}
-        {(role === "admin" || role === "manager") && (
+        {(role === "admin" || role === "manager") && has("meta_integration") && (
           <Link
             href={CONVERSIONS_NAV_ITEM.href}
             className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -104,7 +119,7 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
             {CONVERSIONS_NAV_ITEM.label}
           </Link>
         )}
-        {navItems.map((item) => {
+        {navItems.filter((item) => has(item.feature)).map((item) => {
           const active = pathname === item.href;
           return (
             <Link
@@ -127,6 +142,14 @@ export default function Sidebar({ companyName, role }: { companyName: string; ro
               }`}
             >
               Super Admin
+            </Link>
+            <Link
+              href="/super-admin/feature-management"
+              className={`block px-3 py-2 rounded-md text-sm font-medium ${
+                pathname.startsWith("/super-admin/feature-management") ? "bg-purple-50 text-purple-700" : "text-purple-700 hover:bg-purple-50"
+              }`}
+            >
+              Feature Management
             </Link>
             <Link
               href="/super-admin/mailbox"

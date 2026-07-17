@@ -1,4 +1,5 @@
 import { getPublicHostedForm, type FormField } from "@/lib/website";
+import { checkFeature } from "@/lib/features";
 import { getPublicAppUrl } from "@/lib/url";
 
 // Public hosted-form page (Phase 8). Server-rendered so it works even with JS
@@ -76,7 +77,12 @@ export default async function HostedFormPage({ params }: { params: Promise<{ for
   const { formId } = await params;
   const form = await getPublicHostedForm(formId);
 
-  if (!form) {
+  // Phase 18: a public page carries no session, so entitlement comes from the
+  // form's company. Disabled = the same "not available" screen as a deleted
+  // form — visitors learn nothing about the tenant's subscription.
+  const enabled = form ? await checkFeature(form.companyId, "website_forms") : false;
+
+  if (!form || !enabled) {
     return (
       <main className="min-h-full flex items-center justify-center bg-slate-50 p-6">
         <div className="text-center">
