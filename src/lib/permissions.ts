@@ -18,6 +18,7 @@ export type Permission =
   | "tags:manage"
   | "agents:manage" // Agents module: create/edit/reset-password/enable-disable/delete agents
   | "leads:supervise" // force assign/reassign/recycle, lock/unlock agents (Team dashboard)
+  | "callbacks:supervise" // see/act on the whole company's callbacks, not just your own
   | "company_settings:edit" // Profile > Company tab
   | "billing:manage" // Subscription page actions (checkout, portal)
   | "companies:manage"; // super-admin-only actions
@@ -32,6 +33,13 @@ export type Permission =
 // (already unrestricted for every company role, nothing to grant) and
 // Agents (agents:manage) — but not company-wide settings, API keys, the
 // audit log, or integrations, which stay admin-only.
+//
+// callbacks:supervise is deliberately SEPARATE from leads:supervise rather
+// than widening the latter to manager. A manager must see and act on the whole
+// company's callbacks (they're the escalation target for a missed one), but
+// leads:supervise also carries the Team dashboard's force-assign/recycle and
+// agent lock/unlock powers — granting those as a side effect of the callback
+// feature would be an unrelated, invisible expansion of what a manager can do.
 const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   super_admin: new Set(["companies:manage"]),
   admin: new Set([
@@ -40,10 +48,11 @@ const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
     "tags:manage",
     "agents:manage",
     "leads:supervise",
+    "callbacks:supervise",
     "company_settings:edit",
     "billing:manage",
   ]),
-  manager: new Set(["agents:manage"]),
+  manager: new Set(["agents:manage", "callbacks:supervise"]),
   agent: new Set(["tags:manage"]),
 };
 

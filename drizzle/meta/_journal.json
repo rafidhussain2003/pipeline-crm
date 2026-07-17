@@ -176,6 +176,13 @@
       "when": 1784148472399,
       "tag": "0024_clean_manta",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1784241544314,
+      "tag": "0025_careful_norman_osborn",
+      "breakpoints": true
     }
   ]
 }

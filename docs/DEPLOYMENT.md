@@ -29,6 +29,7 @@ Schema lives in `src/db/schema.ts`; migrations in `drizzle/`. Generate with `npm
 ## Cron backstops (external scheduler, `x-cron-secret: $CRON_SECRET`)
 - `POST /api/cron/assign-queued` — drains the assignment queue + recovery + SLA escalation (every 1–2 min).
 - `POST /api/cron/capi-worker` — drains the Conversions API queue + reclaim + reconcile.
+- `POST /api/cron/callback-worker` — **every 1 min.** Delivers due callback reminders + reclaims stale rows + sweeps overdue callbacks to `missed`. Unlike the others this is the PRIMARY trigger, not a backstop: reminders fire when their time arrives, and nothing else watches the clock.
 - `POST /api/cron/recycle-leads`, `POST /api/cron/cleanup-tokens`, `POST /api/cron/resume-imports`.
 
 ## Post-deploy checklist

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, use } from "react";
 import Link from "next/link";
+import LeadCallbacks from "@/components/callbacks/LeadCallbacks";
 
 type LeadDetail = {
   id: string;
@@ -279,6 +280,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           )}
         </div>
       )}
+
+      {/* Callbacks (Phase 15) — the Schedule Callback button lives on every lead. */}
+      <LeadCallbacks leadId={id} leadName={lead.name} />
 
       <div className="bg-white border border-slate-200 rounded-lg p-5 mb-6">
         <h2 className="text-sm font-semibold text-slate-700 mb-3">Tags</h2>

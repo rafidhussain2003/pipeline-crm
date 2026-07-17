@@ -6,6 +6,10 @@ import PresenceHeartbeat from "./PresenceHeartbeat";
 
 const navItems = [
   { href: "/leads", label: "All Leads" },
+  // Callbacks (Phase 15) is every role's tool — an agent works their own list,
+  // a manager/admin sees the whole company's. Scope is decided server-side, so
+  // this needs no role gate.
+  { href: "/callbacks", label: "Callbacks" },
   { href: "/settings/connector", label: "Lead Sources" },
   { href: "/settings/delivery-log", label: "Delivery Log" },
   { href: "/settings/pipeline", label: "Pipeline Settings" },

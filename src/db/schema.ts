@@ -1811,3 +1811,136 @@ export const emailVerifications = pgTable(
     emailPurposeIdx: index("email_verifications_email_purpose_idx").on(t.email, t.purpose),
   })
 );
+
+// ===========================================================================
+// Phase 15 — AI Callback & Follow-up Engine
+// An agent schedules a callback on a lead; the engine reminds them at the
+// right moments. Built on the SAME durable-queue model as the assignment and
+// Conversions API queues (rows + FOR UPDATE SKIP LOCKED + backoff +
+// dead-letter), so thousands of callbacks can come due at once without
+// blocking anything. Fully additive: nothing here changes the CRM, the
+// Assignment Engine, the Lead Lifecycle, or Notifications.
+// ===========================================================================
+export const callbackStatusEnum = pgEnum("callback_status", ["scheduled", "due", "completed", "missed", "cancelled", "rescheduled"]);
+export const callbackReminderStatusEnum = pgEnum("callback_reminder_status", ["pending", "processing", "sent", "failed", "dead_letter", "cancelled"]);
+
+export const callbacks = pgTable(
+  "callbacks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "cascade" }).notNull(),
+    // Who gets reminded — normally the lead's assigned agent at scheduling time.
+    agentId: uuid("agent_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    // The moment to call back. Stored as an absolute instant; `timezone` is the
+    // IANA zone the agent picked, kept for display + future calendar sync.
+    scheduledAt: timestamp("scheduled_at").notNull(),
+    timezone: varchar("timezone", { length: 64 }).notNull().default("UTC"),
+    reason: varchar("reason", { length: 60 }).notNull(),
+    notes: text("notes"),
+    priority: varchar("priority", { length: 20 }).notNull().default("normal"), // low|normal|high|urgent
+    status: callbackStatusEnum("status").notNull().default("scheduled"),
+    // Set when the agent dismisses the due reminder — the reminder banner stays
+    // visible (across reloads) until this is set.
+    acknowledgedAt: timestamp("acknowledged_at"),
+    completedAt: timestamp("completed_at"),
+    cancelledAt: timestamp("cancelled_at"),
+    missedAt: timestamp("missed_at"),
+    escalatedAt: timestamp("escalated_at"),
+    // Reschedule chain: the callback this one replaced (the old row is marked
+    // "rescheduled" and kept, so history is never lost).
+    rescheduledFromId: uuid("rescheduled_from_id"),
+    rescheduleCount: integer("reschedule_count").notNull().default(0),
+    // Deterministic AI ordering score — recomputed when a callback comes due so
+    // simultaneous callbacks surface hottest-first (see lib/callbacks/prioritize).
+    priorityScore: real("priority_score").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // Dashboard: this company's callbacks by time (Today / Upcoming / Overdue).
+    companyScheduledIdx: index("callbacks_company_scheduled_idx").on(t.companyId, t.scheduledAt),
+    // An agent's own queue, hottest-first.
+    agentStatusIdx: index("callbacks_agent_status_idx").on(t.agentId, t.status, t.scheduledAt),
+    // Overdue sweep: open callbacks whose time has passed.
+    statusScheduledIdx: index("callbacks_status_scheduled_idx").on(t.status, t.scheduledAt),
+    leadIdx: index("callbacks_lead_idx").on(t.leadId),
+  })
+);
+
+// The durable reminder queue: one row per (callback × configured offset ×
+// channel). dueAt is precomputed at scheduling time so the worker only ever
+// does an indexed "due now" scan — this is what makes 100k+ scheduled
+// callbacks cheap. `channel` is the FUTURE-READY seam: only "in_app" is
+// implemented today; email/sms/whatsapp/voice/calendar slot in behind the
+// channel dispatcher with no schema change.
+export const callbackReminders = pgTable(
+  "callback_reminders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    callbackId: uuid("callback_id").references(() => callbacks.id, { onDelete: "cascade" }).notNull(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    agentId: uuid("agent_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    // Minutes relative to scheduledAt: negative = before, 0 = at time,
+    // positive = overdue. `kind` is the human label used for dedup + display.
+    offsetMinutes: integer("offset_minutes").notNull(),
+    kind: varchar("kind", { length: 30 }).notNull(), // before_15 | before_5 | at_time | overdue_15 | overdue_60
+    dueAt: timestamp("due_at").notNull(),
+    channel: varchar("channel", { length: 20 }).notNull().default("in_app"),
+    status: callbackReminderStatusEnum("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    availableAt: timestamp("available_at").notNull().defaultNow(),
+    lockedAt: timestamp("locked_at"),
+    lockedBy: varchar("locked_by", { length: 100 }),
+    sentAt: timestamp("sent_at"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // Worker hot path: due rows first (SKIP LOCKED handles concurrency).
+    dueIdx: index("callback_reminders_due_idx").on(t.status, t.availableAt, t.dueAt),
+    callbackIdx: index("callback_reminders_callback_idx").on(t.callbackId),
+    // One reminder per (callback, kind, channel) — makes scheduling idempotent.
+    uniq: uniqueIndex("callback_reminders_unique").on(t.callbackId, t.kind, t.channel),
+  })
+);
+
+// Append-only history: created / rescheduled / completed / cancelled / missed /
+// viewed / acknowledged / reminder_sent / escalated. Complements audit_log with
+// a per-callback timeline.
+export const callbackEvents = pgTable(
+  "callback_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    callbackId: uuid("callback_id").references(() => callbacks.id, { onDelete: "cascade" }).notNull(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    type: varchar("type", { length: 30 }).notNull(),
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    callbackIdx: index("callback_events_callback_idx").on(t.callbackId, t.createdAt),
+    companyIdx: index("callback_events_company_idx").on(t.companyId, t.createdAt),
+  })
+);
+
+// Per-company reminder configuration (smart reminders + escalation).
+export const callbackSettings = pgTable("callback_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull().unique(),
+  // Minutes relative to the scheduled time. Default: 15m before, 5m before,
+  // at time, 15m overdue, 1h overdue.
+  reminderOffsets: jsonb("reminder_offsets").notNull().default(sql`'[-15,-5,0,15,60]'::jsonb`),
+  // How long after the scheduled time an un-completed callback is marked
+  // missed + escalated.
+  escalateAfterMinutes: integer("escalate_after_minutes").notNull().default(30),
+  notifyManager: boolean("notify_manager").notNull().default(true),
+  notifyAdmin: boolean("notify_admin").notNull().default(false),
+  soundEnabled: boolean("sound_enabled").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});

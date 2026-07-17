@@ -283,7 +283,11 @@ seeded by migration `0014`. Attachments are stored inline in Postgres
    auto-assignment queue (a lead that arrives while every agent is offline
    waits as an unassigned row and is drained the moment an agent comes back;
    the per-agent heartbeat is the primary trigger, this catches anything it
-   missed — see "Auto lead assignment" below).
+   missed — see "Auto lead assignment" below). Also add
+   `https://YOUR_DOMAIN/api/cron/callback-worker` (same header) **every
+   minute** — it delivers due callback reminders. For callbacks the cron is
+   the primary trigger, not a backstop: a reminder fires because its time
+   arrived, and this is what watches the clock.
 
 **Auto lead assignment** — every lead from every source (Meta webhook,
 historical import, website form, API) is routed to an agent with no manager

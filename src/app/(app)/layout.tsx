@@ -7,6 +7,7 @@ import Sidebar from "@/components/Sidebar";
 import BillingBanner from "@/components/billing/BillingBanner";
 import BillingBlockScreen from "@/components/billing/BillingBlockScreen";
 import ForcePasswordChange from "@/components/auth/ForcePasswordChange";
+import CallbackReminders from "@/components/callbacks/CallbackReminders";
 import { billingBlockReason, daysRemaining, isBillingBlocked } from "@/lib/billing";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -54,6 +55,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         )}
         <main className="flex-1 min-w-0">{children}</main>
       </div>
+      {/* Callback reminders (Phase 15) — one SSE connection per session, mounted
+          once here so a reminder reaches the agent on whatever page they're on.
+          super_admin has no companyId and schedules no callbacks. */}
+      {session.companyId && <CallbackReminders />}
     </div>
   );
 }
