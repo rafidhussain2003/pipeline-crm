@@ -11,6 +11,9 @@ import {
   index,
   uniqueIndex,
   real,
+  numeric,
+  date,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -1986,3 +1989,247 @@ export const callbackSettings = pgTable("callback_settings", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// Phase 19 — Finance & Bookkeeping Foundation. An independent bounded context:
+// nothing in here references CRM tables (leads/sources/etc.) and nothing in
+// CRM references these — CRM (or Payroll, Attendance, Inventory…) integrates
+// later by POSTING through the finance services, never by joining tables.
+//
+// Double-entry core: finance_journals (header) + finance_journal_lines. The
+// GENERAL LEDGER *is* the set of lines whose `posted` flag is true — there is
+// no second ledger table, so a financial amount exists in exactly one row
+// (normalized, "no duplicated financial data"). Posted rows are immutable by
+// service contract: corrections happen through reversing/adjusting entries,
+// never UPDATEs. entry_date is denormalized onto lines at write time so the
+// hot ledger query (company + account + date range over posted rows) is one
+// partial-index scan with no join — the design that keeps millions of ledger
+// entries fast.
+// ---------------------------------------------------------------------------
+export const financeAccountTypeEnum = pgEnum("finance_account_type", ["asset", "liability", "equity", "income", "expense"]);
+export const financeJournalStatusEnum = pgEnum("finance_journal_status", ["draft", "posted", "voided"]);
+export const financeYearStatusEnum = pgEnum("finance_year_status", ["open", "closed"]);
+export const financeDocStatusEnum = pgEnum("finance_doc_status", ["posted", "voided"]);
+
+// Chart of Accounts. Cash and bank accounts are ASSET accounts with a
+// subtype ("cash" | "bank") — that is what real accounting is, so their
+// balances fall out of the same ledger as everything else instead of being
+// tracked in a parallel structure. metadata holds subtype extras (bank
+// nickname, currency placeholder, reconciliation placeholder fields).
+export const financeAccounts = pgTable(
+  "finance_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    code: varchar("code", { length: 20 }).notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    type: financeAccountTypeEnum("type").notNull(),
+    subtype: varchar("subtype", { length: 20 }), // "cash" | "bank" | null
+    parentId: uuid("parent_id").references((): AnyPgColumn => financeAccounts.id, { onDelete: "set null" }),
+    // Seeded defaults every company gets (Opening Balance Equity, Sales
+    // Revenue, …). System accounts can be renamed but never deleted — the
+    // posting engine depends on some of them existing.
+    isSystem: boolean("is_system").notNull().default(false),
+    active: boolean("active").notNull().default(true),
+    description: text("description"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    codeUniq: uniqueIndex("finance_accounts_company_code_uniq").on(t.companyId, t.code),
+    typeIdx: index("finance_accounts_company_type_idx").on(t.companyId, t.type),
+    parentIdx: index("finance_accounts_parent_idx").on(t.parentId),
+  })
+);
+
+// Per-company finance state: document numbering (atomic UPDATE … RETURNING,
+// same pattern as automation_settings.assignment_cursor) + the opening-
+// balance lock + placeholder currency.
+export const financeSettings = pgTable("finance_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id")
+    .references(() => companies.id, { onDelete: "cascade" })
+    .notNull()
+    .unique(),
+  nextJournalNumber: integer("next_journal_number").notNull().default(1),
+  nextRevenueNumber: integer("next_revenue_number").notNull().default(1),
+  nextExpenseNumber: integer("next_expense_number").notNull().default(1),
+  // Once set, opening-balance journals can no longer be created or voided —
+  // corrections from then on are ordinary adjusting entries.
+  openingBalancesLockedAt: timestamp("opening_balances_locked_at"),
+  defaultCurrency: varchar("default_currency", { length: 8 }).notNull().default("USD"), // placeholder — multi-currency is a future module
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// Financial years. Posting checks the entry date against these: a date inside
+// a CLOSED year is rejected (locked history); a date no year covers is allowed
+// (year discipline is opt-in until the company defines its calendar).
+export const financeYears = pgTable(
+  "finance_years",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    label: varchar("label", { length: 40 }).notNull(),
+    startDate: date("start_date").notNull(),
+    endDate: date("end_date").notNull(),
+    status: financeYearStatusEnum("status").notNull().default("open"),
+    closedAt: timestamp("closed_at"),
+    closedBy: uuid("closed_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    labelUniq: uniqueIndex("finance_years_company_label_uniq").on(t.companyId, t.label),
+    rangeIdx: index("finance_years_company_range_idx").on(t.companyId, t.startDate, t.endDate),
+  })
+);
+
+// Journal entry header. entry_number is assigned at POSTING time (drafts have
+// none), sequential per company, and unique once assigned.
+export const financeJournals = pgTable(
+  "finance_journals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    entryNumber: integer("entry_number"),
+    entryDate: date("entry_date").notNull(),
+    memo: text("memo"),
+    status: financeJournalStatusEnum("status").notNull().default("draft"),
+    // What produced this entry: "manual" | "revenue" | "expense" |
+    // "opening_balance" | "reversal" — and later "payroll", "inventory", …
+    // A plain varchar (audit vocabulary), so future modules never migrate.
+    sourceType: varchar("source_type", { length: 30 }).notNull().default("manual"),
+    sourceId: uuid("source_id"),
+    // Voiding never deletes ledger history: it posts a reversing entry that
+    // points back here. The voided original + its reversal both stay in the
+    // ledger forever, netting to zero.
+    reversalOfId: uuid("reversal_of_id").references((): AnyPgColumn => financeJournals.id, { onDelete: "set null" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    postedBy: uuid("posted_by").references(() => users.id, { onDelete: "set null" }),
+    postedAt: timestamp("posted_at"),
+    voidedBy: uuid("voided_by").references(() => users.id, { onDelete: "set null" }),
+    voidedAt: timestamp("voided_at"),
+    voidReason: text("void_reason"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    numberUniq: uniqueIndex("finance_journals_company_number_uniq")
+      .on(t.companyId, t.entryNumber)
+      .where(sql`entry_number is not null`),
+    statusIdx: index("finance_journals_company_status_idx").on(t.companyId, t.status, t.entryDate),
+    dateIdx: index("finance_journals_company_date_idx").on(t.companyId, t.entryDate),
+    sourceIdx: index("finance_journals_source_idx").on(t.sourceId),
+  })
+);
+
+// Journal lines — THE general ledger (rows where posted = true). accountId
+// deliberately has no ON DELETE action: the database itself refuses to delete
+// an account that has ever been used, backing the service-level rule.
+export const financeJournalLines = pgTable(
+  "finance_journal_lines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    journalId: uuid("journal_id")
+      .references(() => financeJournals.id, { onDelete: "cascade" })
+      .notNull(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    accountId: uuid("account_id")
+      .references(() => financeAccounts.id)
+      .notNull(),
+    lineNo: integer("line_no").notNull().default(1),
+    // Denormalized from the header at write time (kept in sync by the ONE
+    // writer, JournalService) so ledger scans never join.
+    entryDate: date("entry_date").notNull(),
+    posted: boolean("posted").notNull().default(false),
+    debit: numeric("debit", { precision: 14, scale: 2 }).notNull().default("0"),
+    credit: numeric("credit", { precision: 14, scale: 2 }).notNull().default("0"),
+    description: varchar("description", { length: 255 }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // The ledger index: company + account + date over posted rows only.
+    ledgerIdx: index("finance_ledger_account_idx")
+      .on(t.companyId, t.accountId, t.entryDate)
+      .where(sql`posted = true`),
+    journalIdx: index("finance_journal_lines_journal_idx").on(t.journalId),
+    companyPostedIdx: index("finance_journal_lines_company_posted_idx")
+      .on(t.companyId, t.entryDate)
+      .where(sql`posted = true`),
+  })
+);
+
+// Revenue documents. Each posts ONE balanced journal automatically:
+//   Debit  deposit account (cash/bank asset)
+//   Credit income account
+export const financeRevenues = pgTable(
+  "finance_revenues",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    docNumber: integer("doc_number").notNull(),
+    entryDate: date("entry_date").notNull(),
+    customerName: varchar("customer_name", { length: 160 }).notNull(),
+    customerRef: varchar("customer_ref", { length: 120 }), // free-form external reference (a CRM lead id, etc.) — no FK: Finance stays CRM-independent
+    invoiceRef: varchar("invoice_ref", { length: 120 }), // placeholder — invoicing is a future module
+    incomeAccountId: uuid("income_account_id").references(() => financeAccounts.id).notNull(),
+    depositAccountId: uuid("deposit_account_id").references(() => financeAccounts.id).notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    notes: text("notes"),
+    journalId: uuid("journal_id").references(() => financeJournals.id).notNull(),
+    status: financeDocStatusEnum("status").notNull().default("posted"),
+    voidReason: text("void_reason"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    numberUniq: uniqueIndex("finance_revenues_company_number_uniq").on(t.companyId, t.docNumber),
+    dateIdx: index("finance_revenues_company_date_idx").on(t.companyId, t.entryDate),
+  })
+);
+
+// Expense documents. Each posts ONE balanced journal automatically:
+//   Debit  expense account
+//   Credit payment account (cash/bank asset)
+export const financeExpenses = pgTable(
+  "finance_expenses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    docNumber: integer("doc_number").notNull(),
+    entryDate: date("entry_date").notNull(),
+    vendorName: varchar("vendor_name", { length: 160 }).notNull(),
+    category: varchar("category", { length: 80 }),
+    paymentMethod: varchar("payment_method", { length: 20 }).notNull().default("cash"), // "cash" | "bank" | "card" | "other"
+    receiptRef: varchar("receipt_ref", { length: 160 }), // placeholder — receipt uploads are a future module
+    expenseAccountId: uuid("expense_account_id").references(() => financeAccounts.id).notNull(),
+    paymentAccountId: uuid("payment_account_id").references(() => financeAccounts.id).notNull(),
+    amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
+    notes: text("notes"),
+    journalId: uuid("journal_id").references(() => financeJournals.id).notNull(),
+    status: financeDocStatusEnum("status").notNull().default("posted"),
+    voidReason: text("void_reason"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    numberUniq: uniqueIndex("finance_expenses_company_number_uniq").on(t.companyId, t.docNumber),
+    dateIdx: index("finance_expenses_company_date_idx").on(t.companyId, t.entryDate),
+  })
+);

@@ -30,6 +30,16 @@ const pool =
     max: 20,
   });
 
+// node-postgres emits 'error' on the Pool when an IDLE client's connection
+// drops (server restart, network blip, managed-Postgres failover). With no
+// listener, Node treats that as an unhandled 'error' event and KILLS the
+// process — turning a routine transient into a full outage. Log and move on:
+// the dead client is discarded and the pool dials a fresh connection on the
+// next checkout.
+pool.on("error", (err) => {
+  console.error("[pg-pool] idle client error (connection will be re-established):", err.message);
+});
+
 if (process.env.NODE_ENV !== "production") global._pgPool = pool;
 
 export const db = drizzle(pool, { schema });

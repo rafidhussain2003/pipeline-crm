@@ -2,7 +2,24 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 import PresenceHeartbeat from "./PresenceHeartbeat";
+
+// Finance module navigation (Phase 19) — rendered only when the company's
+// feature profile has "finance" AND the role can at least view it. A single
+// collapsible group so ten entries don't drown the core CRM nav.
+const FINANCE_ITEMS: { href: string; label: string }[] = [
+  { href: "/finance", label: "Dashboard" },
+  { href: "/finance/accounts", label: "Chart of Accounts" },
+  { href: "/finance/revenue", label: "Revenue" },
+  { href: "/finance/expenses", label: "Expenses" },
+  { href: "/finance/journal", label: "Journal Entries" },
+  { href: "/finance/ledger", label: "General Ledger" },
+  { href: "/finance/cash", label: "Cash Accounts" },
+  { href: "/finance/banks", label: "Bank Accounts" },
+  { href: "/finance/years", label: "Financial Year" },
+  { href: "/finance/settings", label: "Settings" },
+];
 
 // Phase 18: items tagged with a `feature` render only when the company's
 // feature profile has that module enabled (see lib/features). Untagged items
@@ -55,6 +72,12 @@ export default function Sidebar({
   const pathname = usePathname();
   const router = useRouter();
   const has = (feature?: string) => !feature || !features || features[feature] === true;
+  const inFinance = pathname === "/finance" || pathname.startsWith("/finance/");
+  const [financeOpen, setFinanceOpen] = useState(inFinance);
+  // Finance is visible to roles with finance:view (admin + manager today) —
+  // agents never see the module. super_admin (features = null) has no company
+  // books, so the group requires an actual feature grant.
+  const showFinance = (role === "admin" || role === "manager") && !!features && features.finance === true;
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -118,6 +141,37 @@ export default function Sidebar({
           >
             {CONVERSIONS_NAV_ITEM.label}
           </Link>
+        )}
+        {showFinance && (
+          <div className="pt-1">
+            <button
+              onClick={() => setFinanceOpen((v) => !v)}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                inFinance ? "text-emerald-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              <span>Finance</span>
+              <span className="text-[10px] text-slate-400">{financeOpen ? "▾" : "▸"}</span>
+            </button>
+            {financeOpen && (
+              <div className="mt-0.5 space-y-0.5">
+                {FINANCE_ITEMS.map((item) => {
+                  const active = pathname === item.href;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
+                        active ? "bg-emerald-50 text-emerald-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
         {navItems.filter((item) => has(item.feature)).map((item) => {
           const active = pathname === item.href;

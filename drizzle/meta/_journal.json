@@ -197,6 +197,13 @@
       "when": 1784306843092,
       "tag": "0027_organic_skullbuster",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1784311113350,
+      "tag": "0028_overrated_firelord",
+      "breakpoints": true
     }
   ]
 }

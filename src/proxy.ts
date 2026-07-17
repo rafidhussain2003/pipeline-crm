@@ -21,6 +21,9 @@ const COOKIE_NAME = "crm_session";
 // Adding a future module's protection = one entry here (or requireFeature()
 // inside its routes — same service either way).
 const FEATURE_RULES: { feature: string; match: (p: string) => boolean }[] = [
+  // Finance (Phase 19) — the whole bounded context behind one rule. Note the
+  // trailing slash / exact match so the public form path "/f/…" never collides.
+  { feature: "finance", match: (p) => p === "/finance" || p.startsWith("/finance/") || p.startsWith("/api/finance") },
   // Order matters: the progressive sub-path must match before ai_assignment.
   { feature: "progressive_lead_release", match: (p) => p.startsWith("/api/automation-settings/progressive") },
   { feature: "ai_assignment", match: (p) => p.startsWith("/api/automation-settings") || p.startsWith("/settings/automation") },
@@ -66,7 +69,9 @@ export async function proxy(req: NextRequest) {
     pathname.startsWith("/leads") ||
     pathname.startsWith("/settings") ||
     pathname.startsWith("/callbacks") ||
-    pathname.startsWith("/operations");
+    pathname.startsWith("/operations") ||
+    pathname === "/finance" ||
+    pathname.startsWith("/finance/");
   const isSuperAdminRoute = pathname.startsWith("/super-admin");
   const isApiRoute = pathname.startsWith("/api/");
 
@@ -139,6 +144,7 @@ export const config = {
     "/settings/:path*",
     "/callbacks/:path*",
     "/operations/:path*",
+    "/finance/:path*",
     "/super-admin/:path*",
     "/api/:path*",
   ],

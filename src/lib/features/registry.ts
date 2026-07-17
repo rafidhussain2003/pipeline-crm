@@ -30,8 +30,12 @@ export const FEATURES: readonly FeatureDef[] = [
   { key: "operations_center", label: "Operations Center", description: "Live company operations dashboard for admins and managers.", defaultEnabled: true },
   { key: "internal_mailbox", label: "Internal Mailbox", description: "Platform-owner internal email (super-admin surface).", defaultEnabled: true },
   { key: "callback_engine", label: "Callback Engine", description: "Scheduled callbacks, reminders and the callback dashboard.", defaultEnabled: true },
+  // Finance (Phase 19): a real module now — chart of accounts, general ledger,
+  // journal entries, revenue/expenses, cash & bank accounts, financial years.
+  // Still defaultEnabled: false — it's an optional paid module the Platform
+  // Owner switches on per company.
+  { key: "finance", label: "Finance", description: "Bookkeeping foundation: chart of accounts, general ledger, journals, revenue & expenses.", defaultEnabled: false },
   // ── Optional future modules — registered only (no pages, no entities). ────
-  { key: "finance", label: "Finance", description: "Finance module (coming soon).", defaultEnabled: false, placeholder: true },
   { key: "attendance", label: "Attendance", description: "Attendance module (coming soon).", defaultEnabled: false, placeholder: true },
   { key: "payroll", label: "Payroll", description: "Payroll module (coming soon).", defaultEnabled: false, placeholder: true },
   { key: "bookkeeping", label: "Bookkeeping", description: "Bookkeeping module (coming soon).", defaultEnabled: false, placeholder: true },
