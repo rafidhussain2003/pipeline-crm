@@ -18,6 +18,8 @@ import { db } from "@/db";
 import { automationSettings, companies, leads } from "@/db/schema";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { assignLead, TERMINAL_DISPOSITIONS } from "./assignment";
+import { getProgressiveConfig } from "./assignment/progressive/config";
+import { runProgressiveCycle } from "./assignment/progressive/engine";
 import { notInArray } from "drizzle-orm";
 import { createLogger } from "./logger";
 import { metrics } from "./infra/metrics";
@@ -38,6 +40,17 @@ const MAX_LEADS_PER_COMPANY_PER_SWEEP = 200;
 const sweepInFlight = new Set<string>();
 
 export async function sweepCompanyQueuedLeads(companyId: string): Promise<{ assigned: number; attempted: number }> {
+  // Phase 17: when Progressive Lead Release is ON, the backlog is drained by
+  // the release engine (paced, tier-batched, reserve-aware) instead of this
+  // full drain. Both triggers that reach here (heartbeat kick + cron) flow
+  // through unchanged — no new workers, no polling. OFF = the loop below,
+  // byte-for-byte as before.
+  const progressive = await getProgressiveConfig(companyId);
+  if (progressive.enabled) {
+    const cycle = await runProgressiveCycle(companyId, progressive);
+    return { assigned: cycle.assigned, attempted: cycle.attempted };
+  }
+
   const queued = await db
     .select({ id: leads.id, requiredSkillId: leads.requiredSkillId })
     .from(leads)

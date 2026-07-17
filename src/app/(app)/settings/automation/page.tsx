@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import ProgressiveReleaseSection from "@/components/automation/ProgressiveReleaseSection";
 
 type AssignmentMode =
   | "round_robin"
@@ -126,6 +127,10 @@ export default function AutomationPage() {
           </div>
         )}
       </div>
+
+      {/* Phase 17 — Progressive Lead Release (only meaningful when auto
+          assignment is on; the engine itself also honors the master toggle). */}
+      <ProgressiveReleaseSection />
 
       <div className="bg-white border border-slate-200 rounded-lg p-4">
         <div className="flex items-center justify-between">

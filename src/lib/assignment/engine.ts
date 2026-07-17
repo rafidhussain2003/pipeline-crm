@@ -32,8 +32,11 @@ class DefaultAssignmentEngine implements AssignmentEngine {
     // so a REASSIGNMENT attempt of an already-owned lead (recycle /
     // force-recycle pass the current owner to exclude) never spawns a spurious
     // "unassigned" job — that lead still has its owner. Idempotent regardless
-    // (one live job per lead).
-    if (result.outcome === "no_eligible_agent" && !request.excludeAgentId) {
+    // (one live job per lead). Phase 17: also gated off for "progressive" —
+    // a release-cycle miss needs no durable retry job (the lead stays in the
+    // backlog and the NEXT cycle simply picks it up; a job would only bounce
+    // off the pipeline's progressive gate anyway).
+    if (result.outcome === "no_eligible_agent" && !request.excludeAgentId && request.source !== "progressive") {
       await assignmentQueue.enqueue({
         leadId: request.leadId,
         companyId: request.companyId,

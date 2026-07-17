@@ -4,7 +4,9 @@ import type { PresenceStatus } from "@/lib/presence";
 // failed attempt is persisted (only arrival/manual persist a failure row —
 // sweep/queue retries the same leads repeatedly and must not flood the
 // history), and the label recorded for analytics.
-export type AssignSource = "arrival" | "sweep" | "manual" | "queue" | "recycle";
+// "progressive" (Phase 17) = a release cycle of the Progressive Lead Release
+// engine; persisted like sweep/queue (successes recorded, retries not).
+export type AssignSource = "arrival" | "sweep" | "manual" | "queue" | "recycle" | "progressive";
 
 // The result of one assignment DECISION, regardless of how it was invoked.
 export type AssignmentOutcome =
@@ -24,6 +26,13 @@ export interface AssignmentRequest {
   // stateless about attempts; the job row owns that count and passes it in
   // so history records the real attempt number.
   attempt?: number;
+  // Phase 17: restrict the candidate pool to these agents (the Progressive
+  // Release engine passes the agents who still hold batch allowance this
+  // cycle). Absent/undefined = today's behavior, byte-for-byte — every other
+  // caller is untouched. The pipeline still applies ALL its own gates on top
+  // (presence, skill, workload, strategy), so this can only narrow, never
+  // bypass, the existing rules.
+  allowedAgentIds?: string[];
 }
 
 export interface AssignmentResult {

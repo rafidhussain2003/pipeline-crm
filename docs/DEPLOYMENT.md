@@ -27,7 +27,7 @@ Schema lives in `src/db/schema.ts`; migrations in `drizzle/`. Generate with `npm
 - Single web instance today. Before scaling to multiple instances, provision Redis and swap the in-process cache/queue/rate-limit implementations (interfaces unchanged) — otherwise rate limits and metrics are per-instance (workers are already safe: SKIP LOCKED dedups).
 
 ## Cron backstops (external scheduler, `x-cron-secret: $CRON_SECRET`)
-- `POST /api/cron/assign-queued` — drains the assignment queue + recovery + SLA escalation (every 1–2 min).
+- `POST /api/cron/assign-queued` — drains the assignment queue + recovery + SLA escalation (every 1–2 min). When a company has **Progressive Lead Release** enabled (Automation settings), this same tick drives its paced release cycles — the configured release interval (1–10 min) is gated per company in `progressive_release_state`, so keep this cron at 1 min for full resolution. No separate worker.
 - `POST /api/cron/capi-worker` — drains the Conversions API queue + reclaim + reconcile.
 - `POST /api/cron/callback-worker` — **every 1 min.** Delivers due callback reminders + reclaims stale rows + sweeps overdue callbacks to `missed`. Unlike the others this is the PRIMARY trigger, not a backstop: reminders fire when their time arrives, and nothing else watches the clock.
 - `POST /api/cron/recycle-leads`, `POST /api/cron/cleanup-tokens`, `POST /api/cron/resume-imports`.

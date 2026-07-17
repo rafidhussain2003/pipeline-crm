@@ -27,6 +27,7 @@ import { warmAIContext } from "./ai/strategy";
 import { parseLeadRequirements } from "./ai/skills";
 import { recordStageEvent } from "@/lib/lifecycle/service";
 import type { LifecycleStage } from "@/lib/lifecycle/stages";
+import { getProgressiveConfig } from "./progressive/config";
 import type { AssignmentOutcome, AssignmentRequest, AssignmentResult, AssignSource, CandidateAgent, DecisionDetail } from "./types";
 
 function nowMinuteOfDay(): number {
@@ -101,6 +102,20 @@ async function decide(
     return result("skipped", startedAt, { reason: "auto_assign_disabled" });
   }
 
+  // Phase 17 gate: when Progressive Lead Release is ON, BACKLOG paths defer to
+  // the release engine — a queued-job retry draining at 9am must not hand the
+  // whole overnight backlog to the first agent, bypassing the pacing/reserve.
+  // Only retry contexts are gated: "arrival" (fresh lead, speed-to-lead),
+  // "manual" (a human's explicit action) and "recycle" (re-routing an owned
+  // lead) stay immediate. Release-cycle calls carry allowedAgentIds and pass.
+  if ((source === "queue" || source === "sweep") && !request.allowedAgentIds) {
+    const progressive = await getProgressiveConfig(companyId);
+    if (progressive.enabled) {
+      logger.debug("assignment_skipped", { reason: "progressive_release_active" });
+      return result("skipped", startedAt, { reason: "progressive_release_active" });
+    }
+  }
+
   // STEP 1: Validate lead (blacklist gate — never auto-assigned).
   const [leadRow] = await db
     .select({
@@ -134,6 +149,18 @@ async function decide(
   if (pool.length === 0) {
     logger.info("assignment_skipped", { reason: "no_active_agents" });
     return result("no_eligible_agent", startedAt, { reason: "no_active_agents" });
+  }
+
+  // Phase 17: a Progressive Release cycle restricts candidates to the agents
+  // holding batch allowance. A HARD filter (no fallback to the full pool —
+  // that would defeat the per-agent batch caps); every later gate still runs.
+  if (request.allowedAgentIds) {
+    const allowed = new Set(request.allowedAgentIds);
+    pool = pool.filter((a) => allowed.has(a.id));
+    if (pool.length === 0) {
+      logger.info("assignment_skipped", { reason: "no_allowed_agents_in_pool" });
+      return result("no_eligible_agent", startedAt, { reason: "no_allowed_agents_in_pool" });
+    }
   }
 
   if (excludeAgentId) {

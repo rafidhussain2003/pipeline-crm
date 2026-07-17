@@ -40,6 +40,7 @@ export type MetricName =
   | "assignment.assigned"
   | "assignment.claim_lost"
   | "assignment.queue_drained"
+  | "assignment.progressive_released"
   // Durable assignment-queue counters (Phase 1 engine foundation).
   | "assignment.failed"
   | "assignment.job_enqueued"
@@ -65,6 +66,7 @@ export type MetricName =
 // path, and every call site here stays the same when that arrives).
 export type TimingName =
   | "assignment.decision_ms"
+  | "assignment.progressive_cycle_ms"
   | "ingest.lead_ms"
   | "insights.recompute_ms"
   | "queue.reserve_ms"
@@ -117,6 +119,7 @@ const ALL_METRIC_NAMES: MetricName[] = [
   "assignment.assigned",
   "assignment.claim_lost",
   "assignment.queue_drained",
+  "assignment.progressive_released",
   "assignment.failed",
   "assignment.job_enqueued",
   "assignment.job_completed",
@@ -133,7 +136,7 @@ const ALL_METRIC_NAMES: MetricName[] = [
   "supervisor.force_recycled",
 ];
 
-const ALL_TIMING_NAMES: TimingName[] = ["assignment.decision_ms", "ingest.lead_ms", "insights.recompute_ms", "queue.reserve_ms", "capi.send_ms", "db.ping_ms"];
+const ALL_TIMING_NAMES: TimingName[] = ["assignment.decision_ms", "assignment.progressive_cycle_ms", "ingest.lead_ms", "insights.recompute_ms", "queue.reserve_ms", "capi.send_ms", "db.ping_ms"];
 const TIMING_RING_SIZE = 512; // recent samples kept per name for percentile estimation
 
 type TimingState = { count: number; sum: number; min: number; max: number; ring: number[]; ringPos: number };

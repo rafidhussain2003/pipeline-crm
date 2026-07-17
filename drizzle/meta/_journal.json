@@ -183,6 +183,13 @@
       "when": 1784241544314,
       "tag": "0025_careful_norman_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784301768833,
+      "tag": "0026_skinny_franklin_richards",
+      "breakpoints": true
     }
   ]
 }

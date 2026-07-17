@@ -961,6 +961,42 @@ export const automationSettings = pgTable("automation_settings", {
   // recycle SLA/untouched/offline thresholds, rebalance thresholds, priority
   // weights). Null = built-in defaults (see src/lib/lifecycle/config.ts).
   queueConfig: jsonb("queue_config"),
+  // Phase 17 Progressive Lead Release settings (enabled, release interval,
+  // reserved backlog %, per-tier batch sizes, max active leads). Null = the
+  // built-in defaults with the feature OFF (see
+  // src/lib/assignment/progressive/config.ts) — same jsonb-over-defaults
+  // pattern as aiConfig/queueConfig, so new knobs never need a migration.
+  progressiveConfig: jsonb("progressive_config"),
+});
+
+// ---------------------------------------------------------------------------
+// Progressive Lead Release state (Phase 17) — one row per company holding the
+// engine's pacing + reserved-backlog "wave" bookkeeping. This is runtime
+// STATE, not configuration (that's automation_settings.progressive_config):
+// it must survive restarts and be atomically claimable across instances, so
+// it lives in its own row rather than in-process memory.
+// ---------------------------------------------------------------------------
+export const progressiveReleaseState = pgTable("progressive_release_state", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id")
+    .references(() => companies.id, { onDelete: "cascade" })
+    .notNull()
+    .unique(),
+  // A "wave" is one contiguous drain of a backlog (e.g. the overnight queue).
+  // It opens when the engine first sees backlog with no active wave, and
+  // closes when the backlog hits zero. initialBacklog is the wave's high-water
+  // mark (grows if new leads arrive mid-wave); releasedCount is how many the
+  // engine has released so far this wave — together they anchor the reserved-
+  // backlog math (see progressive/engine.ts).
+  waveStartedAt: timestamp("wave_started_at"),
+  initialBacklog: integer("initial_backlog").notNull().default(0),
+  releasedCount: integer("released_count").notNull().default(0),
+  lastCycleAt: timestamp("last_cycle_at"),
+  // The pacing gate: a cycle may only run when now >= nextReleaseAt. Claimed
+  // atomically (UPDATE ... WHERE next_release_at <= now() RETURNING), which
+  // makes the row itself the cross-instance mutex — no advisory locks.
+  nextReleaseAt: timestamp("next_release_at"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // ---------------------------------------------------------------------------
