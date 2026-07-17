@@ -24,6 +24,8 @@ const FEATURE_RULES: { feature: string; match: (p: string) => boolean }[] = [
   // Finance (Phase 19) — the whole bounded context behind one rule. Note the
   // trailing slash / exact match so the public form path "/f/…" never collides.
   { feature: "finance", match: (p) => p === "/finance" || p.startsWith("/finance/") || p.startsWith("/api/finance") },
+  // Attendance (Phase 20) — same shape.
+  { feature: "attendance", match: (p) => p === "/attendance" || p.startsWith("/attendance/") || p.startsWith("/api/attendance") },
   // Order matters: the progressive sub-path must match before ai_assignment.
   { feature: "progressive_lead_release", match: (p) => p.startsWith("/api/automation-settings/progressive") },
   { feature: "ai_assignment", match: (p) => p.startsWith("/api/automation-settings") || p.startsWith("/settings/automation") },
@@ -71,7 +73,9 @@ export async function proxy(req: NextRequest) {
     pathname.startsWith("/callbacks") ||
     pathname.startsWith("/operations") ||
     pathname === "/finance" ||
-    pathname.startsWith("/finance/");
+    pathname.startsWith("/finance/") ||
+    pathname === "/attendance" ||
+    pathname.startsWith("/attendance/");
   const isSuperAdminRoute = pathname.startsWith("/super-admin");
   const isApiRoute = pathname.startsWith("/api/");
 
@@ -145,6 +149,7 @@ export const config = {
     "/callbacks/:path*",
     "/operations/:path*",
     "/finance/:path*",
+    "/attendance/:path*",
     "/super-admin/:path*",
     "/api/:path*",
   ],

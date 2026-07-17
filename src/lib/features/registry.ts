@@ -36,7 +36,9 @@ export const FEATURES: readonly FeatureDef[] = [
   // Owner switches on per company.
   { key: "finance", label: "Finance", description: "Bookkeeping foundation: chart of accounts, general ledger, journals, revenue & expenses.", defaultEnabled: false },
   // ── Optional future modules — registered only (no pages, no entities). ────
-  { key: "attendance", label: "Attendance", description: "Attendance module (coming soon).", defaultEnabled: false, placeholder: true },
+  // Attendance (Phase 20): a real module now — check-in/out, breaks, shifts,
+  // leave, holidays, logs. Optional paid module, owner-enabled per company.
+  { key: "attendance", label: "Attendance", description: "Attendance & shifts: check-in/out, breaks, leave, holidays, logs.", defaultEnabled: false },
   { key: "payroll", label: "Payroll", description: "Payroll module (coming soon).", defaultEnabled: false, placeholder: true },
   { key: "bookkeeping", label: "Bookkeeping", description: "Bookkeeping module (coming soon).", defaultEnabled: false, placeholder: true },
   { key: "reports", label: "Reports", description: "Advanced reporting module (coming soon).", defaultEnabled: false, placeholder: true },

@@ -2233,3 +2233,219 @@ export const financeExpenses = pgTable(
     dateIdx: index("finance_expenses_company_date_idx").on(t.companyId, t.entryDate),
   })
 );
+
+// ---------------------------------------------------------------------------
+// Phase 20 — Attendance & Shift Management Engine. Like Finance, an
+// independent bounded context: it references users only for identity, never
+// CRM data, and future Payroll consumes it exclusively through the attendance
+// services (getWorkSummary and friends) — never by joining these tables.
+//
+// The design centers on attendance_records: exactly ONE row per user per work
+// day, carrying the check-in/out pair and the DERIVED figures (late status,
+// departure status, break minutes, worked minutes) computed ONCE at the
+// moment they become final. Payroll reads stored facts; nothing is
+// recalculated per report ("no duplicate calculations").
+// ---------------------------------------------------------------------------
+
+// Shifts. Times are minutes-from-midnight WALL CLOCK in the shift's timezone
+// (falling back to the company's, then UTC) — an endMinute smaller than
+// startMinute means the shift crosses midnight (night shifts). `flexible`
+// shifts skip late/early evaluation entirely.
+export const attendanceShifts = pgTable(
+  "attendance_shifts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 80 }).notNull(),
+    startMinute: integer("start_minute").notNull().default(9 * 60),
+    endMinute: integer("end_minute").notNull().default(17 * 60),
+    graceMinutes: integer("grace_minutes").notNull().default(10),
+    // Past grace but within this many minutes of start = "late"; beyond = "very_late".
+    veryLateMinutes: integer("very_late_minutes").notNull().default(30),
+    // Leaving more than this many minutes before shift end = "left_early".
+    earlyLeaveMinutes: integer("early_leave_minutes").notNull().default(15),
+    flexible: boolean("flexible").notNull().default(false),
+    timezone: varchar("timezone", { length: 64 }), // null = company timezone
+    isSystem: boolean("is_system").notNull().default(false), // seeded defaults
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyIdx: index("attendance_shifts_company_idx").on(t.companyId),
+    nameUniq: uniqueIndex("attendance_shifts_company_name_uniq").on(t.companyId, t.name),
+  })
+);
+
+// Current shift per user. One row per user today; rotating shifts later turn
+// this into dated history rows (drop the unique, add effective ranges) —
+// effectiveFrom already exists so that change is additive.
+export const attendanceAssignments = pgTable(
+  "attendance_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    shiftId: uuid("shift_id").references(() => attendanceShifts.id, { onDelete: "set null" }),
+    effectiveFrom: date("effective_from"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    userUniq: uniqueIndex("attendance_assignments_company_user_uniq").on(t.companyId, t.userId),
+  })
+);
+
+// The day record — Payroll's raw material. workDate is the check-in date in
+// the shift's timezone; a night shift checking out after midnight stays on
+// its check-in date (one row per worked day, unambiguous for pay periods).
+export const attendanceRecords = pgTable(
+  "attendance_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    workDate: date("work_date").notNull(),
+    // Snapshot of the shift the evaluation used (assignment may change later;
+    // history must not).
+    shiftId: uuid("shift_id").references(() => attendanceShifts.id, { onDelete: "set null" }),
+    checkInAt: timestamp("check_in_at").notNull(),
+    checkOutAt: timestamp("check_out_at"),
+    checkInTimezone: varchar("check_in_timezone", { length: 64 }),
+    checkInIp: varchar("check_in_ip", { length: 64 }),
+    checkInUserAgent: varchar("check_in_user_agent", { length: 255 }),
+    checkInLocation: jsonb("check_in_location"), // placeholder — GPS/geo later
+    checkInDevice: varchar("check_in_device", { length: 80 }), // placeholder — device binding later
+    lateStatus: varchar("late_status", { length: 16 }), // on_time | late | very_late
+    lateMinutes: integer("late_minutes").notNull().default(0),
+    departureStatus: varchar("departure_status", { length: 16 }), // normal | left_early | overtime (status only — payments are Payroll's)
+    earlyMinutes: integer("early_minutes").notNull().default(0),
+    breakMinutes: integer("break_minutes").notNull().default(0),
+    workedMinutes: integer("worked_minutes"), // set once at check-out: (out − in) − breaks
+    manualAdjusted: boolean("manual_adjusted").notNull().default(false),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    dayUniq: uniqueIndex("attendance_records_company_user_date_uniq").on(t.companyId, t.userId, t.workDate),
+    companyDateIdx: index("attendance_records_company_date_idx").on(t.companyId, t.workDate),
+    userDateIdx: index("attendance_records_user_date_idx").on(t.userId, t.workDate),
+  })
+);
+
+export const attendanceBreaks = pgTable(
+  "attendance_breaks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    recordId: uuid("record_id")
+      .references(() => attendanceRecords.id, { onDelete: "cascade" })
+      .notNull(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    startAt: timestamp("start_at").notNull(),
+    endAt: timestamp("end_at"),
+    durationMinutes: integer("duration_minutes"), // set once at break end
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    recordIdx: index("attendance_breaks_record_idx").on(t.recordId),
+  })
+);
+
+export const attendanceLeaveRequests = pgTable(
+  "attendance_leave_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    type: varchar("type", { length: 20 }).notNull(), // casual | sick | paid | unpaid | emergency
+    startDate: date("start_date").notNull(),
+    endDate: date("end_date").notNull(),
+    reason: text("reason"),
+    status: varchar("status", { length: 16 }).notNull().default("pending"), // pending | approved | rejected | cancelled
+    reviewedBy: uuid("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewNote: text("review_note"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    statusIdx: index("attendance_leaves_company_status_idx").on(t.companyId, t.status),
+    userIdx: index("attendance_leaves_user_range_idx").on(t.userId, t.startDate, t.endDate),
+  })
+);
+
+// Holidays. `recurring` = same month/day every year (national days); dated
+// rows handle one-offs and future years explicitly.
+export const attendanceHolidays = pgTable(
+  "attendance_holidays",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    date: date("date").notNull(),
+    kind: varchar("kind", { length: 20 }).notNull().default("company"), // national | company | optional
+    recurring: boolean("recurring").notNull().default(false),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    dateIdx: index("attendance_holidays_company_date_idx").on(t.companyId, t.date),
+  })
+);
+
+// The attendance EVENT log: every action (check in/out, breaks, leave
+// lifecycle, manual adjustments, shift assignment) as an append-only stream.
+// Complements the platform audit_log (which records the admin-facing actions
+// with before/after) — this one is the per-employee timeline.
+export const attendanceLogs = pgTable(
+  "attendance_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(), // the employee the event is about
+    actorUserId: uuid("actor_user_id").references(() => users.id, { onDelete: "set null" }), // who performed it (self or an admin)
+    recordId: uuid("record_id").references(() => attendanceRecords.id, { onDelete: "set null" }),
+    action: varchar("action", { length: 30 }).notNull(),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyIdx: index("attendance_logs_company_created_idx").on(t.companyId, t.createdAt),
+    userIdx: index("attendance_logs_user_created_idx").on(t.userId, t.createdAt),
+  })
+);
+
+export const attendanceSettings = pgTable("attendance_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id")
+    .references(() => companies.id, { onDelete: "cascade" })
+    .notNull()
+    .unique(),
+  defaultShiftId: uuid("default_shift_id").references(() => attendanceShifts.id, { onDelete: "set null" }),
+  // Days of week (0=Sun..6=Sat) that don't count toward absence.
+  weekendDays: jsonb("weekend_days").notNull().default(sql`'[0,6]'::jsonb`),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});

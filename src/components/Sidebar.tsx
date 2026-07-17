@@ -8,6 +8,20 @@ import PresenceHeartbeat from "./PresenceHeartbeat";
 // Finance module navigation (Phase 19) — rendered only when the company's
 // feature profile has "finance" AND the role can at least view it. A single
 // collapsible group so ten entries don't drown the core CRM nav.
+// Attendance module navigation (Phase 20). `managerOnly` items are hidden
+// from agents — an agent's attendance world is Today, Leave and Holidays.
+const ATTENDANCE_ITEMS: { href: string; label: string; managerOnly?: boolean }[] = [
+  { href: "/attendance", label: "Dashboard", managerOnly: true },
+  { href: "/attendance/today", label: "Today" },
+  { href: "/attendance/employees", label: "Employees", managerOnly: true },
+  { href: "/attendance/shifts", label: "Shifts", managerOnly: true },
+  { href: "/attendance/logs", label: "Attendance Logs", managerOnly: true },
+  { href: "/attendance/leave", label: "Leave Management" },
+  { href: "/attendance/holidays", label: "Holidays" },
+  { href: "/attendance/reports", label: "Reports", managerOnly: true },
+  { href: "/attendance/settings", label: "Settings", managerOnly: true },
+];
+
 const FINANCE_ITEMS: { href: string; label: string }[] = [
   { href: "/finance", label: "Dashboard" },
   { href: "/finance/accounts", label: "Chart of Accounts" },
@@ -74,6 +88,12 @@ export default function Sidebar({
   const has = (feature?: string) => !feature || !features || features[feature] === true;
   const inFinance = pathname === "/finance" || pathname.startsWith("/finance/");
   const [financeOpen, setFinanceOpen] = useState(inFinance);
+  const inAttendance = pathname === "/attendance" || pathname.startsWith("/attendance/");
+  const [attendanceOpen, setAttendanceOpen] = useState(inAttendance);
+  // Attendance is for the whole company (agents check in too) — feature-gated
+  // only; the item list narrows by role below.
+  const showAttendance = !!features && features.attendance === true;
+  const attendanceManager = role === "admin" || role === "manager";
   // Finance is visible to roles with finance:view (admin + manager today) —
   // agents never see the module. super_admin (features = null) has no company
   // books, so the group requires an actual feature grant.
@@ -141,6 +161,37 @@ export default function Sidebar({
           >
             {CONVERSIONS_NAV_ITEM.label}
           </Link>
+        )}
+        {showAttendance && (
+          <div className="pt-1">
+            <button
+              onClick={() => setAttendanceOpen((v) => !v)}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                inAttendance ? "text-sky-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              <span>Attendance</span>
+              <span className="text-[10px] text-slate-400">{attendanceOpen ? "▾" : "▸"}</span>
+            </button>
+            {attendanceOpen && (
+              <div className="mt-0.5 space-y-0.5">
+                {ATTENDANCE_ITEMS.filter((item) => attendanceManager || !item.managerOnly).map((item) => {
+                  const active = pathname === item.href;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
+                        active ? "bg-sky-50 text-sky-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
         {showFinance && (
           <div className="pt-1">

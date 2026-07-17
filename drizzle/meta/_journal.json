@@ -204,6 +204,13 @@
       "when": 1784311113350,
       "tag": "0028_overrated_firelord",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1784316653956,
+      "tag": "0029_mysterious_earthquake",
+      "breakpoints": true
     }
   ]
 }
