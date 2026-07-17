@@ -2673,3 +2673,164 @@ export const payrollItems = pgTable(
     runIdx: index("payroll_items_run_idx").on(t.runId),
   })
 );
+
+// ---------------------------------------------------------------------------
+// Phase 22 — HR Core & Employee Management. THE master employee directory.
+//
+// SINGLE IDENTITY, NO DUPLICATION: an hr_employees row is a 1:1 EXTENSION of an
+// existing `users` row (userId is unique). The login identity — name, email,
+// phone — stays on `users` (its single source); HR owns the HR-specific fields
+// (structured name, DOB, department, designation, manager, employment type,
+// documents, …). Because Attendance and Payroll already key on userId, they
+// already reference THE SAME employee identity this module makes authoritative —
+// no employee data is duplicated across the three contexts, and no attendance/
+// payroll table changes to "point at HR". HR simply enriches the shared userId.
+// ---------------------------------------------------------------------------
+
+// Departments — hierarchy-ready via a self parent, with an optional manager.
+export const hrDepartments = pgTable(
+  "hr_departments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 120 }).notNull(),
+    code: varchar("code", { length: 30 }).notNull(),
+    parentId: uuid("parent_id").references((): AnyPgColumn => hrDepartments.id, { onDelete: "set null" }),
+    managerUserId: uuid("manager_user_id").references(() => users.id, { onDelete: "set null" }),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    codeUniq: uniqueIndex("hr_departments_company_code_uniq").on(t.companyId, t.code),
+    companyIdx: index("hr_departments_company_idx").on(t.companyId, t.active),
+  })
+);
+
+// Designations (job titles) — optionally scoped to a department, with a numeric
+// hierarchy level (lower = more senior) for future org modeling.
+export const hrDesignations = pgTable(
+  "hr_designations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    title: varchar("title", { length: 120 }).notNull(),
+    code: varchar("code", { length: 30 }).notNull(),
+    departmentId: uuid("department_id").references(() => hrDepartments.id, { onDelete: "set null" }),
+    level: integer("level").notNull().default(5),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    codeUniq: uniqueIndex("hr_designations_company_code_uniq").on(t.companyId, t.code),
+    companyIdx: index("hr_designations_company_idx").on(t.companyId, t.active),
+  })
+);
+
+// Employment types. Five are seeded per company (isSystem, non-deletable);
+// companies add their own custom types.
+export const hrEmploymentTypes = pgTable(
+  "hr_employment_types",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 60 }).notNull(),
+    code: varchar("code", { length: 30 }).notNull(),
+    isSystem: boolean("is_system").notNull().default(false),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    codeUniq: uniqueIndex("hr_employment_types_company_code_uniq").on(t.companyId, t.code),
+  })
+);
+
+// The employee master — one authoritative HR profile per user.
+export const hrEmployees = pgTable(
+  "hr_employees",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    // 1:1 with the login identity. Unique per company — a user has at most one
+    // HR profile; email/phone/login-name are read through from `users`.
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    employeeCode: varchar("employee_code", { length: 40 }).notNull(),
+    firstName: varchar("first_name", { length: 80 }).notNull(),
+    lastName: varchar("last_name", { length: 80 }),
+    preferredName: varchar("preferred_name", { length: 80 }),
+    dateOfBirth: date("date_of_birth"),
+    gender: varchar("gender", { length: 20 }), // placeholder — no downstream logic
+    joiningDate: date("joining_date"),
+    confirmationDate: date("confirmation_date"), // placeholder
+    // active | probation | on_notice | inactive | terminated
+    employmentStatus: varchar("employment_status", { length: 20 }).notNull().default("active"),
+    departmentId: uuid("department_id").references(() => hrDepartments.id, { onDelete: "set null" }),
+    designationId: uuid("designation_id").references(() => hrDesignations.id, { onDelete: "set null" }),
+    employmentTypeId: uuid("employment_type_id").references(() => hrEmploymentTypes.id, { onDelete: "set null" }),
+    // The reporting manager, referenced by user identity (employees ARE users),
+    // which is what powers the org chart.
+    managerUserId: uuid("manager_user_id").references(() => users.id, { onDelete: "set null" }),
+    workLocation: varchar("work_location", { length: 120 }), // placeholder
+    emergencyContact: jsonb("emergency_contact"), // placeholder — { name, phone, relation }
+    profilePhotoUrl: varchar("profile_photo_url", { length: 500 }), // placeholder — no upload
+    notes: text("notes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    userUniq: uniqueIndex("hr_employees_company_user_uniq").on(t.companyId, t.userId),
+    codeUniq: uniqueIndex("hr_employees_company_code_uniq").on(t.companyId, t.employeeCode),
+    statusIdx: index("hr_employees_company_status_idx").on(t.companyId, t.employmentStatus),
+    deptIdx: index("hr_employees_company_dept_idx").on(t.companyId, t.departmentId),
+    managerIdx: index("hr_employees_manager_idx").on(t.managerUserId),
+  })
+);
+
+// Employee documents — ARCHITECTURE ONLY. Metadata rows (type + title + an
+// external reference placeholder); no file bytes, no OCR, no e-signatures.
+export const hrDocuments = pgTable(
+  "hr_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    employeeId: uuid("employee_id")
+      .references(() => hrEmployees.id, { onDelete: "cascade" })
+      .notNull(),
+    // offer_letter | employment_contract | id_document | certificate | other
+    type: varchar("type", { length: 30 }).notNull(),
+    title: varchar("title", { length: 160 }).notNull(),
+    reference: varchar("reference", { length: 500 }), // placeholder — external URL/ref, no storage
+    notes: text("notes"),
+    uploadedBy: uuid("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    employeeIdx: index("hr_documents_employee_idx").on(t.employeeId),
+  })
+);
+
+export const hrSettings = pgTable("hr_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id")
+    .references(() => companies.id, { onDelete: "cascade" })
+    .notNull()
+    .unique(),
+  employeeCodePrefix: varchar("employee_code_prefix", { length: 12 }).notNull().default("EMP"),
+  nextEmployeeNumber: integer("next_employee_number").notNull().default(1),
+  defaultEmploymentTypeId: uuid("default_employment_type_id").references(() => hrEmploymentTypes.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});

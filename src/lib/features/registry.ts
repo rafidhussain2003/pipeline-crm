@@ -48,7 +48,9 @@ export const FEATURES: readonly FeatureDef[] = [
   { key: "projects", label: "Projects", description: "Project management module (coming soon).", defaultEnabled: false, placeholder: true },
   { key: "assets", label: "Assets", description: "Asset management module (coming soon).", defaultEnabled: false, placeholder: true },
   { key: "inventory", label: "Inventory", description: "Inventory module (coming soon).", defaultEnabled: false, placeholder: true },
-  { key: "hr", label: "HR", description: "Human resources module (coming soon).", defaultEnabled: false, placeholder: true },
+  // HR Core (Phase 22): the master employee directory — employees,
+  // departments, designations, employment types, documents, org chart.
+  { key: "hr", label: "HR", description: "Employee master directory: departments, designations, org chart, documents.", defaultEnabled: false },
 ] as const;
 
 export type FeatureKey = (typeof FEATURES)[number]["key"];

@@ -8,6 +8,21 @@ import PresenceHeartbeat from "./PresenceHeartbeat";
 // Finance module navigation (Phase 19) — rendered only when the company's
 // feature profile has "finance" AND the role can at least view it. A single
 // collapsible group so ten entries don't drown the core CRM nav.
+// HR module navigation (Phase 22). `managerOnly` items are hidden from
+// employees — an employee's HR world is only their own profile.
+const HR_ITEMS: { href: string; label: string; managerOnly?: boolean }[] = [
+  { href: "/hr", label: "Dashboard", managerOnly: true },
+  { href: "/hr/employees", label: "Employees", managerOnly: true },
+  { href: "/hr/me", label: "My Profile" },
+  { href: "/hr/departments", label: "Departments", managerOnly: true },
+  { href: "/hr/designations", label: "Designations", managerOnly: true },
+  { href: "/hr/employment-types", label: "Employment Types", managerOnly: true },
+  { href: "/hr/documents", label: "Documents", managerOnly: true },
+  { href: "/hr/org-chart", label: "Organization Chart", managerOnly: true },
+  { href: "/hr/reports", label: "Reports", managerOnly: true },
+  { href: "/hr/settings", label: "Settings", managerOnly: true },
+];
+
 // Payroll module navigation (Phase 21). `managerOnly` items are hidden from
 // employees — an employee's payroll world is only their own payslips.
 const PAYROLL_ITEMS: { href: string; label: string; managerOnly?: boolean }[] = [
@@ -116,6 +131,12 @@ export default function Sidebar({
   // list narrows to Payslips-only for agents.
   const showPayroll = !!features && features.payroll === true;
   const payrollManager = role === "admin" || role === "manager";
+  const inHr = pathname === "/hr" || pathname.startsWith("/hr/");
+  const [hrOpen, setHrOpen] = useState(inHr);
+  // HR is company-wide (every employee sees their own profile); the item list
+  // narrows to My Profile only for agents.
+  const showHr = !!features && features.hr === true;
+  const hrManager = role === "admin" || role === "manager";
   // Finance is visible to roles with finance:view (admin + manager today) —
   // agents never see the module. super_admin (features = null) has no company
   // books, so the group requires an actual feature grant.
@@ -205,6 +226,37 @@ export default function Sidebar({
                       href={item.href}
                       className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
                         active ? "bg-sky-50 text-sky-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {showHr && (
+          <div className="pt-1">
+            <button
+              onClick={() => setHrOpen((v) => !v)}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                inHr ? "text-rose-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              <span>HR</span>
+              <span className="text-[10px] text-slate-400">{hrOpen ? "▾" : "▸"}</span>
+            </button>
+            {hrOpen && (
+              <div className="mt-0.5 space-y-0.5">
+                {HR_ITEMS.filter((item) => hrManager || !item.managerOnly).map((item) => {
+                  const active = pathname === item.href;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
+                        active ? "bg-rose-50 text-rose-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                       }`}
                     >
                       {item.label}
