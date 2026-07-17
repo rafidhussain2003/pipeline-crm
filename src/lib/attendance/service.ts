@@ -4,7 +4,7 @@
 // status, break minutes, worked minutes) are computed ONCE when they become
 // final and stored on the day record.
 import { db } from "@/db";
-import { attendanceBreaks, attendanceLeaveRequests, attendanceRecords, attendanceShifts, users } from "@/db/schema";
+import { attendanceBreaks, attendanceHolidays, attendanceLeaveRequests, attendanceRecords, attendanceSettings, attendanceShifts, users } from "@/db/schema";
 import { and, asc, count, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { AttendanceError, dateInTz, minutesBetween, minutesInTz, type ShiftLike } from "./types";
@@ -314,6 +314,41 @@ export async function attendanceDashboard(companyId: string) {
     pendingLeaveRequests: pendingLeaves.n,
     workDate: today,
   };
+}
+
+// The working-day calendar for a period — the OTHER half of the payroll seam.
+// Expected working days = calendar days minus weekend days (from settings)
+// minus holidays (exact + recurring). Payroll derives absent days from this
+// (expected − present − leave) so the calendar logic lives ONLY in attendance.
+export async function getPeriodCalendar(companyId: string, from: string, to: string) {
+  await ensureAttendanceSetup(companyId);
+  const [settings] = await db.select({ weekendDays: attendanceSettings.weekendDays }).from(attendanceSettings).where(eq(attendanceSettings.companyId, companyId)).limit(1);
+  const weekend = new Set(((settings?.weekendDays as number[]) ?? [0, 6]).filter((d) => typeof d === "number"));
+
+  // Holidays touching the period (recurring matched by month-day below).
+  const holidayRows = await db
+    .select({ date: attendanceHolidays.date, name: attendanceHolidays.name, kind: attendanceHolidays.kind, recurring: attendanceHolidays.recurring })
+    .from(attendanceHolidays)
+    .where(eq(attendanceHolidays.companyId, companyId));
+  const exactHolidays = new Set(holidayRows.filter((h) => !h.recurring).map((h) => h.date));
+  const recurringMonthDays = new Set(holidayRows.filter((h) => h.recurring).map((h) => h.date.slice(5)));
+
+  let expectedWorkingDays = 0;
+  const holidayDates: { date: string; name: string; kind: string }[] = [];
+  const start = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+    const iso = d.toISOString().slice(0, 10);
+    const isHol = exactHolidays.has(iso) || recurringMonthDays.has(iso.slice(5));
+    if (isHol) {
+      const match = holidayRows.find((h) => h.date === iso || (h.recurring && h.date.slice(5) === iso.slice(5)));
+      holidayDates.push({ date: iso, name: match?.name ?? "Holiday", kind: match?.kind ?? "company" });
+      continue;
+    }
+    if (weekend.has(d.getUTCDay())) continue;
+    expectedWorkingDays++;
+  }
+  return { from, to, expectedWorkingDays, holidays: holidayDates, weekendDays: [...weekend] };
 }
 
 // ── THE PAYROLL SEAM (Phase 21+ consumes exactly this) ──────────────────────

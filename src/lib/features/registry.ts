@@ -39,7 +39,9 @@ export const FEATURES: readonly FeatureDef[] = [
   // Attendance (Phase 20): a real module now — check-in/out, breaks, shifts,
   // leave, holidays, logs. Optional paid module, owner-enabled per company.
   { key: "attendance", label: "Attendance", description: "Attendance & shifts: check-in/out, breaks, leave, holidays, logs.", defaultEnabled: false },
-  { key: "payroll", label: "Payroll", description: "Payroll module (coming soon).", defaultEnabled: false, placeholder: true },
+  // Payroll (Phase 21): a real module now — salary structures, runs, payslips,
+  // incentives/deductions/overtime, with Finance + Attendance integration.
+  { key: "payroll", label: "Payroll", description: "Salary structures, payroll runs, payslips — integrated with Finance & Attendance.", defaultEnabled: false },
   { key: "bookkeeping", label: "Bookkeeping", description: "Bookkeeping module (coming soon).", defaultEnabled: false, placeholder: true },
   { key: "reports", label: "Reports", description: "Advanced reporting module (coming soon).", defaultEnabled: false, placeholder: true },
   { key: "future_ai", label: "Future AI", description: "Next-generation AI capabilities (coming soon).", defaultEnabled: false, placeholder: true },

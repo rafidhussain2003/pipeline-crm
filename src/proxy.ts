@@ -26,6 +26,8 @@ const FEATURE_RULES: { feature: string; match: (p: string) => boolean }[] = [
   { feature: "finance", match: (p) => p === "/finance" || p.startsWith("/finance/") || p.startsWith("/api/finance") },
   // Attendance (Phase 20) — same shape.
   { feature: "attendance", match: (p) => p === "/attendance" || p.startsWith("/attendance/") || p.startsWith("/api/attendance") },
+  // Payroll (Phase 21) — same shape.
+  { feature: "payroll", match: (p) => p === "/payroll" || p.startsWith("/payroll/") || p.startsWith("/api/payroll") },
   // Order matters: the progressive sub-path must match before ai_assignment.
   { feature: "progressive_lead_release", match: (p) => p.startsWith("/api/automation-settings/progressive") },
   { feature: "ai_assignment", match: (p) => p.startsWith("/api/automation-settings") || p.startsWith("/settings/automation") },
@@ -75,7 +77,9 @@ export async function proxy(req: NextRequest) {
     pathname === "/finance" ||
     pathname.startsWith("/finance/") ||
     pathname === "/attendance" ||
-    pathname.startsWith("/attendance/");
+    pathname.startsWith("/attendance/") ||
+    pathname === "/payroll" ||
+    pathname.startsWith("/payroll/");
   const isSuperAdminRoute = pathname.startsWith("/super-admin");
   const isApiRoute = pathname.startsWith("/api/");
 
@@ -150,6 +154,7 @@ export const config = {
     "/operations/:path*",
     "/finance/:path*",
     "/attendance/:path*",
+    "/payroll/:path*",
     "/super-admin/:path*",
     "/api/:path*",
   ],

@@ -13,7 +13,7 @@ export {
 
 export {
   checkIn, checkOut, startBreak, endBreak, todayStatus, manualAdjust,
-  listRecords, attendanceDashboard, getWorkSummary,
+  listRecords, attendanceDashboard, getWorkSummary, getPeriodCalendar,
 } from "./service";
 export type { CheckInContext } from "./service";
 

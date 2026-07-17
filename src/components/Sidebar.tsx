@@ -8,6 +8,22 @@ import PresenceHeartbeat from "./PresenceHeartbeat";
 // Finance module navigation (Phase 19) — rendered only when the company's
 // feature profile has "finance" AND the role can at least view it. A single
 // collapsible group so ten entries don't drown the core CRM nav.
+// Payroll module navigation (Phase 21). `managerOnly` items are hidden from
+// employees — an employee's payroll world is only their own payslips.
+const PAYROLL_ITEMS: { href: string; label: string; managerOnly?: boolean }[] = [
+  { href: "/payroll", label: "Dashboard", managerOnly: true },
+  { href: "/payroll/employees", label: "Employees", managerOnly: true },
+  { href: "/payroll/structures", label: "Salary Structures", managerOnly: true },
+  { href: "/payroll/runs", label: "Payroll Runs", managerOnly: true },
+  { href: "/payroll/payslips", label: "Payslips" },
+  { href: "/payroll/incentives", label: "Incentives", managerOnly: true },
+  { href: "/payroll/deductions", label: "Deductions", managerOnly: true },
+  { href: "/payroll/overtime", label: "Overtime", managerOnly: true },
+  { href: "/payroll/registers", label: "Salary Registers", managerOnly: true },
+  { href: "/payroll/reports", label: "Reports", managerOnly: true },
+  { href: "/payroll/settings", label: "Settings", managerOnly: true },
+];
+
 // Attendance module navigation (Phase 20). `managerOnly` items are hidden
 // from agents — an agent's attendance world is Today, Leave and Holidays.
 const ATTENDANCE_ITEMS: { href: string; label: string; managerOnly?: boolean }[] = [
@@ -94,6 +110,12 @@ export default function Sidebar({
   // only; the item list narrows by role below.
   const showAttendance = !!features && features.attendance === true;
   const attendanceManager = role === "admin" || role === "manager";
+  const inPayroll = pathname === "/payroll" || pathname.startsWith("/payroll/");
+  const [payrollOpen, setPayrollOpen] = useState(inPayroll);
+  // Payroll is company-wide too (every employee sees their payslips); the item
+  // list narrows to Payslips-only for agents.
+  const showPayroll = !!features && features.payroll === true;
+  const payrollManager = role === "admin" || role === "manager";
   // Finance is visible to roles with finance:view (admin + manager today) —
   // agents never see the module. super_admin (features = null) has no company
   // books, so the group requires an actual feature grant.
@@ -183,6 +205,37 @@ export default function Sidebar({
                       href={item.href}
                       className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
                         active ? "bg-sky-50 text-sky-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {showPayroll && (
+          <div className="pt-1">
+            <button
+              onClick={() => setPayrollOpen((v) => !v)}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                inPayroll ? "text-teal-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              <span>Payroll</span>
+              <span className="text-[10px] text-slate-400">{payrollOpen ? "▾" : "▸"}</span>
+            </button>
+            {payrollOpen && (
+              <div className="mt-0.5 space-y-0.5">
+                {PAYROLL_ITEMS.filter((item) => payrollManager || !item.managerOnly).map((item) => {
+                  const active = pathname === item.href;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
+                        active ? "bg-teal-50 text-teal-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                       }`}
                     >
                       {item.label}

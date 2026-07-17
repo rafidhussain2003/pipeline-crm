@@ -13,6 +13,7 @@ import {
   real,
   numeric,
   date,
+  bigint,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
@@ -2449,3 +2450,226 @@ export const attendanceSettings = pgTable("attendance_settings", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// ---------------------------------------------------------------------------
+// Phase 21 — Payroll & Salary Management Engine. Payroll is a bounded context
+// that CONSUMES two others through their services and NEVER their tables:
+//   • Attendance — read-only, via getWorkSummary()/getPeriodCalendar() (worked
+//     minutes, present/late/leave/absent days, shift history). No attendance
+//     math is duplicated here.
+//   • Finance — write-only accounting, via JournalService.createAndPost() (the
+//     accrual on approval, the payment on "paid"). No finance table is touched
+//     directly; payroll only stores the journal IDs it got back.
+//
+// MONEY: stored as BIGINT CENTS (exact integer arithmetic; ample headroom for
+// enterprise aggregate runs). Converted to finance's numeric(14,2) dollars only
+// at the JournalService boundary.
+//
+// HISTORY: a payroll_item SNAPSHOTS every figure at calculation time (basic,
+// each component, the attendance summary, the full breakdown). Later structure
+// edits or attendance corrections never rewrite a processed run — the run is
+// the immutable record, which is exactly what an approved/paid payroll must be.
+// ---------------------------------------------------------------------------
+
+// Per-company payroll configuration. Overtime multiplier + the standard workday
+// give the hourly rate used to convert overtime minutes → money; the account
+// codes tell the Finance integration which accounts to post to (all default to
+// the Phase 19 seeded chart, with Salary Payable auto-created on first use).
+export const payrollSettings = pgTable("payroll_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id")
+    .references(() => companies.id, { onDelete: "cascade" })
+    .notNull()
+    .unique(),
+  defaultFrequency: varchar("default_frequency", { length: 12 }).notNull().default("monthly"), // monthly | weekly | biweekly | hourly
+  overtimeMultiplier: real("overtime_multiplier").notNull().default(1.5),
+  standardWorkdayMinutes: integer("standard_workday_minutes").notNull().default(480),
+  standardWorkdaysPerMonth: integer("standard_workdays_per_month").notNull().default(22),
+  payDayOfMonth: integer("pay_day_of_month").notNull().default(1), // drives the "upcoming payroll date"
+  // Finance account codes the accrual/payment journals post to.
+  salaryExpenseAccountCode: varchar("salary_expense_account_code", { length: 20 }).notNull().default("5200"),
+  salaryPayableAccountCode: varchar("salary_payable_account_code", { length: 20 }).notNull().default("2200"),
+  defaultPaymentAccountCode: varchar("default_payment_account_code", { length: 20 }).notNull().default("1100"),
+  nextRunNumber: integer("next_run_number").notNull().default(1),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// Salary structures — VERSIONED. Editing a structure creates a new row
+// (version + 1) chained to the lineage's first row via rootId; the superseded
+// row is deactivated but kept forever. A profile references a specific version
+// row, and a run snapshots its numbers, so history is fully reconstructable.
+export const payrollStructures = pgTable(
+  "payroll_structures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    // The lineage anchor: null on v1, else the v1 row's id. All versions of one
+    // structure share (rootId ?? id).
+    rootId: uuid("root_id").references((): AnyPgColumn => payrollStructures.id, { onDelete: "set null" }),
+    version: integer("version").notNull().default(1),
+    active: boolean("active").notNull().default(true), // false = superseded by a newer version
+    name: varchar("name", { length: 120 }).notNull(),
+    frequency: varchar("frequency", { length: 12 }).notNull().default("monthly"),
+    basicCents: bigint("basic_cents", { mode: "number" }).notNull().default(0),
+    // Ordered components beyond basic: [{ key, label, type, amountCents,
+    // taxable? }]. type ∈ allowance | hra | fixed_incentive | employer_contribution
+    // | deduction | custom. hra & employer_contribution are placeholder types
+    // (carried through the math like allowances/info) — no statutory logic yet.
+    components: jsonb("components").notNull().default(sql`'[]'::jsonb`),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyIdx: index("payroll_structures_company_idx").on(t.companyId, t.active),
+    rootIdx: index("payroll_structures_root_idx").on(t.rootId),
+  })
+);
+
+// One payroll profile per employee.
+export const payrollProfiles = pgTable(
+  "payroll_profiles",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    structureId: uuid("structure_id").references(() => payrollStructures.id, { onDelete: "set null" }),
+    frequency: varchar("frequency", { length: 12 }).notNull().default("monthly"),
+    joiningDate: date("joining_date"),
+    status: varchar("status", { length: 16 }).notNull().default("active"), // active | on_hold | terminated
+    bankAccountRef: varchar("bank_account_ref", { length: 120 }), // placeholder — no bank integration
+    taxRef: varchar("tax_ref", { length: 120 }), // placeholder — no tax engine
+    notes: text("notes"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    userUniq: uniqueIndex("payroll_profiles_company_user_uniq").on(t.companyId, t.userId),
+  })
+);
+
+// Incentives + deductions. kind splits the two; category is the sub-type the
+// spec enumerates (incentive: fixed/performance/sales/manual/recurring;
+// deduction: manual/recurring/penalty/loan/advance — penalty/loan/advance are
+// placeholder categories that ride the same one-time/recurring mechanics).
+export const payrollAdjustments = pgTable(
+  "payroll_adjustments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    kind: varchar("kind", { length: 12 }).notNull(), // incentive | deduction
+    category: varchar("category", { length: 20 }).notNull(),
+    label: varchar("label", { length: 120 }).notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    recurring: boolean("recurring").notNull().default(false),
+    // One-time adjustments apply to the run whose period contains effectiveDate;
+    // recurring ones apply every run from effectiveDate until endDate (or forever).
+    effectiveDate: date("effective_date").notNull(),
+    endDate: date("end_date"),
+    // A one-time adjustment is consumed by the run that pays it (set on
+    // calculate) so it never double-applies.
+    appliedRunId: uuid("applied_run_id"),
+    status: varchar("status", { length: 12 }).notNull().default("active"), // active | consumed | cancelled
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    lookupIdx: index("payroll_adjustments_company_user_idx").on(t.companyId, t.userId, t.status),
+  })
+);
+
+// Payroll runs — the lifecycle envelope. draft → calculated → approved →
+// (locked) → paid. Nothing about a run's items may change once approved; the
+// accrual journal is written on approval, the payment journal on "paid".
+export const payrollRuns = pgTable(
+  "payroll_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    runNumber: integer("run_number"),
+    label: varchar("label", { length: 120 }).notNull(),
+    frequency: varchar("frequency", { length: 12 }).notNull().default("monthly"),
+    periodStart: date("period_start").notNull(),
+    periodEnd: date("period_end").notNull(),
+    payDate: date("pay_date").notNull(),
+    status: varchar("status", { length: 12 }).notNull().default("draft"), // draft | calculated | approved | locked | paid
+    totalGrossCents: bigint("total_gross_cents", { mode: "number" }).notNull().default(0),
+    totalDeductionsCents: bigint("total_deductions_cents", { mode: "number" }).notNull().default(0),
+    totalNetCents: bigint("total_net_cents", { mode: "number" }).notNull().default(0),
+    employeeCount: integer("employee_count").notNull().default(0),
+    // Finance journal IDs (NOT foreign keys into finance tables — payroll only
+    // records what the Finance service returned, keeping the contexts decoupled).
+    accrualJournalId: uuid("accrual_journal_id"),
+    paymentJournalId: uuid("payment_journal_id"),
+    paymentAccountCode: varchar("payment_account_code", { length: 20 }),
+    calculatedAt: timestamp("calculated_at"),
+    approvedBy: uuid("approved_by").references(() => users.id, { onDelete: "set null" }),
+    approvedAt: timestamp("approved_at"),
+    lockedAt: timestamp("locked_at"),
+    paidBy: uuid("paid_by").references(() => users.id, { onDelete: "set null" }),
+    paidAt: timestamp("paid_at"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    numberUniq: uniqueIndex("payroll_runs_company_number_uniq").on(t.companyId, t.runNumber).where(sql`run_number is not null`),
+    statusIdx: index("payroll_runs_company_status_idx").on(t.companyId, t.status, t.periodStart),
+  })
+);
+
+// One line per employee per run — the immutable snapshot + the payslip source.
+export const payrollItems = pgTable(
+  "payroll_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .references(() => payrollRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    structureId: uuid("structure_id").references(() => payrollStructures.id, { onDelete: "set null" }),
+    basicCents: bigint("basic_cents", { mode: "number" }).notNull().default(0),
+    allowancesCents: bigint("allowances_cents", { mode: "number" }).notNull().default(0),
+    incentivesCents: bigint("incentives_cents", { mode: "number" }).notNull().default(0),
+    overtimeCents: bigint("overtime_cents", { mode: "number" }).notNull().default(0),
+    grossCents: bigint("gross_cents", { mode: "number" }).notNull().default(0),
+    deductionsCents: bigint("deductions_cents", { mode: "number" }).notNull().default(0),
+    leaveAdjustmentCents: bigint("leave_adjustment_cents", { mode: "number" }).notNull().default(0), // unpaid-leave/absence deduction
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull().default(0), // placeholder — always 0 this phase
+    netCents: bigint("net_cents", { mode: "number" }).notNull().default(0),
+    overtimeMinutes: integer("overtime_minutes").notNull().default(0),
+    // Snapshot of the attendance summary the calc consumed (working/worked/
+    // late/leave/absent days + shift history) — the payslip's attendance block.
+    attendance: jsonb("attendance"),
+    // Full component breakdown: { earnings: [...], deductions: [...] } — the
+    // payslip line items, frozen at calculation time.
+    breakdown: jsonb("breakdown"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    runUserUniq: uniqueIndex("payroll_items_run_user_uniq").on(t.runId, t.userId),
+    userIdx: index("payroll_items_company_user_idx").on(t.companyId, t.userId),
+    runIdx: index("payroll_items_run_idx").on(t.runId),
+  })
+);
