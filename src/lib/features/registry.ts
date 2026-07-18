@@ -51,6 +51,10 @@ export const FEATURES: readonly FeatureDef[] = [
   // HR Core (Phase 22): the master employee directory — employees,
   // departments, designations, employment types, documents, org chart.
   { key: "hr", label: "HR", description: "Employee master directory: departments, designations, org chart, documents.", defaultEnabled: false },
+  // Workflow Automation (Phase 23): the automation layer every module can
+  // trigger — triggers, conditions, actions, execution engine, retries.
+  // Optional paid module, owner-enabled per company.
+  { key: "workflow", label: "Workflow Automation", description: "Automate any module: triggers, conditions, actions, execution engine with retries.", defaultEnabled: false },
 ] as const;
 
 export type FeatureKey = (typeof FEATURES)[number]["key"];

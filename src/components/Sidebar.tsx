@@ -53,6 +53,21 @@ const ATTENDANCE_ITEMS: { href: string; label: string; managerOnly?: boolean }[]
   { href: "/attendance/settings", label: "Settings", managerOnly: true },
 ];
 
+// Workflow Automation module navigation (Phase 23). The whole module is an
+// admin/manager tool (agents have no workflow permission), so — like Finance —
+// the group is gated by role + feature and every item is visible to both.
+const AUTOMATION_ITEMS: { href: string; label: string }[] = [
+  { href: "/automation", label: "Dashboard" },
+  { href: "/automation/workflows", label: "Workflows" },
+  { href: "/automation/triggers", label: "Triggers" },
+  { href: "/automation/actions", label: "Actions" },
+  { href: "/automation/executions", label: "Execution History" },
+  { href: "/automation/variables", label: "Variables" },
+  { href: "/automation/templates", label: "Templates" },
+  { href: "/automation/reports", label: "Reports" },
+  { href: "/automation/settings", label: "Settings" },
+];
+
 const FINANCE_ITEMS: { href: string; label: string }[] = [
   { href: "/finance", label: "Dashboard" },
   { href: "/finance/accounts", label: "Chart of Accounts" },
@@ -141,6 +156,11 @@ export default function Sidebar({
   // agents never see the module. super_admin (features = null) has no company
   // books, so the group requires an actual feature grant.
   const showFinance = (role === "admin" || role === "manager") && !!features && features.finance === true;
+  const inAutomation = pathname === "/automation" || pathname.startsWith("/automation/");
+  const [automationOpen, setAutomationOpen] = useState(inAutomation);
+  // Workflow Automation is an admin/manager tool (agents hold no workflow
+  // permission), gated on role + the feature grant like Finance.
+  const showAutomation = (role === "admin" || role === "manager") && !!features && features.workflow === true;
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -319,6 +339,37 @@ export default function Sidebar({
                       href={item.href}
                       className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
                         active ? "bg-emerald-50 text-emerald-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {showAutomation && (
+          <div className="pt-1">
+            <button
+              onClick={() => setAutomationOpen((v) => !v)}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                inAutomation ? "text-indigo-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              <span>Automation</span>
+              <span className="text-[10px] text-slate-400">{automationOpen ? "▾" : "▸"}</span>
+            </button>
+            {automationOpen && (
+              <div className="mt-0.5 space-y-0.5">
+                {AUTOMATION_ITEMS.map((item) => {
+                  const active = pathname === item.href;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
+                        active ? "bg-indigo-50 text-indigo-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                       }`}
                     >
                       {item.label}

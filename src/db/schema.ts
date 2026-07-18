@@ -2834,3 +2834,201 @@ export const hrSettings = pgTable("hr_settings", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 23 — Workflow Automation Engine. The automation layer every module can
+// trigger (HubSpot/Salesforce-Flow style). A workflow = a registered TRIGGER +
+// a nested CONDITION tree + an ordered list of ACTIONS. Trigger and action
+// *types* are code-side registries (extensible without schema change); these
+// tables store the per-company DEFINITIONS and the high-volume EXECUTION trail.
+// Status fields are validated in the service layer (no pg enums), matching the
+// HR/Finance convention, so adding a status never needs an enum-alter migration.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// A workflow definition. status: draft | published | disabled | archived —
+// only `published` workflows fire on their trigger. `version` is the current
+// published version (snapshots live in workflow_versions).
+export const workflows = pgTable(
+  "workflows",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    description: text("description"),
+    status: varchar("status", { length: 20 }).notNull().default("draft"),
+    version: integer("version").notNull().default(1),
+    // A registered trigger key (e.g. "lead.created"). The engine never hard-codes
+    // trigger types — future modules register them (see lib/workflow/triggers).
+    triggerType: varchar("trigger_type", { length: 60 }).notNull(),
+    triggerConfig: jsonb("trigger_config"), // schedule cron / webhook token / filters
+    // Root condition group: { logic: "and"|"or", conditions: [Condition|Group] }.
+    conditions: jsonb("conditions"),
+    // { maxRetries, backoffSeconds } — falls back to company settings when null.
+    retryConfig: jsonb("retry_config"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+    lastExecutedAt: timestamp("last_executed_at"),
+    // Denormalized run counter — cheap dashboards without scanning executions.
+    executionCount: integer("execution_count").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // The emit hot path: published workflows for a (company, triggerType).
+    triggerIdx: index("workflows_company_trigger_idx").on(t.companyId, t.triggerType),
+    statusIdx: index("workflows_company_status_idx").on(t.companyId, t.status),
+  })
+);
+
+// The ordered ACTION steps of a workflow (normalized, not a jsonb blob, so the
+// builder can address individual steps). actionType is a registered action key.
+export const workflowActions = pgTable(
+  "workflow_actions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    workflowId: uuid("workflow_id")
+      .references(() => workflows.id, { onDelete: "cascade" })
+      .notNull(),
+    position: integer("position").notNull(),
+    actionType: varchar("action_type", { length: 60 }).notNull(),
+    config: jsonb("config"),
+    // If this step fails, keep going instead of failing the whole execution.
+    continueOnError: boolean("continue_on_error").notNull().default(false),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    workflowIdx: index("workflow_actions_workflow_idx").on(t.workflowId, t.position),
+  })
+);
+
+// Immutable version snapshots — the "Version History" surface. Each publish
+// writes the full definition (trigger + conditions + actions) here.
+export const workflowVersions = pgTable(
+  "workflow_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    workflowId: uuid("workflow_id")
+      .references(() => workflows.id, { onDelete: "cascade" })
+      .notNull(),
+    version: integer("version").notNull(),
+    snapshot: jsonb("snapshot").notNull(),
+    note: varchar("note", { length: 200 }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    versionUniq: uniqueIndex("workflow_versions_workflow_version_uniq").on(t.workflowId, t.version),
+  })
+);
+
+// User-defined variables. scope: global (company-wide, workflowId NULL) or
+// workflow (scoped to one workflow). The module-provided namespaces
+// (lead.*, employee.*, payroll.*, …) are NOT stored — they arrive on the
+// trigger payload and are resolved at execution time (see lib/workflow/variables).
+export const workflowVariables = pgTable(
+  "workflow_variables",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    workflowId: uuid("workflow_id").references(() => workflows.id, { onDelete: "cascade" }),
+    scope: varchar("scope", { length: 20 }).notNull().default("global"),
+    key: varchar("key", { length: 80 }).notNull(),
+    valueType: varchar("value_type", { length: 20 }).notNull().default("string"),
+    value: jsonb("value"),
+    description: varchar("description", { length: 200 }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // Global keys unique per company; workflow keys unique per workflow. Two
+    // partial unique indexes because a nullable workflowId can't do both in one.
+    globalUniq: uniqueIndex("workflow_variables_global_uniq").on(t.companyId, t.key).where(sql`${t.workflowId} is null`),
+    workflowUniq: uniqueIndex("workflow_variables_workflow_uniq").on(t.workflowId, t.key).where(sql`${t.workflowId} is not null`),
+  })
+);
+
+// The execution trail — designed for millions of rows. One row per run.
+// status: pending | running | success | failed | retrying | dead_letter |
+// skipped | waiting. Retry sweeper finds (status='failed', nextRetryAt<=now).
+export const workflowExecutions = pgTable(
+  "workflow_executions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    workflowId: uuid("workflow_id")
+      .references(() => workflows.id, { onDelete: "cascade" })
+      .notNull(),
+    workflowVersion: integer("workflow_version").notNull().default(1),
+    triggerType: varchar("trigger_type", { length: 60 }).notNull(),
+    // event | manual | scheduled | webhook | retry
+    triggerSource: varchar("trigger_source", { length: 20 }).notNull().default("event"),
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    input: jsonb("input"), // the trigger payload
+    context: jsonb("context"), // resolved variable snapshot (optional)
+    conditionResult: jsonb("condition_result"), // { matched, detail }
+    attempts: integer("attempts").notNull().default(0),
+    maxRetries: integer("max_retries").notNull().default(0),
+    nextRetryAt: timestamp("next_retry_at"),
+    error: text("error"),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    durationMs: integer("duration_ms"),
+    triggeredBy: uuid("triggered_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    historyIdx: index("workflow_executions_company_workflow_idx").on(t.companyId, t.workflowId, t.createdAt),
+    statusIdx: index("workflow_executions_company_status_idx").on(t.companyId, t.status),
+    // The retry sweeper: due failed executions across all companies.
+    retryIdx: index("workflow_executions_retry_idx").on(t.status, t.nextRetryAt),
+  })
+);
+
+// Per-action log lines inside an execution (the "Logs" of a run). The highest-
+// volume table; always read by (executionId, position).
+export const workflowExecutionLogs = pgTable(
+  "workflow_execution_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    executionId: uuid("execution_id")
+      .references(() => workflowExecutions.id, { onDelete: "cascade" })
+      .notNull(),
+    position: integer("position").notNull(),
+    actionType: varchar("action_type", { length: 60 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull(), // success | failed | skipped
+    input: jsonb("input"),
+    output: jsonb("output"),
+    message: text("message"),
+    durationMs: integer("duration_ms"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    executionIdx: index("workflow_execution_logs_execution_idx").on(t.executionId, t.position),
+  })
+);
+
+// Per-company module settings — default retry policy + retention (placeholder).
+export const workflowSettings = pgTable("workflow_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id")
+    .references(() => companies.id, { onDelete: "cascade" })
+    .notNull()
+    .unique(),
+  defaultMaxRetries: integer("default_max_retries").notNull().default(3),
+  defaultBackoffSeconds: integer("default_backoff_seconds").notNull().default(30),
+  executionRetentionDays: integer("execution_retention_days").notNull().default(90),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
