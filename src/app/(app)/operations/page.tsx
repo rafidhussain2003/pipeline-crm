@@ -65,7 +65,10 @@ export default function OperationsPage() {
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [connected, setConnected] = useState(false);
   const [denied, setDenied] = useState(false);
-  const [now, setNow] = useState(Date.now());
+  // Seeded in the clock effect below, not here: Date.now() during render is
+  // impure (the project's lint rule flags it) and differs between the server
+  // and client render, which is a hydration mismatch waiting to happen.
+  const [now, setNow] = useState(0);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -88,6 +91,7 @@ export default function OperationsPage() {
 
   // local clock for relative times (no server round-trip)
   useEffect(() => {
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
@@ -159,7 +163,7 @@ export default function OperationsPage() {
             {/* Agent status */}
             <div className="lg:col-span-3">
               <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Agents</h2>
-              <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+              <div className="bg-white border border-slate-200 rounded-lg overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50 text-slate-500 text-xs">
                     <tr>

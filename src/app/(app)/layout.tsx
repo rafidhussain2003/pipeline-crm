@@ -51,7 +51,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           only company members take leads and need presence tracked;
           super_admin has no companyId and doesn't participate in routing. */}
       <Sidebar companyName={companyName} role={session.role} features={features} />
-      <div className="flex-1 min-w-0 flex flex-col">
+      {/* pt-14 clears the fixed mobile top bar that Sidebar renders below `lg`;
+          on `lg` the sidebar is back in flow and there is no bar to clear. */}
+      <div className="flex-1 min-w-0 flex flex-col pt-14 lg:pt-0">
         {billing && (
           <BillingBanner
             subscriptionStatus={billing.subscriptionStatus}

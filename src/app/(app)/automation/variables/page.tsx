@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/automation/shared";
 
 type Variable = { id: string; key: string; valueType: string; value: unknown; description: string | null };
@@ -11,22 +11,37 @@ export default function VariablesPage() {
   const [namespaces, setNamespaces] = useState<Namespace[]>([]);
   const [form, setForm] = useState<{ key: string; valueType: string; value: string; description: string } | null>(null);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  // The ref, not the state, is what actually blocks a double submit: clicks
+  // fired in the same tick all read the pre-render `saving === false`, so a
+  // state check lets every one of them through. The state only drives the
+  // button's disabled/label.
+  const savingRef = useRef(false);
 
   const load = async () => { const r = await fetch("/api/automation/variables"); if (r.ok) { const d = await r.json(); setVariables(d.variables || []); setNamespaces(d.namespaces || []); } };
   useEffect(() => { load(); }, []);
 
   async function save() {
-    if (!form) return;
+    // Guard the in-flight request: without it a double-click POSTed three
+    // times and created three copies of the same variable.
+    if (!form || savingRef.current) return;
+    savingRef.current = true;
     setError("");
-    const r = await fetch("/api/automation/variables", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
-    if (!r.ok) { setError((await r.json().catch(() => ({}))).error || "Could not save"); return; }
-    setForm(null); load();
+    setSaving(true);
+    try {
+      const r = await fetch("/api/automation/variables", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+      if (!r.ok) { setError((await r.json().catch(() => ({}))).error || "Could not save"); return; }
+      setForm(null); load();
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   }
   async function remove(id: string) { await fetch(`/api/automation/variables/${id}`, { method: "DELETE" }); load(); }
 
   return (
     <div className="p-6 max-w-3xl">
-      <PageHeader title="Variables" subtitle="Reusable values available to conditions and actions via {{ path }}." action={<button onClick={() => setForm({ key: "", valueType: "string", value: "", description: "" })} className="bg-indigo-600 text-white text-sm font-medium px-4 py-2 rounded-md">New global variable</button>} />
+      <PageHeader title="Variables" subtitle="Reusable values available to conditions and actions via {{ path }}." action={<button onClick={() => setForm({ key: "", valueType: "string", value: "", description: "" })} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">New global variable</button>} />
       {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
 
       <h2 className="text-sm font-semibold text-slate-700 mb-2">Global variables</h2>
@@ -70,7 +85,7 @@ export default function VariablesPage() {
             </div>
             <div className="flex justify-end gap-2 mt-5">
               <button onClick={() => setForm(null)} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
-              <button onClick={save} className="bg-indigo-600 text-white text-sm font-medium px-4 py-2 rounded-md">Save</button>
+              <button onClick={save} disabled={saving} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
             </div>
           </div>
         </div>

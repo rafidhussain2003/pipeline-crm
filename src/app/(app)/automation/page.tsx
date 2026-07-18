@@ -21,7 +21,7 @@ export default function AutomationDashboardPage() {
 
   return (
     <div className="p-6 max-w-5xl">
-      <PageHeader title="Automation" subtitle="Your company's workflow automation at a glance." action={<Link href="/automation/workflows" className="bg-indigo-600 text-white text-sm font-medium px-4 py-2 rounded-md">Manage workflows</Link>} />
+      <PageHeader title="Automation" subtitle="Your company's workflow automation at a glance." action={<Link href="/automation/workflows" className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Manage workflows</Link>} />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <StatCard label="Workflows" value={d.totalWorkflows} tone="indigo" />

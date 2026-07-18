@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import PresenceHeartbeat from "./PresenceHeartbeat";
 
 // Finance module navigation (Phase 19) — rendered only when the company's
@@ -156,6 +156,45 @@ export default function Sidebar({
   // agents never see the module. super_admin (features = null) has no company
   // books, so the group requires an actual feature grant.
   const showFinance = (role === "admin" || role === "manager") && !!features && features.finance === true;
+
+  // Mobile navigation. The sidebar is a fixed 240px column, which on a 375px
+  // screen left ~135px for the entire app and pushed the content off-screen
+  // horizontally. Below `lg` it now slides in as an overlay drawer instead —
+  // same navigation, same items, only its presentation changes.
+  const [mobileOpen, setMobileOpen] = useState(false);
+  // Navigating must dismiss the drawer, or the destination opens behind it.
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
+  // Escape closes the drawer, and the page behind it must not scroll while it
+  // is open — without the lock, dragging the drawer scrolls the leads table
+  // underneath and the user loses their place.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMobileOpen(false); };
+    document.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    // Rotating to landscape or widening the window past `lg` turns the drawer
+    // back into the ordinary docked sidebar. Without this the drawer state
+    // stayed "open" on desktop, leaving the backdrop over the UI and the page
+    // permanently unscrollable. 64rem is Tailwind's `lg`.
+    //
+    // Driven off `resize`/`orientationchange` rather than the media query's
+    // own `change` event: that event does not fire reliably for every kind of
+    // viewport change (it never fired for the resizes used to test this), so
+    // the query is polled on a signal that does.
+    const wide = window.matchMedia("(min-width: 64rem)");
+    const onViewportChange = () => { if (wide.matches) setMobileOpen(false); };
+    onViewportChange();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("orientationchange", onViewportChange);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("orientationchange", onViewportChange);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileOpen]);
   const inAutomation = pathname === "/automation" || pathname.startsWith("/automation/");
   const [automationOpen, setAutomationOpen] = useState(inAutomation);
   // Workflow Automation is an admin/manager tool (agents hold no workflow
@@ -169,10 +208,53 @@ export default function Sidebar({
   }
 
   return (
-    <aside className="w-60 shrink-0 border-r border-slate-200 bg-white flex flex-col h-screen sticky top-0">
-      <div className="px-5 py-5 border-b border-slate-100">
-        <div className="text-lg font-semibold text-slate-900 tracking-tight">Pipeline</div>
-        <div className="text-xs text-slate-500 mt-0.5 truncate">{companyName}</div>
+    <>
+      {/* Mobile top bar — the only way to reach navigation below `lg`. */}
+      <div className="lg:hidden fixed top-0 inset-x-0 z-30 h-14 bg-white border-b border-slate-200 flex items-center gap-3 px-4">
+        <button
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open navigation menu"
+          aria-expanded={mobileOpen}
+          className="text-slate-700 rounded-md p-2 -ml-2 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <span aria-hidden="true" className="block text-lg leading-none">☰</span>
+        </button>
+        <span className="text-sm font-semibold text-slate-900 truncate">{companyName}</span>
+      </div>
+
+      {/* Backdrop — tapping outside closes the drawer. */}
+      {mobileOpen && (
+        <div className="lg:hidden fixed inset-0 z-40 bg-slate-900/40" onClick={() => setMobileOpen(false)} aria-hidden="true" />
+      )}
+
+      {/* Visibility is toggled with `display`, not a translate transform. The
+          transform approach did not survive React's class swap here — the
+          element kept its -100% translate and the drawer never appeared —
+          whereas display is unambiguous and cannot get stuck mid-transition.
+          `max-lg:hidden` (not `hidden` + `lg:flex`) because a bare `hidden`
+          wins over `lg:flex` and would blank the sidebar on desktop. */}
+      <aside
+        // Any link tap dismisses the drawer. The pathname effect alone is not
+        // enough: tapping the entry for the page you are already on does not
+        // change the route, so the drawer would stay open over the content
+        // with the page scroll still locked.
+        onClick={(e) => { if ((e.target as HTMLElement).closest("a")) setMobileOpen(false); }}
+        className={`w-60 shrink-0 border-r border-slate-200 bg-white flex flex-col h-screen z-50 fixed inset-y-0 left-0 lg:sticky lg:top-0 ${
+          mobileOpen ? "" : "max-lg:hidden"
+        }`}
+      >
+      <div className="px-5 py-5 border-b border-slate-100 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-lg font-semibold text-slate-900 tracking-tight">Pipeline</div>
+          <div className="text-xs text-slate-500 mt-0.5 truncate">{companyName}</div>
+        </div>
+        <button
+          onClick={() => setMobileOpen(false)}
+          aria-label="Close navigation menu"
+          className="lg:hidden text-slate-400 hover:text-slate-700 rounded-md p-1 -mr-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <span aria-hidden="true" className="block text-lg leading-none">×</span>
+        </button>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
         {(role === "admin" || role === "manager") && has("operations_center") && (
@@ -229,6 +311,7 @@ export default function Sidebar({
           <div className="pt-1">
             <button
               onClick={() => setAttendanceOpen((v) => !v)}
+              aria-expanded={attendanceOpen}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 inAttendance ? "text-sky-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               }`}
@@ -260,6 +343,7 @@ export default function Sidebar({
           <div className="pt-1">
             <button
               onClick={() => setHrOpen((v) => !v)}
+              aria-expanded={hrOpen}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 inHr ? "text-rose-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               }`}
@@ -291,6 +375,7 @@ export default function Sidebar({
           <div className="pt-1">
             <button
               onClick={() => setPayrollOpen((v) => !v)}
+              aria-expanded={payrollOpen}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 inPayroll ? "text-teal-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               }`}
@@ -322,6 +407,7 @@ export default function Sidebar({
           <div className="pt-1">
             <button
               onClick={() => setFinanceOpen((v) => !v)}
+              aria-expanded={financeOpen}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 inFinance ? "text-emerald-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               }`}
@@ -353,6 +439,7 @@ export default function Sidebar({
           <div className="pt-1">
             <button
               onClick={() => setAutomationOpen((v) => !v)}
+              aria-expanded={automationOpen}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 inAutomation ? "text-indigo-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
               }`}
@@ -458,6 +545,7 @@ export default function Sidebar({
           Sign out
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

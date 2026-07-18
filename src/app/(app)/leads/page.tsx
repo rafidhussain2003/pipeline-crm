@@ -22,23 +22,41 @@ export default function LeadsPage() {
   const [dispositions, setDispositions] = useState<Disposition[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError("");
     const params = new URLSearchParams();
     if (search) params.set("search", search);
-    const [leadsRes, dispRes] = await Promise.all([
-      fetch(`/api/leads?${params.toString()}`),
-      fetch("/api/dispositions"),
-    ]);
-    const leadsData = await leadsRes.json();
-    const dispData = await dispRes.json();
-    setLeads(leadsData.leads || []);
-    setDispositions(dispData.dispositions || []);
-    setLoading(false);
+    // Previously this had no try/catch and setLoading(false) was the last
+    // statement: a network failure — or a non-JSON error body, which .json()
+    // throws on — rejected the promise, so the spinner never cleared and the
+    // page sat on "Loading leads…" forever with no way to recover. A failed
+    // response also used to fall through to `leadsData.leads || []`, showing
+    // the "No leads yet" empty state as if the company genuinely had none.
+    try {
+      const [leadsRes, dispRes] = await Promise.all([
+        fetch(`/api/leads?${params.toString()}`),
+        fetch("/api/dispositions"),
+      ]);
+      if (!leadsRes.ok) {
+        const body = await leadsRes.json().catch(() => ({}));
+        throw new Error(body.error || `Could not load leads (${leadsRes.status})`);
+      }
+      const leadsData = await leadsRes.json();
+      const dispData = dispRes.ok ? await dispRes.json().catch(() => ({})) : {};
+      setLeads(leadsData.leads || []);
+      setDispositions(dispData.dispositions || []);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Could not load leads");
+      setLeads([]);
+    } finally {
+      setLoading(false);
+    }
   }, [search]);
 
   useEffect(() => {
@@ -47,12 +65,23 @@ export default function LeadsPage() {
   }, [load]);
 
   async function updateDisposition(leadId: string, disposition: string) {
+    // Optimistic, but it must be REVERSIBLE. Before this, a failed PATCH left
+    // the new disposition on screen while the database still held the old one
+    // — the agent believed the change saved and it silently had not.
+    const previous = leads.find((l) => l.id === leadId)?.disposition;
     setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, disposition } : l)));
-    await fetch(`/api/leads/${leadId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ disposition }),
-    });
+    try {
+      const res = await fetch(`/api/leads/${leadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ disposition }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not save");
+      setLoadError("");
+    } catch (err) {
+      if (previous !== undefined) setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, disposition: previous } : l)));
+      setLoadError(err instanceof Error ? err.message : "Could not update that lead");
+    }
   }
 
   function colorFor(label: string) {
@@ -112,6 +141,17 @@ export default function LeadsPage() {
         <div className="mb-4 text-sm bg-blue-50 border border-blue-100 text-blue-800 rounded-md px-3 py-2">{importResult}</div>
       )}
 
+      {/* A failure is stated plainly and is RECOVERABLE without a page reload —
+          previously any load failure was indistinguishable from "no leads". */}
+      {loadError && (
+        <div role="alert" className="mb-4 flex items-center justify-between gap-3 text-sm bg-red-50 border border-red-100 text-red-800 rounded-md px-3 py-2">
+          <span>{loadError}</span>
+          <button onClick={load} className="shrink-0 text-xs font-semibold text-red-800 bg-red-100 hover:bg-red-200 rounded px-2.5 py-1">
+            Retry
+          </button>
+        </div>
+      )}
+
       <div className="flex items-center gap-3 mb-4">
         <input
           value={search}
@@ -121,7 +161,12 @@ export default function LeadsPage() {
         />
       </div>
 
-      <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+      {/* overflow-x-auto, not overflow-hidden: this table is ~1095px wide and
+          its container is ~975px at a 1280px viewport, so `hidden` silently
+          CLIPPED the rightmost column (Created) with no way to reach it, and
+          got worse on narrower screens. Auto keeps the rounded corners and
+          lets the table scroll horizontally instead. */}
+      <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">
@@ -166,6 +211,10 @@ export default function LeadsPage() {
                 <td className="px-4 py-3">
                   <select
                     value={lead.disposition}
+                    // Without this every row's control announces only as
+                    // "combobox" — with 50 rows on screen a screen-reader user
+                    // has no way to tell which lead they are about to change.
+                    aria-label={`Disposition for ${lead.name || "unnamed lead"}`}
                     onChange={(e) => updateDisposition(lead.id, e.target.value)}
                     style={{ backgroundColor: `${colorFor(lead.disposition)}1a`, color: colorFor(lead.disposition) }}
                     className="text-xs font-medium rounded-full px-3 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-blue-500"

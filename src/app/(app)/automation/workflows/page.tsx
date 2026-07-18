@@ -61,7 +61,7 @@ export default function WorkflowsPage() {
 
   return (
     <div className="p-6 max-w-5xl">
-      <PageHeader title="Workflows" subtitle="Build, publish and manage automations." action={<button onClick={() => setEditor("new")} className="bg-indigo-600 text-white text-sm font-medium px-4 py-2 rounded-md">New workflow</button>} />
+      <PageHeader title="Workflows" subtitle="Build, publish and manage automations." action={<button onClick={() => setEditor("new")} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">New workflow</button>} />
       {banner && <p className={`text-xs mb-3 ${banner.kind === "ok" ? "text-emerald-600" : "text-red-600"}`}>{banner.text}</p>}
 
       <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-100">
@@ -230,7 +230,7 @@ function Builder({ existing, triggers, actionDefs, onClose, onSaved }: { existin
 
         <div className="flex justify-end gap-2 mt-6">
           <button onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
-          <button onClick={save} disabled={saving} className="bg-indigo-600 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">{saving ? "Saving…" : existing ? "Save changes" : "Create draft"}</button>
+          <button onClick={save} disabled={saving} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">{saving ? "Saving…" : existing ? "Save changes" : "Create draft"}</button>
         </div>
       </div>
     </div>

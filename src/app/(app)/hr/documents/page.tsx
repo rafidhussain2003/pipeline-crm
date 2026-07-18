@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/hr/shared";
 
 type Employee = { id: string; firstName: string; lastName: string | null; employeeCode: string };
@@ -73,11 +73,23 @@ function DocModal({ employeeId, onClose, onSaved, onError }: { employeeId: strin
   const [title, setTitle] = useState("");
   const [reference, setRef] = useState("");
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  // A ref, not the state: clicks fired in the same tick all read the
+  // pre-render `saving === false`, so a state check lets every one through.
+  const savingRef = useRef(false);
   async function save() {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setError("");
-    const r = await fetch("/api/hr/documents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ employeeId, type, title, reference: reference || null }) });
-    if (!r.ok) { setError((await r.json().catch(() => ({}))).error || "Could not save"); return; }
-    onError(""); onSaved();
+    setSaving(true);
+    try {
+      const r = await fetch("/api/hr/documents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ employeeId, type, title, reference: reference || null }) });
+      if (!r.ok) { setError((await r.json().catch(() => ({}))).error || "Could not save"); return; }
+      onError(""); onSaved();
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
@@ -96,7 +108,7 @@ function DocModal({ employeeId, onClose, onSaved, onError }: { employeeId: strin
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
-          <button onClick={save} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Add</button>
+          <button onClick={save} disabled={saving} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">{saving ? "Adding…" : "Add"}</button>
         </div>
       </div>
     </div>
