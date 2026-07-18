@@ -239,6 +239,13 @@
       "when": 1784401468564,
       "tag": "0033_amazing_zombie",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1784404977242,
+      "tag": "0034_abandoned_shatterstar",
+      "breakpoints": true
     }
   ]
 }

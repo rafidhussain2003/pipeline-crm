@@ -1,0 +1,8 @@
+ALTER TABLE "assignment_jobs" ADD CONSTRAINT "assignment_jobs_required_skill_id_skills_id_fk" FOREIGN KEY ("required_skill_id") REFERENCES "public"."skills"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "assignment_jobs" ADD CONSTRAINT "assignment_jobs_exclude_agent_id_users_id_fk" FOREIGN KEY ("exclude_agent_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "callbacks" ADD CONSTRAINT "callbacks_rescheduled_from_id_callbacks_id_fk" FOREIGN KEY ("rescheduled_from_id") REFERENCES "public"."callbacks"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "payroll_adjustments" ADD CONSTRAINT "payroll_adjustments_applied_run_id_payroll_runs_id_fk" FOREIGN KEY ("applied_run_id") REFERENCES "public"."payroll_runs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "payroll_runs" ADD CONSTRAINT "payroll_runs_accrual_journal_id_finance_journals_id_fk" FOREIGN KEY ("accrual_journal_id") REFERENCES "public"."finance_journals"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "payroll_runs" ADD CONSTRAINT "payroll_runs_payment_journal_id_finance_journals_id_fk" FOREIGN KEY ("payment_journal_id") REFERENCES "public"."finance_journals"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "disposition_options_company_label_uniq" ON "disposition_options" USING btree ("company_id","label");--> statement-breakpoint
+CREATE UNIQUE INDEX "tags_company_label_uniq" ON "tags" USING btree ("company_id","label");

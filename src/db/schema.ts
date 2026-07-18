@@ -668,6 +668,11 @@ export const dispositionOptions = pgTable(
   },
   (t) => ({
     companyIdx: index("disposition_company_idx").on(t.companyId),
+    // Same duplicate gap as `tags`, but with sharper consequences: leads store
+    // their disposition as the LABEL string, so two options sharing a label are
+    // indistinguishable on a lead and silently split every pipeline-stage
+    // count and conversion metric derived from them.
+    companyLabelUniq: uniqueIndex("disposition_options_company_label_uniq").on(t.companyId, t.label),
   })
 );
 
@@ -684,6 +689,13 @@ export const tags = pgTable(
   },
   (t) => ({
     companyIdx: index("tags_company_idx").on(t.companyId),
+    // One tag per label per company. Neither the database nor POST /api/tags
+    // prevented duplicates before the Stabilization Phase 3 audit, so posting
+    // "Hot" twice produced two indistinguishable tags a user could then apply
+    // to different leads, splitting every tag-based filter and count. Enforced
+    // here rather than by a pre-insert lookup so concurrent creates can't both
+    // pass the check.
+    companyLabelUniq: uniqueIndex("tags_company_label_uniq").on(t.companyId, t.label),
   })
 );
 
@@ -1107,8 +1119,12 @@ export const assignmentJobs = pgTable(
     // Assignment parameters carried from the original request so a retry
     // reproduces the same decision inputs (skill requirement, agent to avoid
     // on a reassignment, and where the work originated).
-    requiredSkillId: uuid("required_skill_id"),
-    excludeAgentId: uuid("exclude_agent_id"),
+    // Both carry a reference the job replays on retry. Neither had a foreign
+    // key before the Stabilization Phase 3 audit, so deleting the skill or the
+    // excluded agent left a queued job pointing at something gone. SET NULL:
+    // losing the hint must never delete the pending assignment work.
+    requiredSkillId: uuid("required_skill_id").references(() => skills.id, { onDelete: "set null" }),
+    excludeAgentId: uuid("exclude_agent_id").references(() => users.id, { onDelete: "set null" }),
     source: varchar("source", { length: 20 }).notNull().default("arrival"),
     // Phase 4 queue priority — higher is drained first (fresh Facebook lead,
     // VIP, expired follow-up, manual override, ...). Computed by
@@ -1905,7 +1921,9 @@ export const callbacks = pgTable(
     escalatedAt: timestamp("escalated_at"),
     // Reschedule chain: the callback this one replaced (the old row is marked
     // "rescheduled" and kept, so history is never lost).
-    rescheduledFromId: uuid("rescheduled_from_id"),
+    // Self-reference to the callback this one replaced. SET NULL so deleting an
+    // old callback breaks the chain link rather than deleting its successor.
+    rescheduledFromId: uuid("rescheduled_from_id").references((): AnyPgColumn => callbacks.id, { onDelete: "set null" }),
     rescheduleCount: integer("reschedule_count").notNull().default(0),
     // Deterministic AI ordering score — recomputed when a callback comes due so
     // simultaneous callbacks surface hottest-first (see lib/callbacks/prioritize).
@@ -2589,7 +2607,9 @@ export const payrollAdjustments = pgTable(
     endDate: date("end_date"),
     // A one-time adjustment is consumed by the run that pays it (set on
     // calculate) so it never double-applies.
-    appliedRunId: uuid("applied_run_id"),
+    // The run this adjustment was applied in. SET NULL so deleting a run
+    // returns the adjustment to "unapplied" instead of orphaning the pointer.
+    appliedRunId: uuid("applied_run_id").references((): AnyPgColumn => payrollRuns.id, { onDelete: "set null" }),
     status: varchar("status", { length: 12 }).notNull().default("active"), // active | consumed | cancelled
     notes: text("notes"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
@@ -2624,8 +2644,10 @@ export const payrollRuns = pgTable(
     employeeCount: integer("employee_count").notNull().default(0),
     // Finance journal IDs (NOT foreign keys into finance tables — payroll only
     // records what the Finance service returned, keeping the contexts decoupled).
-    accrualJournalId: uuid("accrual_journal_id"),
-    paymentJournalId: uuid("payment_journal_id"),
+    // The Finance journals this run posted. SET NULL rather than cascade: a
+    // journal disappearing must never delete the payroll run it paid for.
+    accrualJournalId: uuid("accrual_journal_id").references(() => financeJournals.id, { onDelete: "set null" }),
+    paymentJournalId: uuid("payment_journal_id").references(() => financeJournals.id, { onDelete: "set null" }),
     paymentAccountCode: varchar("payment_account_code", { length: 20 }),
     calculatedAt: timestamp("calculated_at"),
     approvedBy: uuid("approved_by").references(() => users.id, { onDelete: "set null" }),
