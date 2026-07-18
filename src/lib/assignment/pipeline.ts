@@ -121,7 +121,16 @@ async function decide(
     }
   }
 
-  // STEP 1: Validate lead (blacklist gate — never auto-assigned).
+  // STEP 1: Validate lead — it must EXIST AND BELONG TO THIS COMPANY.
+  //
+  // The company scope is load-bearing, not decoration: the candidate pool is
+  // built from companyId (presence roster), so a request pairing a lead with
+  // the wrong companyId would hand that lead to another tenant's agent. This
+  // read used to match on lead id alone and the claim below had no company
+  // predicate either, so the pipeline trusted its caller completely — verified
+  // by the Stabilization Phase 2 audit, which assigned company A's lead to a
+  // company B agent. Every current caller passes a consistent pair; this makes
+  // that a guarantee rather than a convention.
   const [leadRow] = await db
     .select({
       priority: leads.priority,
@@ -131,9 +140,14 @@ async function decide(
       requiredSkillId: leads.requiredSkillId,
     })
     .from(leads)
-    .where(eq(leads.id, leadId))
+    .where(and(eq(leads.id, leadId), eq(leads.companyId, companyId)))
     .limit(1);
-  if (leadRow?.isBlacklisted) {
+  if (!leadRow) {
+    metrics.increment("assignment.lead_not_in_company");
+    logger.warn("assignment_skipped", { reason: "lead_not_found_in_company" });
+    return result("skipped", startedAt, { reason: "lead_not_found_in_company" });
+  }
+  if (leadRow.isBlacklisted) {
     metrics.increment("assignment.skipped_blacklisted");
     logger.info("assignment_skipped", { reason: "lead_blacklisted" });
     return result("skipped", startedAt, { reason: "lead_blacklisted" });
@@ -300,7 +314,10 @@ async function decide(
       // SAME atomic claim — no extra write in the lock. The event is recorded
       // (through the lifecycle service) after the lock releases.
       .set({ ownerId: decision.agentId, lifecycleStage: "assigned", assignedAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(leads.id, leadId), isNull(leads.ownerId)))
+      // company_id is part of the claim predicate, not just the read above:
+      // this is the last line of defence against writing another tenant's
+      // agent onto a lead, and it costs nothing (the lookup is by primary key).
+      .where(and(eq(leads.id, leadId), eq(leads.companyId, companyId), isNull(leads.ownerId)))
       .returning({ id: leads.id });
     if (claimed.length === 0) return { kind: "claim_lost" as const };
 

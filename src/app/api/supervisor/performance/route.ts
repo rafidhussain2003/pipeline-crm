@@ -35,7 +35,13 @@ export async function GET() {
       .from(assignmentLog)
       .innerJoin(leads, eq(assignmentLog.leadId, leads.id))
       .leftJoin(users, eq(assignmentLog.assignedTo, users.id))
-      .where(and(eq(leads.companyId, session.companyId), gte(assignmentLog.assignedAt, startOfToday)))
+      // status='assigned' is required, not optional: assignment_log records
+      // EVERY decision, including 'failed' (no eligible agent) and 'skipped'
+      // (lost claim race), and those rows carry assigned_to = NULL. Without
+      // this filter they group into a single NULL bucket that can out-count
+      // every real agent — so "most active agent today" would report a blank
+      // agent with an inflated number.
+      .where(and(eq(leads.companyId, session.companyId), eq(assignmentLog.status, "assigned"), gte(assignmentLog.assignedAt, startOfToday)))
       .groupBy(assignmentLog.assignedTo, users.name)
       .orderBy(desc(count()))
       .limit(1),
@@ -57,7 +63,9 @@ export async function GET() {
       .from(assignmentLog)
       .innerJoin(leads, eq(assignmentLog.leadId, leads.id))
       .leftJoin(users, eq(assignmentLog.assignedTo, users.id))
-      .where(eq(leads.companyId, session.companyId))
+      // Likewise: a "recent assignments" feed must list assignments, not
+      // failed or skipped attempts (which would render with a blank agent).
+      .where(and(eq(leads.companyId, session.companyId), eq(assignmentLog.status, "assigned")))
       .orderBy(desc(assignmentLog.assignedAt))
       .limit(20),
   ]);

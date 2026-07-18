@@ -36,6 +36,7 @@ export type MetricName =
   | "assignment.filtered_workload"
   | "assignment.overflow_used"
   | "assignment.unassigned_no_agents"
+  | "assignment.lead_not_in_company"
   | "assignment.skipped_blacklisted"
   | "assignment.assigned"
   | "assignment.claim_lost"
@@ -115,6 +116,7 @@ const ALL_METRIC_NAMES: MetricName[] = [
   "assignment.filtered_workload",
   "assignment.overflow_used",
   "assignment.unassigned_no_agents",
+  "assignment.lead_not_in_company",
   "assignment.skipped_blacklisted",
   "assignment.assigned",
   "assignment.claim_lost",

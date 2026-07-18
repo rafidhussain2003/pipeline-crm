@@ -56,7 +56,12 @@ export async function GET() {
       .select({ assignedTo: assignmentLog.assignedTo, value: count() })
       .from(assignmentLog)
       .innerJoin(leads, eq(assignmentLog.leadId, leads.id))
-      .where(and(eq(leads.companyId, session.companyId), gte(assignmentLog.assignedAt, startOfToday)))
+      // Only real assignments count toward an agent's "assigned today".
+      // (The per-agent map here is keyed by agent id, so the NULL-owner
+      // 'failed'/'skipped' rows never landed on an agent — but scanning and
+      // grouping them was wasted work, and the filter makes the intent
+      // explicit and consistent with the performance report.)
+      .where(and(eq(leads.companyId, session.companyId), eq(assignmentLog.status, "assigned"), gte(assignmentLog.assignedAt, startOfToday)))
       .groupBy(assignmentLog.assignedTo),
     db
       .select({ ownerId: leads.ownerId, value: count() })
