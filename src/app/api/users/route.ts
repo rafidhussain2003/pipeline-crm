@@ -39,36 +39,39 @@ export async function GET(req: NextRequest) {
     if (searchCond) conditions.push(searchCond);
   }
 
-  const rows = await db
-    .select({
-      id: users.id,
-      name: users.name,
-      email: users.email,
-      phone: users.phone,
-      role: users.role,
-      tier: users.tier,
-      active: users.active,
-      presenceStatus: users.presenceStatus,
-      lastHeartbeatAt: users.lastHeartbeatAt,
-      locked: users.locked,
-      createdAt: users.createdAt,
-    })
-    .from(users)
-    .where(and(...conditions))
-    .orderBy(asc(users.createdAt));
-
-  // "Owner" = the earliest-created admin for this company — a display
-  // label only (see schema.ts's comment on why there's no stored "owner"
-  // role). Computed from the full admin set, not the filtered/searched
-  // rows, so search/filtering can't accidentally hide who the real owner
-  // is from this calculation — but the row itself still only appears in
-  // the response if it matches the current filters.
-  const [earliestAdmin] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(and(eq(users.companyId, session.companyId), eq(users.role, "admin"), isNull(users.deletedAt)))
-    .orderBy(asc(users.createdAt))
-    .limit(1);
+  // Independent queries — fired concurrently so the response waits for the
+  // slower of the two, not their sum (~1 DB round trip saved per call).
+  const [rows, [earliestAdmin]] = await Promise.all([
+    db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        phone: users.phone,
+        role: users.role,
+        tier: users.tier,
+        active: users.active,
+        presenceStatus: users.presenceStatus,
+        lastHeartbeatAt: users.lastHeartbeatAt,
+        locked: users.locked,
+        createdAt: users.createdAt,
+      })
+      .from(users)
+      .where(and(...conditions))
+      .orderBy(asc(users.createdAt)),
+    // "Owner" = the earliest-created admin for this company — a display
+    // label only (see schema.ts's comment on why there's no stored "owner"
+    // role). Computed from the full admin set, not the filtered/searched
+    // rows, so search/filtering can't accidentally hide who the real owner
+    // is from this calculation — but the row itself still only appears in
+    // the response if it matches the current filters.
+    db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.companyId, session.companyId), eq(users.role, "admin"), isNull(users.deletedAt)))
+      .orderBy(asc(users.createdAt))
+      .limit(1),
+  ]);
 
   let result = rows.map((r) => ({ ...r, isOwner: r.role === "admin" && r.id === earliestAdmin?.id }));
   if (roleFilter === "owner") result = result.filter((r) => r.isOwner);

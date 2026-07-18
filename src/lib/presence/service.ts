@@ -15,7 +15,7 @@
 // Work is therefore proportional to activity, not to the number of agents.
 import { db } from "@/db";
 import { automationSettings, users } from "@/db/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { cache } from "@/lib/infra/cache";
 import { metrics } from "@/lib/infra/metrics";
 import { createLogger } from "@/lib/logger";
@@ -69,24 +69,42 @@ class PresenceService {
   // presence -> assignment import cycle).
   async heartbeat(userId: string, input: HeartbeatInput = {}): Promise<HeartbeatResult> {
     const status: PresenceStatus = input.status ?? "online";
+    const now = new Date();
 
-    const [prev] = await db
-      .select({ presenceStatus: users.presenceStatus, lastHeartbeatAt: users.lastHeartbeatAt, companyId: users.companyId })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
+    // Durable write-through (source of truth, cross-instance safe on restart),
+    // fused with the previous-state read. This is the hottest write in the app
+    // (every agent, every ~30s) and used to be a SELECT followed by an UPDATE —
+    // two full round trips (~300-400ms each against the production database).
+    // The single UPDATE ... FROM (SELECT ... FOR UPDATE) RETURNING captures the
+    // old row and writes the new one atomically in one trip; FOR UPDATE keeps
+    // two concurrent beats (multi-tab) from both reading the same "old" state
+    // and double-reporting a transition.
+    const updated = await db.execute(sql`
+      UPDATE users u
+      SET presence_status = ${status}, last_heartbeat_at = ${now}
+      FROM (
+        SELECT id, presence_status, last_heartbeat_at, company_id
+        FROM users WHERE id = ${userId} FOR UPDATE
+      ) old
+      WHERE u.id = old.id
+      RETURNING old.presence_status AS prev_status, old.last_heartbeat_at AS prev_heartbeat_at, old.company_id AS company_id
+    `);
+    const prevRow = (updated.rows?.[0] ?? null) as { prev_status: string; prev_heartbeat_at: string | Date | null; company_id: string | null } | null;
+    const prev = prevRow
+      ? {
+          presenceStatus: prevRow.prev_status,
+          lastHeartbeatAt: prevRow.prev_heartbeat_at ? new Date(prevRow.prev_heartbeat_at) : null,
+          companyId: prevRow.company_id,
+        }
+      : null;
 
     const companyId = prev?.companyId ?? null;
     const timeout = await this.eligibilityTimeout(companyId);
-    const now = new Date();
 
     const prevState = deriveState(
       { presenceStatus: (prev?.presenceStatus as PresenceStatus) ?? "offline", lastHeartbeatAt: prev?.lastHeartbeatAt ?? null },
       timeout
     );
-
-    // Durable write-through (source of truth, cross-instance safe on restart).
-    await db.update(users).set({ presenceStatus: status, lastHeartbeatAt: now }).where(eq(users.id, userId));
 
     const newState = deriveState({ presenceStatus: status, lastHeartbeatAt: now }, timeout);
 

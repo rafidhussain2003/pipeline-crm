@@ -193,10 +193,17 @@ export async function getLeadInsights(
   leadId: string,
   companyId: string
 ): Promise<{ insight: ComposedInsight; customerInsights: CustomerInsights } | null> {
-  const signals = await gatherInsightSignals(leadId);
+  // Both key only on leadId, so they run concurrently — the cached-row read
+  // used to wait behind the (two-round-trip) signal gather for no reason,
+  // adding a full serial DB round trip to every Lead Details view. Tenancy is
+  // enforced right after: on a mismatch we return null and the row is
+  // discarded, so nothing crosses the company boundary.
+  const [signals, [existing]] = await Promise.all([
+    gatherInsightSignals(leadId),
+    db.select().from(leadInsights).where(eq(leadInsights.leadId, leadId)).limit(1),
+  ]);
   if (!signals || signals.companyId !== companyId) return null;
 
-  const [existing] = await db.select().from(leadInsights).where(eq(leadInsights.leadId, leadId)).limit(1);
   const contentChangedAt = Math.max(signals.updatedAt.getTime(), signals.lastActivityAt.getTime());
 
   let insight: ComposedInsight;

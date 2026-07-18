@@ -5,7 +5,7 @@ import { requireSuperAdmin } from "@/lib/permissions";
 import { eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
-import { yearsFromNow } from "@/lib/billing";
+import { yearsFromNow, invalidateBillingSnapshot } from "@/lib/billing";
 
 const SUBSCRIPTION_STATUSES = new Set(["trial", "active", "past_due", "cancelled"]);
 
@@ -51,6 +51,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const [updated] = await db.update(companies).set(allowed).where(eq(companies.id, id)).returning();
   if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // This patch can change subscription fields — drop the proxy gate's cached snapshot.
+  await invalidateBillingSnapshot(id);
 
   await recordAudit({
     companyId: id,

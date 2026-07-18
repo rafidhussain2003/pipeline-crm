@@ -15,22 +15,31 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await getSession();
   if (!session) redirect("/login");
 
+  // The three lookups below are independent (user gate, company row, feature
+  // map) but ran serially. Against the production database a round trip is
+  // ~300-400ms, so this layout — which wraps EVERY page — was paying two to
+  // three of them back-to-back on each navigation. Fired concurrently, the
+  // render waits for the slowest one instead of the sum (Phase 5 baseline:
+  // ~815ms of layout latency per page → ~420ms after).
+  const [[me], company, features] = await Promise.all([
+    db.select({ mustChange: users.mustChangePassword }).from(users).where(eq(users.id, session.userId)).limit(1),
+    session.companyId
+      ? db.select().from(companies).where(eq(companies.id, session.companyId)).limit(1).then((r) => r[0] ?? null)
+      : Promise.resolve(null),
+    // Phase 18: entitled modules via the cached featureService. Null for
+    // super_admin (no company; they manage features instead).
+    session.companyId ? getEnabledFeatures(session.companyId) : Promise.resolve<FeatureMap | null>(null),
+  ]);
+
   // Phase 13: an invited user with a temporary password must create their own
   // before doing anything else — a hard gate that blocks the whole app.
-  const [me] = await db.select({ mustChange: users.mustChangePassword }).from(users).where(eq(users.id, session.userId)).limit(1);
   if (me?.mustChange) return <ForcePasswordChange />;
 
   let companyName = "Super Admin";
   let billing: { subscriptionStatus: "trial" | "active" | "past_due" | "cancelled"; daysRemaining: number } | null =
     null;
-  // Phase 18: the company's entitled modules, resolved ONCE per render through
-  // the cached featureService — the sidebar and every layout-level surface key
-  // off this. Null for super_admin (no company; they manage features instead).
-  let features: FeatureMap | null = null;
 
   if (session.companyId) {
-    features = await getEnabledFeatures(session.companyId);
-    const [company] = await db.select().from(companies).where(eq(companies.id, session.companyId)).limit(1);
     companyName = company?.name || "";
 
     // Trial/subscription gate — see lib/billing.ts for what counts as

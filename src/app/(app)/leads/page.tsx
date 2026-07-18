@@ -39,18 +39,13 @@ export default function LeadsPage() {
     // response also used to fall through to `leadsData.leads || []`, showing
     // the "No leads yet" empty state as if the company genuinely had none.
     try {
-      const [leadsRes, dispRes] = await Promise.all([
-        fetch(`/api/leads?${params.toString()}`),
-        fetch("/api/dispositions"),
-      ]);
+      const leadsRes = await fetch(`/api/leads?${params.toString()}`);
       if (!leadsRes.ok) {
         const body = await leadsRes.json().catch(() => ({}));
         throw new Error(body.error || `Could not load leads (${leadsRes.status})`);
       }
       const leadsData = await leadsRes.json();
-      const dispData = dispRes.ok ? await dispRes.json().catch(() => ({})) : {};
       setLeads(leadsData.leads || []);
-      setDispositions(dispData.dispositions || []);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Could not load leads");
       setLeads([]);
@@ -63,6 +58,15 @@ export default function LeadsPage() {
     const timeout = setTimeout(load, 250);
     return () => clearTimeout(timeout);
   }, [load]);
+
+  // Dispositions are company config, not search results — previously they
+  // were refetched alongside the leads on EVERY debounced keystroke (typing
+  // "Omar" = 4 extra identical requests). Fetched once per page mount.
+  useEffect(() => {
+    fetch("/api/dispositions")
+      .then(async (r) => { if (r.ok) setDispositions((await r.json()).dispositions || []); })
+      .catch(() => {});
+  }, []);
 
   async function updateDisposition(leadId: string, disposition: string) {
     // Optimistic, but it must be REVERSIBLE. Before this, a failed PATCH left

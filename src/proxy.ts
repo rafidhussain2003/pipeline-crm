@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySession } from "@/lib/auth";
-import { db } from "@/db";
-import { companies } from "@/db/schema";
-import { eq } from "drizzle-orm";
-import { isBillingBlocked } from "@/lib/billing";
+import { getBillingSnapshot, isBillingBlocked } from "@/lib/billing";
 import { getPublicAppUrl } from "@/lib/url";
 import { featureService, FEATURE_DISABLED_MESSAGE } from "@/lib/features";
 
@@ -114,16 +111,12 @@ export async function proxy(req: NextRequest) {
     session?.companyId &&
     !BILLING_EXEMPT_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))
   ) {
-    const [company] = await db
-      .select({
-        subscriptionStatus: companies.subscriptionStatus,
-        trialEndsAt: companies.trialEndsAt,
-        currentPeriodEnd: companies.currentPeriodEnd,
-        stripeSubscriptionId: companies.stripeSubscriptionId,
-      })
-      .from(companies)
-      .where(eq(companies.id, session.companyId))
-      .limit(1);
+    // Cached 30s (see getBillingSnapshot): this gate used to run a fresh
+    // SELECT per request, adding a full DB round trip (~300-400ms in
+    // production) to EVERY company API call. The block decision itself is
+    // still recomputed against the current clock each request, so
+    // time-based expiries (trial/comp) are never delayed by the cache.
+    const company = await getBillingSnapshot(session.companyId);
 
     if (company && isBillingBlocked(company)) {
       return NextResponse.json(

@@ -2,6 +2,50 @@ import { db } from "@/db";
 import { companies } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getStripe } from "./stripe";
+import { cache } from "./infra/cache";
+
+// Cached subscription fields for the proxy's per-request billing gate.
+//
+// Why: the proxy ran this SELECT fresh on EVERY company-scoped API request.
+// Against the production database a round trip is ~300-400ms, so the gate
+// alone added that to every single API call in the app (Phase 5 baseline:
+// simple one-query endpoints measured ~780ms — half of it was this check).
+//
+// Staleness is bounded and safe: the row is cached, but isBillingBlocked()
+// still recomputes against the current clock on every request, so a trial or
+// comp grant expiring mid-window blocks ON TIME — the dates in the row don't
+// change, only "now" does. The only delayed transitions are Stripe-driven
+// status flips (cancel / reactivate), bounded by the TTL below, and the
+// write paths invalidate the key so same-instance flips apply immediately.
+// Same policy and TTL horizon as featureService's 60s entitlement cache,
+// which lives right next to this check in the proxy.
+const BILLING_SNAPSHOT_TTL_MS = 30_000;
+type BillingSnapshot = Pick<
+  BillingCompany,
+  "subscriptionStatus" | "trialEndsAt" | "currentPeriodEnd" | "stripeSubscriptionId"
+> | null;
+
+export async function getBillingSnapshot(companyId: string): Promise<BillingSnapshot> {
+  return cache.getOrSet(`billing-snapshot:${companyId}`, BILLING_SNAPSHOT_TTL_MS, async () => {
+    const [company] = await db
+      .select({
+        subscriptionStatus: companies.subscriptionStatus,
+        trialEndsAt: companies.trialEndsAt,
+        currentPeriodEnd: companies.currentPeriodEnd,
+        stripeSubscriptionId: companies.stripeSubscriptionId,
+      })
+      .from(companies)
+      .where(eq(companies.id, companyId))
+      .limit(1);
+    return company ?? null;
+  });
+}
+
+// Call after any write to a company's subscription fields (Stripe webhook,
+// checkout confirm, super-admin activation) so the gate reflects it at once.
+export async function invalidateBillingSnapshot(companyId: string): Promise<void> {
+  await cache.delete(`billing-snapshot:${companyId}`);
+}
 
 type BillingCompany = {
   id: string;

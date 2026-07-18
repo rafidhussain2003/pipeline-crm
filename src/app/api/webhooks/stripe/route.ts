@@ -4,6 +4,7 @@ import { companies } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { getStripe } from "@/lib/stripe";
 import { recordAudit } from "@/lib/audit";
+import { invalidateBillingSnapshot } from "@/lib/billing";
 import Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -58,6 +59,9 @@ async function syncSubscription(companyId: string, subscription: Stripe.Subscrip
       updatedAt: new Date(),
     })
     .where(eq(companies.id, companyId));
+
+  // The proxy gate reads a 30s cached snapshot — drop it so this flip applies immediately.
+  await invalidateBillingSnapshot(companyId);
 
   await recordAudit({
     companyId,
@@ -132,6 +136,7 @@ export async function POST(req: NextRequest) {
           .update(companies)
           .set({ subscriptionStatus: "cancelled", updatedAt: new Date() })
           .where(eq(companies.id, companyId));
+        await invalidateBillingSnapshot(companyId);
         await recordAudit({
           companyId,
           userId: null,
@@ -152,6 +157,7 @@ export async function POST(req: NextRequest) {
           .update(companies)
           .set({ subscriptionStatus: "past_due", updatedAt: new Date() })
           .where(eq(companies.id, companyId));
+        await invalidateBillingSnapshot(companyId);
         await recordAudit({
           companyId,
           userId: null,
@@ -181,6 +187,7 @@ export async function POST(req: NextRequest) {
             .update(companies)
             .set({ subscriptionStatus: "active", updatedAt: new Date() })
             .where(eq(companies.id, companyId));
+          await invalidateBillingSnapshot(companyId);
         }
         break;
       }
