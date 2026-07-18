@@ -753,7 +753,13 @@ export const leads = pgTable(
     followUpAt: timestamp("follow_up_at"),
     rawPayload: jsonb("raw_payload"),
     isDuplicate: boolean("is_duplicate").notNull().default(false),
-    duplicateOfLeadId: uuid("duplicate_of_lead_id"),
+    // Self-reference to the ORIGINAL lead this one duplicates (set by
+    // flagDuplicateLead after insert). ON DELETE SET NULL rather than cascade:
+    // a duplicate is a real lead in its own right, so removing the original
+    // must clear the back-pointer, never delete the duplicate. Before the
+    // Stabilization Phase 1 audit this column carried no foreign key at all,
+    // so nothing stopped it holding an id that no longer existed.
+    duplicateOfLeadId: uuid("duplicate_of_lead_id").references((): AnyPgColumn => leads.id, { onDelete: "set null" }),
     recycleCount: integer("recycle_count").notNull().default(0), // capped by automation_settings.max_recycle_count
     // "high" bypasses the workload-cap soft filter during assignment (see
     // assignLead()) so a VIP/priority lead is never stuck waiting behind an
@@ -1534,9 +1540,12 @@ export const skillsRelations = relations(skills, ({ many }) => ({
 //   - `auditLog.entityId` is polymorphic (its target table varies with
 //     `entityType` — lead, user, company, etc.), which Drizzle's relations
 //     API has no way to express as a single fixed-table relation.
-//   - `leads.duplicateOfLeadId` has no `.references()` at the table level
-//     (see that column's own comment) — there's no declared foreign key
-//     for a relation to pair with.
+//   - `leads.duplicateOfLeadId` IS now a real self-referencing foreign key
+//     (added by the Stabilization Phase 1 audit — see that column's comment),
+//     but it is intentionally left out of the relations graph: a self-relation
+//     on `leads` would need a disambiguating relationName on both sides, and
+//     nothing queries "the original of this duplicate" through the relational
+//     API — the column is read directly.
 //
 // `automationSettings.companyId` is unique (one settings row per company —
 // a true 1:1), but its `companies` side uses `many()` below like every

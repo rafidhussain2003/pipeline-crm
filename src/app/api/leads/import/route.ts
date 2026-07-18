@@ -4,10 +4,20 @@ import { leads } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import Papa from "papaparse";
 import { assignLead } from "@/lib/assignment";
-import { findDuplicateLead } from "@/lib/duplicates";
+import { flagDuplicateLead } from "@/lib/duplicates";
 import { recordAudit } from "@/lib/audit";
+import { eventBus } from "@/lib/events/bus";
+import { normalizeLeadInput, hasIdentifyingField } from "@/lib/leads/input";
+import "@/lib/capi/listeners"; // lead.created -> Conversions API enqueue
+import "@/lib/insights/listeners"; // lead.created -> insight recompute
 
 type CsvRow = { name?: string; phone?: string; email?: string; Name?: string; Phone?: string; Email?: string };
+
+// A CSV import runs inline in the request, one lead at a time (each row does an
+// insert + duplicate flag + assignment). Past a few thousand rows that exceeds
+// any sane request timeout and the caller gets a dead connection mid-import
+// with no way to tell what landed. Cap it and tell them plainly.
+const MAX_IMPORT_ROWS = 5000;
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -22,36 +32,44 @@ export async function POST(req: NextRequest) {
   if (parsed.errors.length > 0) {
     return NextResponse.json({ error: `CSV parse error: ${parsed.errors[0].message}` }, { status: 400 });
   }
+  if (parsed.data.length > MAX_IMPORT_ROWS) {
+    return NextResponse.json(
+      { error: `This file has ${parsed.data.length} rows. Please split it into files of ${MAX_IMPORT_ROWS} rows or fewer.` },
+      { status: 413 },
+    );
+  }
 
   let created = 0;
   let duplicates = 0;
   let skipped = 0;
 
   for (const row of parsed.data) {
-    const name = row.name || row.Name;
-    const phone = row.phone || row.Phone;
-    const email = row.email || row.Email;
-
-    if (!name && !phone && !email) {
+    // Same normalizer as every other entry point (coerce, trim, truncate).
+    const input = normalizeLeadInput({ name: row.name ?? row.Name, phone: row.phone ?? row.Phone, email: row.email ?? row.Email });
+    if (!hasIdentifyingField(input)) {
       skipped++;
       continue;
     }
-
-    const duplicateOfLeadId = await findDuplicateLead(session.companyId, phone, email);
-    if (duplicateOfLeadId) duplicates++;
 
     const [lead] = await db
       .insert(leads)
       .values({
         companyId: session.companyId,
-        name: name || "Unknown",
-        phone,
-        email,
+        name: input.name || "Unknown",
+        phone: input.phone,
+        email: input.email,
         disposition: "New Lead",
-        isDuplicate: !!duplicateOfLeadId,
-        duplicateOfLeadId,
       })
       .returning();
+
+    // Flagged post-insert so rows within the SAME file dedup against each
+    // other correctly (the pre-insert lookup missed same-file duplicates that
+    // hadn't been committed yet when the next row was checked).
+    const duplicateOfLeadId = await flagDuplicateLead(lead.id, session.companyId, input.phone, input.email);
+    if (duplicateOfLeadId) duplicates++;
+
+    // Parity with every other entry point — an imported lead is a created lead.
+    await eventBus.emit("lead.created", { leadId: lead.id, companyId: session.companyId, source: "import" });
 
     try {
       await assignLead(lead.id, session.companyId);

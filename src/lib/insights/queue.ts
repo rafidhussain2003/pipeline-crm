@@ -45,20 +45,36 @@ function drain(): Promise<void> {
   return drainPromise;
 }
 
+// How long to let a burst accumulate before draining. Ingesting ONE lead fires
+// several insight-relevant events in sequence (lead.created → lead.queued /
+// lead.assigned → lead.lifecycle_changed), each separated by an await. With the
+// previous `setTimeout(…, 0)` every one of those started its own drain, so a
+// single lead was recomputed 4–5 times — ~20 redundant DB round trips per lead
+// (measured), which is precisely what this queue's "coalescing bursts" comment
+// says it exists to prevent. A short window collapses the burst into one
+// recompute; the work was already asynchronous, so nothing waits on it.
+const COALESCE_MS = 250;
+let scheduled: ReturnType<typeof setTimeout> | null = null;
+
 // Schedule a recompute for a lead. Non-blocking, deduped, fire-and-forget.
 export function enqueueInsightsRecompute(leadId: string): void {
   if (!leadId) return;
   pending.add(leadId);
-  // Defer to a macrotask so the caller (an event emit inside assignment, or an
-  // API handler) returns before any recompute work starts.
-  setTimeout(() => {
+  // A drain is already scheduled — this lead rides along with it rather than
+  // starting a second pass over the same data.
+  if (scheduled) return;
+  scheduled = setTimeout(() => {
+    scheduled = null;
     void drain();
-  }, 0);
+  }, COALESCE_MS);
 }
 
 // Test/inspection helper: drain to completion, including anything enqueued
 // while a drain was already running.
 export async function flushInsightsQueue(): Promise<void> {
+  // Cancel the pending coalescing timer — the caller wants the work done NOW,
+  // and leaving the timer armed would just fire a no-op drain later.
+  if (scheduled) { clearTimeout(scheduled); scheduled = null; }
   while (pending.size > 0 || drainPromise) {
     await drain();
   }

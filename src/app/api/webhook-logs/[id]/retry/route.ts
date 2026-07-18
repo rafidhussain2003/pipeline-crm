@@ -5,9 +5,13 @@ import { getSession } from "@/lib/auth";
 import { and, eq, sql } from "drizzle-orm";
 import { mapPayloadToLead, FieldMapping } from "@/lib/field-mapping";
 import { assignLead } from "@/lib/assignment";
-import { findDuplicateLead } from "@/lib/duplicates";
+import { flagDuplicateLead } from "@/lib/duplicates";
 import { decrypt } from "@/lib/crypto";
 import { getProvider } from "@/lib/lead-sources/registry";
+import { eventBus } from "@/lib/events/bus";
+import { normalizeLeadInput } from "@/lib/leads/input";
+import "@/lib/capi/listeners"; // lead.created -> Conversions API enqueue
+import "@/lib/insights/listeners"; // lead.created -> insight recompute
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const startedAt = Date.now();
@@ -73,7 +77,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       rawPayload = log.payload;
     }
 
-    const duplicateOfLeadId = await findDuplicateLead(source.companyId, phone, email);
+    // Normalized the same way as every other entry point.
+    const normalized = normalizeLeadInput({ name, phone, email });
 
     const [lead] = await db
       .insert(leads)
@@ -81,13 +86,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         companyId: source.companyId,
         sourceId: source.id,
         externalLeadId,
-        name,
-        phone,
-        email,
+        name: normalized.name || "Unknown",
+        phone: normalized.phone,
+        email: normalized.email,
         disposition: "New Lead",
         rawPayload: rawPayload as object,
-        isDuplicate: !!duplicateOfLeadId,
-        duplicateOfLeadId,
       })
       .onConflictDoNothing({ target: [leads.sourceId, leads.externalLeadId], where: sql`${leads.externalLeadId} IS NOT NULL` })
       .returning();
@@ -99,6 +102,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       await db.update(webhookLogs).set({ status: "retried", retryCount: log.retryCount + 1, error: null }).where(eq(webhookLogs.id, id));
       return NextResponse.json({ ok: true, deduped: true });
     }
+
+    await flagDuplicateLead(lead.id, source.companyId, normalized.phone, normalized.email);
+    // Parity with every other entry point.
+    await eventBus.emit("lead.created", { leadId: lead.id, companyId: source.companyId, source: "webhook" });
 
     let assignmentError: string | null = null;
     try {

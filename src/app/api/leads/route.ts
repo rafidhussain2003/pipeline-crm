@@ -7,8 +7,9 @@ import "@/lib/assignment"; // registers the "lead.assign" job handler with the q
 import "@/lib/workflows/registry"; // registers the lead.created -> workflow listener
 import { queue } from "@/lib/infra/queue";
 import { eventBus } from "@/lib/events/bus";
-import { findDuplicateLead } from "@/lib/duplicates";
+import { flagDuplicateLead } from "@/lib/duplicates";
 import { recordAudit } from "@/lib/audit";
+import { normalizeLeadInput, hasIdentifyingField } from "@/lib/leads/input";
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -63,22 +64,40 @@ export async function POST(req: NextRequest) {
   if (!session || !session.companyId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const body = await req.json();
+  // A malformed body must be a 400, not an unhandled throw surfacing as a 500.
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return NextResponse.json({ error: "Request body must be a JSON object" }, { status: 400 });
+  }
 
-  const duplicateOfLeadId = await findDuplicateLead(session.companyId, body.phone, body.email);
+  // Same normalizer every other entry point uses: coerces types, trims,
+  // truncates to the column width. Previously these went into the insert raw,
+  // so a non-string or over-length field became a Postgres error → 500, and a
+  // missing name stored NULL where every other path stores "Unknown".
+  const input = normalizeLeadInput(body);
+  if (!hasIdentifyingField(input)) {
+    return NextResponse.json({ error: "A lead needs at least one of: name, phone, email" }, { status: 400 });
+  }
 
   const [lead] = await db
     .insert(leads)
     .values({
       companyId: session.companyId,
-      name: body.name,
-      phone: body.phone,
-      email: body.email,
-      disposition: body.disposition || "New Lead",
-      isDuplicate: !!duplicateOfLeadId,
-      duplicateOfLeadId,
+      name: input.name || "Unknown",
+      phone: input.phone,
+      email: input.email,
+      disposition: input.disposition || "New Lead",
     })
     .returning();
+
+  // Flagged after the insert — a pre-insert lookup is a check-then-insert race
+  // that concurrent identical submissions all pass (see flagDuplicateLead).
+  const duplicateOfLeadId = await flagDuplicateLead(lead.id, session.companyId, input.phone, input.email);
 
   await eventBus.emit("lead.created", { leadId: lead.id, companyId: session.companyId, source: "manual" });
 
@@ -104,5 +123,8 @@ export async function POST(req: NextRequest) {
     metadata: { source: "manual", isDuplicate: !!duplicateOfLeadId },
   });
 
-  return NextResponse.json({ lead });
+  // Reflect the post-insert duplicate flag — the row returned by the INSERT
+  // predates flagDuplicateLead's UPDATE, so returning it raw would tell the
+  // caller isDuplicate=false for a lead that is in fact flagged in the table.
+  return NextResponse.json({ lead: { ...lead, isDuplicate: !!duplicateOfLeadId, duplicateOfLeadId } });
 }

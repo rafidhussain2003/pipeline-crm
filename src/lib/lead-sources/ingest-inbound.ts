@@ -9,10 +9,14 @@ import { db } from "@/db";
 import { leadSources, leads } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { assignLead } from "@/lib/assignment";
-import { findDuplicateLead } from "@/lib/duplicates";
+import { flagDuplicateLead } from "@/lib/duplicates";
 import { recordDeliveryLog } from "@/lib/delivery-log";
 import { recordAudit } from "@/lib/audit";
 import { metrics } from "@/lib/infra/metrics";
+import { eventBus } from "@/lib/events/bus";
+import { normalizeLeadInput } from "@/lib/leads/input";
+import "@/lib/capi/listeners"; // lead.created -> Conversions API enqueue
+import "@/lib/insights/listeners"; // lead.created -> insight recompute
 
 type Source = typeof leadSources.$inferSelect;
 
@@ -32,9 +36,11 @@ export async function ingestInboundLead(params: {
   rawPayload: unknown;
   startedAt: number;
 }): Promise<InboundIngestResult> {
-  const { source, name, phone, email, rawPayload, startedAt } = params;
-
-  const duplicateOfLeadId = await findDuplicateLead(source.companyId, phone, email);
+  const { source, rawPayload, startedAt } = params;
+  // Normalize before storing: a website form or third-party webhook can send a
+  // field longer than the column or of the wrong type, which previously threw a
+  // raw Postgres error and lost the lead entirely.
+  const { name, phone, email } = normalizeLeadInput(params);
 
   const [lead] = await db
     .insert(leads)
@@ -46,10 +52,21 @@ export async function ingestInboundLead(params: {
       email,
       disposition: "New Lead",
       rawPayload: rawPayload as object,
-      isDuplicate: !!duplicateOfLeadId,
-      duplicateOfLeadId,
     })
     .returning();
+
+  // Duplicate flagging happens AFTER the insert, not before: a pre-insert
+  // lookup is a check-then-insert race that concurrent identical submissions
+  // all pass (measured: 5 simultaneous copies → 0 flagged). Post-insert, every
+  // sibling is visible, so exactly the oldest stays unflagged.
+  const duplicateOfLeadId = await flagDuplicateLead(lead.id, source.companyId, phone, email);
+
+  // The domain event every other creation path fires. Previously only the
+  // manual API emitted it, so Conversions-API `lead_created` and the insight
+  // warm-up never ran for website/webhook leads — the exact leads that come
+  // from paid ads. Both listeners only buffer in memory (they defer their work
+  // to a macrotask), so this costs the webhook no measurable latency.
+  await eventBus.emit("lead.created", { leadId: lead.id, companyId: source.companyId, source: "webhook" });
 
   let assignmentError: string | null = null;
   try {

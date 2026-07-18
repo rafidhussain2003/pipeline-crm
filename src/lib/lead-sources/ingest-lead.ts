@@ -8,9 +8,13 @@ import { db } from "@/db";
 import { leadSources, leads } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { assignLead } from "@/lib/assignment";
-import { findDuplicateLead } from "@/lib/duplicates";
+import { flagDuplicateLead } from "@/lib/duplicates";
 import { recordAudit } from "@/lib/audit";
 import { recordDeliveryLog } from "@/lib/delivery-log";
+import { eventBus } from "@/lib/events/bus";
+import { normalizeLeadInput } from "@/lib/leads/input";
+import "@/lib/capi/listeners"; // lead.created -> Conversions API enqueue
+import "@/lib/insights/listeners"; // lead.created -> insight recompute
 
 type Source = typeof leadSources.$inferSelect;
 
@@ -32,8 +36,9 @@ export async function ingestLead(params: {
 }): Promise<IngestResult> {
   const { source, leadgenId, formId, fbLead, startedAt, retryPayload } = params;
   const webhookLatencyMs = params.webhookLatencyMs ?? null;
-
-  const duplicateOfLeadId = await findDuplicateLead(source.companyId, fbLead.phone, fbLead.email);
+  // Normalize before storing — Graph API field values are free-text and can
+  // exceed the column width, which previously threw and lost the lead.
+  const { name: fbName, phone: fbPhone, email: fbEmail } = normalizeLeadInput(fbLead);
 
   // Atomic dedup by provider lead id — the single point that guarantees
   // "never create a duplicate lead." Facebook's webhook delivery is
@@ -51,13 +56,11 @@ export async function ingestLead(params: {
       companyId: source.companyId,
       sourceId: source.id,
       externalLeadId: leadgenId,
-      name: fbLead.name || "Unknown",
-      phone: fbLead.phone,
-      email: fbLead.email,
+      name: fbName || "Unknown",
+      phone: fbPhone,
+      email: fbEmail,
       disposition: "New Lead",
       rawPayload: fbLead.raw,
-      isDuplicate: !!duplicateOfLeadId,
-      duplicateOfLeadId,
     })
     // `where` mirrors the partial index's predicate — Postgres requires it
     // to select a partial unique index as the ON CONFLICT arbiter.
@@ -86,6 +89,15 @@ export async function ingestLead(params: {
     });
     return { outcome: "duplicate", leadId: existing?.id ?? "" };
   }
+
+  // Post-insert duplicate flagging (see flagDuplicateLead): a pre-insert
+  // lookup is a check-then-insert race concurrent deliveries all pass.
+  const duplicateOfLeadId = await flagDuplicateLead(lead.id, source.companyId, fbLead.phone, fbLead.email);
+
+  // The domain event — previously only the manual API emitted it, so a
+  // Facebook lead (the one that came from a paid ad) never triggered the
+  // Conversions-API `lead_created` signal or the insight warm-up.
+  await eventBus.emit("lead.created", { leadId: lead.id, companyId: source.companyId, source: "webhook" });
 
   let assignmentError: string | null = null;
   try {
