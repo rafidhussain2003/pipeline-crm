@@ -29,7 +29,20 @@ const FEATURE_RULES: { feature: string; match: (p: string) => boolean }[] = [
   { feature: "hr", match: (p) => p === "/hr" || p.startsWith("/hr/") || p.startsWith("/api/hr") },
   // Workflow Automation (Phase 23) — UI under /automation, API under
   // /api/automation. The whole bounded context behind one rule.
-  { feature: "workflow", match: (p) => p === "/automation" || p.startsWith("/automation/") || p.startsWith("/api/automation") },
+  //
+  // The trailing slash on "/api/automation/" is load-bearing: a bare
+  // startsWith("/api/automation") ALSO swallows "/api/automation-settings",
+  // which belongs to ai_assignment two rules below. Because find() takes the
+  // first match and workflow defaults to OFF, that made the AI Assignment
+  // page 403 on its own settings API and hang on "Loading…" forever.
+  {
+    feature: "workflow",
+    match: (p) =>
+      p === "/automation" ||
+      p.startsWith("/automation/") ||
+      p === "/api/automation" ||
+      p.startsWith("/api/automation/"),
+  },
   // Order matters: the progressive sub-path must match before ai_assignment.
   { feature: "progressive_lead_release", match: (p) => p.startsWith("/api/automation-settings/progressive") },
   { feature: "ai_assignment", match: (p) => p.startsWith("/api/automation-settings") || p.startsWith("/settings/automation") },
