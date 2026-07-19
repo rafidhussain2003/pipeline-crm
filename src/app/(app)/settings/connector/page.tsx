@@ -837,7 +837,12 @@ function ConnectorContent() {
                                 {s.tokenExpiresAt ? new Date(s.tokenExpiresAt).toLocaleDateString() : "Doesn't expire"}
                               </dd>
                             </dl>
-                            <div className="text-xs font-semibold text-slate-500 mb-1">Lead Forms</div>
+                            {/* Above the form list on purpose: a Page with a lot
+                                of forms pushes anything below it off-screen, and
+                                importing is a thing you come here to DO, whereas
+                                the form checkboxes are set once and forgotten. */}
+                            <ImportHistoricalLeads sourceId={s.id} pageName={s.pageName || "this Page"} />
+                            <div className="text-xs font-semibold text-slate-500 mt-3 mb-1">Lead Forms</div>
                             {(detailFormsBySource[s.id] || []).length === 0 && (
                               <div className="text-xs text-slate-400">No forms connected.</div>
                             )}
@@ -855,7 +860,6 @@ function ConnectorContent() {
                                 </label>
                               ))}
                             </div>
-                            <ImportHistoricalLeads sourceId={s.id} pageName={s.pageName || "this Page"} />
                           </div>
                         );
                       })}
