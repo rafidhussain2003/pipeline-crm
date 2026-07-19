@@ -1,6 +1,10 @@
--- Manual migration — NOT managed by drizzle-kit.
+-- OPTIONAL zero-downtime variant. These indexes ARE created automatically by
+-- the journaled migration drizzle/0035_trgm_search_indexes.sql, which every
+-- deployment runs. You only need this file to apply them to a table that is
+-- already large, where 0035's plain CREATE INDEX would block writes for too
+-- long: run this first, then 0035 becomes a no-op (it is all IF NOT EXISTS).
 --
--- Why this isn't a normal `npm run db:generate` migration:
+-- Why these indexes aren't modeled in schema.ts as normal Drizzle indexes:
 --   1. It requires the `pg_trgm` Postgres extension, which drizzle-orm's
 --      schema DSL has no way to declare (there is no `CREATE EXTENSION`
 --      equivalent in Drizzle's pgTable/pgEnum builders).
@@ -21,9 +25,9 @@
 --   Postgres solution for this exact problem, not a novel abstraction.
 --
 -- How to run this:
---   Run it directly against your database, OUTSIDE drizzle's migrate
---   command (do NOT add this file's contents to `npm run db:migrate` — it
---   will fail on CREATE INDEX CONCURRENTLY inside a transaction):
+--   Directly against your database, BEFORE the deploy that runs migration
+--   0035. It cannot go through `npm run db:migrate` itself — CREATE INDEX
+--   CONCURRENTLY fails inside drizzle's transaction:
 --
 --     psql "$DATABASE_URL" -f drizzle/manual/0001_trgm_search_indexes.sql
 --
@@ -36,11 +40,9 @@
 --   run it via a role with that grant instead.
 --
 -- When to run this:
---   Not urgent at current scale — this is a preemptive fix for the
---   "10,000 companies / 50M leads" growth target discussed in the
---   Phase 9/10 audits, not a fix for a problem you have today. Safe to
---   run proactively any time; there's no reason to wait for search to
---   actually get slow first.
+--   Only when `leads` is already large enough that you cannot accept a brief
+--   write lock during the deploy that runs migration 0035. On a new or small
+--   database, skip this file entirely — 0035 handles it.
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 

@@ -271,6 +271,19 @@ seeded by migration `0014`. Attachments are stored inline in Postgres
 2. Add `FACEBOOK_VERIFY_TOKEN`, `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` in
    the Render dashboard (these are marked `sync: false` in the blueprint, so
    Render will prompt you for them).
+
+   **Database TLS.** If `DATABASE_URL` points at a Postgres that requires TLS
+   (any Render *External* URL, and most managed providers), it must carry
+   `?sslmode=require` in the URL itself. This is not cosmetic: `drizzle-kit`
+   parses `dbCredentials` with a zod union whose `{ url }` branch has **no**
+   `ssl` field, and zod's default `strip` mode silently discards one if you
+   add it — so an `ssl` option in `drizzle.config.ts` type-checks, runs, and
+   does nothing. Without `sslmode` the server resets the cleartext connection
+   and `drizzle-kit migrate` exits 1 printing only a spinner, which in the
+   blueprint's `startCommand` (`npm run db:migrate && npm start`) reads as a
+   deploy that failed for no stated reason. The app itself is unaffected —
+   `src/db/index.ts` sets `ssl` on the `pg` Pool directly, where it is
+   honoured — so this failure mode shows up *only* in the migration step.
 3. Run the schema push once against the live database (`DATABASE_URL` = your
    Render Postgres's External Database URL): `npm run db:push && npm run db:seed`.
 4. Optional: add a **Render Cron Job** hitting `https://YOUR_DOMAIN/api/cron/recycle-leads`

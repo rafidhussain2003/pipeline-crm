@@ -1,7 +1,8 @@
--- Manual migration — NOT managed by drizzle-kit (same reasons as
--- 0001_trgm_search_indexes.sql: pg_trgm isn't expressible in Drizzle's schema
--- DSL, and CREATE INDEX CONCURRENTLY can't run inside drizzle's transactional
--- migrate() runner).
+-- OPTIONAL zero-downtime variant, same as 0001_trgm_search_indexes.sql. The
+-- journaled migration drizzle/0035_trgm_search_indexes.sql already creates
+-- these on every deployment; use this file only to build them CONCURRENTLY on
+-- an email_messages table that is already large enough that 0035's plain
+-- CREATE INDEX would block writes for too long.
 --
 -- What this does and why:
 --   The Platform Owner mailbox search (GET /api/mailbox/[mailboxId]/messages?q=)
@@ -11,7 +12,8 @@
 --   matches index-backed — the "indexed search" requirement — using the same
 --   standard approach as the lead search indexes.
 --
--- How to run this (OUTSIDE drizzle's migrate command):
+-- How to run this (directly, BEFORE the deploy that runs migration 0035 —
+-- CREATE INDEX CONCURRENTLY fails inside drizzle's transaction):
 --     psql "$DATABASE_URL" -f drizzle/manual/0002_mailbox_search_indexes.sql
 --   Every statement is idempotent (IF NOT EXISTS) — safe to re-run.
 --   CONCURRENTLY builds without blocking reads/writes on email_messages.
