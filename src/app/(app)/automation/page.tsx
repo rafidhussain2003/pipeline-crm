@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { PageHeader, StatCard, StatusBadge, relTime } from "@/components/automation/shared";
+import { useLoadedData, LoadingPane, LoadErrorPane } from "@/components/LoadState";
 
 type Dashboard = {
   totalWorkflows: number;
@@ -14,10 +14,13 @@ type Dashboard = {
 };
 
 export default function AutomationDashboardPage() {
-  const [d, setD] = useState<Dashboard | null>(null);
-  useEffect(() => { fetch("/api/automation/dashboard").then(async (r) => { if (r.ok) setD((await r.json()).dashboard); }); }, []);
+  const { data: d, loading, error, reload } = useLoadedData<Dashboard>(
+    "/api/automation/dashboard",
+    (b) => (b as { dashboard: Dashboard }).dashboard
+  );
 
-  if (!d) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
+  if (loading) return <LoadingPane />;
+  if (error || !d) return <LoadErrorPane message={error || "No data was returned."} onRetry={reload} />;
 
   return (
     <div className="p-6 max-w-5xl">

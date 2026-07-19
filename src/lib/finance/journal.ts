@@ -63,13 +63,23 @@ async function normalizeLines(companyId: string, lines: JournalLineInput[]): Pro
   return normalized;
 }
 
-async function nextEntryNumber(companyId: string): Promise<number> {
-  const rows = await db
+// Allocate the next journal number. `executor` is the transaction the number
+// is being allocated FOR — see postJournal: the increment has to share that
+// transaction's fate, or a rollback leaves the counter advanced and the
+// journal sequence permanently gapped (an audit finding in a ledger that is
+// supposed to be gapless). Defaults to `db` for callers with no transaction.
+type Executor = Pick<typeof db, "update">;
+
+async function nextEntryNumber(companyId: string, executor: Executor = db): Promise<number> {
+  const rows = await executor
     .update(financeSettings)
     .set({ nextJournalNumber: sql`${financeSettings.nextJournalNumber} + 1`, updatedAt: new Date() })
     .where(eq(financeSettings.companyId, companyId))
     .returning({ n: financeSettings.nextJournalNumber });
   if (rows.length === 0) {
+    // Only reachable when called WITHOUT a transaction — callers that pass one
+    // run ensureFinanceSetup() beforehand, because setting up inside the
+    // transaction would use a second connection that cannot see it.
     await ensureFinanceSetup(companyId);
     return nextEntryNumber(companyId);
   }
@@ -217,9 +227,18 @@ export async function postJournal(companyId: string, actorUserId: string, journa
       throw new FinanceError("This entry no longer balances and cannot be posted");
     }
     await assertDatePostable(companyId, journal.entryDate);
-    const entryNumber = await nextEntryNumber(companyId);
+    // Guarantee the settings row exists BEFORE the transaction, so the
+    // allocation inside it never has to fall back to creating one on a
+    // separate connection.
+    await ensureFinanceSetup(companyId);
 
+    // The number is allocated inside the same transaction that posts the
+    // entry. Previously it was a separate committed statement, so a failure
+    // between allocating and posting burned the number and left a permanent
+    // gap in the sequence; now both commit together or neither does.
+    let entryNumber = 0;
     await db.transaction(async (tx) => {
+      entryNumber = await nextEntryNumber(companyId, tx);
       await tx
         .update(financeJournals)
         .set({ status: "posted", entryNumber, postedBy: actorUserId, postedAt: new Date(), updatedAt: new Date() })

@@ -64,6 +64,14 @@ export async function withRoute(
       logger.warn("invalid_json_body", { durationMs });
       return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
     }
+    // Postgres 22P02 = invalid_text_representation, which in this app means a
+    // malformed UUID reached a uuid-typed column (a mistyped or stale link).
+    // That is a bad request, not a server fault: reporting it as 500 both
+    // misleads the caller and pollutes error monitoring with user typos.
+    if (typeof err === "object" && err !== null && (err as { code?: string }).code === "22P02") {
+      logger.warn("invalid_identifier", { durationMs });
+      return NextResponse.json({ error: "That identifier is not valid." }, { status: 400 });
+    }
     logger.error("unhandled_error", {
       error: err instanceof Error ? err.message : String(err),
       durationMs,

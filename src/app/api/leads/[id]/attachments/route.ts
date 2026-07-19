@@ -4,7 +4,7 @@ import { leadAttachments, leads } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { and, desc, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
-import { isSafeHttpUrl } from "@/lib/url";
+import { isSafeHttpUrl, isUuid } from "@/lib/url";
 
 // Design note: attachments are stored as metadata + a URL, not as binary
 // uploads through this server. Render's web service filesystem is
@@ -19,6 +19,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
+  // A malformed id would otherwise reach a uuid column and surface as an
+  // empty-bodied 500; treat it as the missing record it describes.
+  if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const [lead] = await db.select({ id: leads.id }).from(leads).where(and(eq(leads.id, id), eq(leads.companyId, session.companyId))).limit(1);
   if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -36,6 +39,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
+  // A malformed id would otherwise reach a uuid column and surface as an
+  // empty-bodied 500; treat it as the missing record it describes.
+  if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const { fileName, fileUrl, fileSize } = await req.json();
   if (!fileName || !fileUrl) return NextResponse.json({ error: "fileName and fileUrl are required" }, { status: 400 });
 

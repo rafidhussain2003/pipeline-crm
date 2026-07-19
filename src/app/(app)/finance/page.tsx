@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useLoadedData, LoadingPane, LoadErrorPane } from "@/components/LoadState";
 import { money, moneyNum, PageHeader, StatusBadge } from "@/components/finance/shared";
 
 type Dashboard = {
@@ -16,15 +16,10 @@ type Dashboard = {
 };
 
 export default function FinanceDashboardPage() {
-  const [data, setData] = useState<Dashboard | null>(null);
+  const { data, loading, error, reload } = useLoadedData<Dashboard>("/api/finance/dashboard", (b) => b as Dashboard);
 
-  useEffect(() => {
-    fetch("/api/finance/dashboard").then(async (r) => {
-      if (r.ok) setData(await r.json());
-    });
-  }, []);
-
-  if (!data) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
+  if (loading) return <LoadingPane />;
+  if (error || !data) return <LoadErrorPane message={error || "No data was returned."} onRetry={reload} />;
 
   const cards = [
     { label: "Cash in hand", value: money(data.cashCents) },

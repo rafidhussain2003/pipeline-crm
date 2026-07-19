@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useLoadedData, LoadingPane, LoadErrorPane } from "@/components/LoadState";
 import { PageHeader } from "@/components/hr/shared";
 
 type Dashboard = {
@@ -10,11 +10,10 @@ type Dashboard = {
 };
 
 export default function HRDashboardPage() {
-  const [data, setData] = useState<Dashboard | null>(null);
-  useEffect(() => {
-    fetch("/api/hr/dashboard").then(async (r) => { if (r.ok) setData(await r.json()); });
-  }, []);
-  if (!data) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
+  const { data, loading, error, reload } = useLoadedData<Dashboard>("/api/hr/dashboard", (b) => b as Dashboard);
+
+  if (loading) return <LoadingPane />;
+  if (error || !data) return <LoadErrorPane message={error || "No data was returned."} onRetry={reload} />;
 
   const cards: { label: string; value: number; tone?: string; placeholder?: boolean }[] = [
     { label: "Total employees", value: data.totalEmployees },

@@ -1,24 +1,45 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Field, PageHeader, StatusBadge } from "@/components/hr/shared";
+import { LoadingPane, LoadErrorPane } from "@/components/LoadState";
 
 type Detail = { employeeCode: string; firstName: string; lastName: string | null; preferredName: string | null; email: string; phone: string | null; employmentStatus: string; departmentName: string | null; designationTitle: string | null; employmentTypeName: string | null; managerName: string | null; joiningDate: string | null; dateOfBirth: string | null; workLocation: string | null };
 
 export default function MyHRProfilePage() {
   const [d, setD] = useState<Detail | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  useEffect(() => {
-    // ?self=1 returns the caller's own profile (the [id] segment is ignored).
-    fetch("/api/hr/employees/self?self=1").then(async (r) => {
-      if (r.ok) setD((await r.json()).employee);
-      else setNotFound(true);
-    });
+  // Only a 404 means "no HR profile yet" — every OTHER failure used to be
+  // funnelled into that same message, so a 500 or an expired subscription
+  // told the employee their record didn't exist. A rejected fetch set nothing
+  // at all and the page hung on "Loading…" forever.
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    setNotFound(false);
+    try {
+      // ?self=1 returns the caller's own profile (the [id] segment is ignored).
+      const r = await fetch("/api/hr/employees/self?self=1");
+      if (r.ok) { setD((await r.json()).employee); return; }
+      if (r.status === 404) { setNotFound(true); return; }
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body?.error || `Could not load your profile (${r.status})`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load your profile");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) return <LoadingPane />;
+  if (error) return <LoadErrorPane message={error} onRetry={load} />;
   if (notFound) return <div className="p-6"><PageHeader title="My Profile" /><p className="text-sm text-slate-400">You don&apos;t have an HR profile yet. Ask your HR admin to set one up.</p></div>;
-  if (!d) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
+  if (!d) return <LoadErrorPane message="No profile data was returned." onRetry={load} />;
 
   return (
     <div className="p-6 max-w-2xl">

@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { leads, users } from "@/db/schema";
 import { getSession } from "@/lib/auth";
+import { isUuid } from "@/lib/url";
 import { and, eq, isNull } from "drizzle-orm";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
+  // A malformed id would otherwise reach a uuid column and surface as an
+  // empty-bodied 500; treat it as the missing record it describes.
+  if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const [lead] = await db
     .select({

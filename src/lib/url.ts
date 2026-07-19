@@ -26,6 +26,19 @@ export function getPublicAppUrl(): string {
   return raw.replace(/\/+$/, "");
 }
 
+// Does this path segment look like a UUID?
+//
+// Every dynamic route takes an id straight from the URL into a uuid-typed
+// column. A malformed one makes Postgres raise 22P02, which escapes an
+// unwrapped route handler as a bare 500 with an EMPTY body — so a mistyped or
+// stale link looked like a server outage to the client and to monitoring.
+// Guarding first turns that into the honest "no such record" 404.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_RE.test(value);
+}
+
 // Is this a user-supplied URL that is safe to put in an href?
 //
 // Anything stored and later rendered as a link must pass this. Only http and

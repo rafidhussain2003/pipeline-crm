@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
+import { isUuid } from "@/lib/url";
 import { buildLeadTimeline } from "@/lib/insights/timeline";
 
 // Unified lead timeline (Phase 9) — one chronological feed merging every event
@@ -11,6 +12,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await params;
+  // A malformed id would otherwise reach a uuid column and surface as an
+  // empty-bodied 500; treat it as the missing record it describes.
+  if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const events = await buildLeadTimeline(id, session.companyId);
   if (events === null) return NextResponse.json({ error: "Not found" }, { status: 404 });

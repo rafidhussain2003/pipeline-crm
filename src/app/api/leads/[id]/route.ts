@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { leads, assignmentLog } from "@/db/schema";
 import { getSession } from "@/lib/auth";
+import { isUuid } from "@/lib/url";
 import { hasPermission } from "@/lib/permissions";
 import { and, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
@@ -15,6 +16,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { id } = await params;
+  // A malformed id would otherwise reach a uuid column and surface as an
+  // empty-bodied 500; treat it as the missing record it describes.
+  if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const body = await req.json();
 
   // Reassigning a lead or exempting it from auto-assignment are supervisor
@@ -107,6 +111,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const { id } = await params;
+  // A malformed id would otherwise reach a uuid column and surface as an
+  // empty-bodied 500; treat it as the missing record it describes.
+  if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const [deleted] = await db
     .update(leads)

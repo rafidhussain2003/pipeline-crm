@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useLoadedData, LoadingPane, LoadErrorPane } from "@/components/LoadState";
 import { fmtMinutes, PageHeader } from "@/components/attendance/shared";
 
 type Dashboard = {
@@ -13,15 +13,10 @@ type Dashboard = {
 };
 
 export default function AttendanceDashboardPage() {
-  const [data, setData] = useState<Dashboard | null>(null);
+  const { data, loading, error, reload } = useLoadedData<Dashboard>("/api/attendance/dashboard", (b) => b as Dashboard);
 
-  useEffect(() => {
-    fetch("/api/attendance/dashboard").then(async (r) => {
-      if (r.ok) setData(await r.json());
-    });
-  }, []);
-
-  if (!data) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
+  if (loading) return <LoadingPane />;
+  if (error || !data) return <LoadErrorPane message={error || "No data was returned."} onRetry={reload} />;
 
   const cards: { label: string; value: string | number; tone?: string }[] = [
     { label: "Employees", value: data.totalEmployees },
