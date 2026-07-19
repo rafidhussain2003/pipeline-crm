@@ -31,7 +31,9 @@ export async function POST(req: NextRequest) {
     const sent = await sendVerificationEmail(email, result.code);
     // Dev fallback: when email isn't configured, log the code so the flow is
     // still testable end-to-end from the server logs.
-    if (!sent) logger.warn("verification_email_not_sent", { email, devCode: result.code });
+    // Same rule as the password-reset path: the code is a live credential and
+    // is never written to the logs, only the fact that delivery failed.
+    if (!sent) logger.warn("verification_email_not_sent", { email });
 
     return NextResponse.json({ ok: true, resend: result.resend, cooldownSec: 60 });
   });

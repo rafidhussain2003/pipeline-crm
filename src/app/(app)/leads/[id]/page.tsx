@@ -3,6 +3,7 @@
 import { useEffect, useState, use } from "react";
 import Link from "next/link";
 import LeadCallbacks from "@/components/callbacks/LeadCallbacks";
+import { isSafeHttpUrl } from "@/lib/url";
 
 type LeadDetail = {
   id: string;
@@ -335,9 +336,19 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
         <h2 className="text-sm font-semibold text-slate-700 mb-3">Attachments</h2>
         <div className="space-y-2 mb-4">
           {attachments.map((a) => (
-            <a key={a.id} href={a.fileUrl} target="_blank" rel="noopener noreferrer" className="block text-sm text-blue-600 hover:underline">
-              {a.fileName}
-            </a>
+            // Second line of defence behind the API's http(s) check: rows
+            // written before that validation existed are rendered as inert
+            // text, so an old "javascript:" URL can't be clicked into
+            // executing in this origin.
+            isSafeHttpUrl(a.fileUrl) ? (
+              <a key={a.id} href={a.fileUrl} target="_blank" rel="noopener noreferrer" className="block text-sm text-blue-600 hover:underline">
+                {a.fileName}
+              </a>
+            ) : (
+              <span key={a.id} className="block text-sm text-slate-400" title="Link removed: not a valid http(s) URL">
+                {a.fileName}
+              </span>
+            )
           ))}
           {attachments.length === 0 && <p className="text-xs text-slate-400">No attachments yet.</p>}
         </div>

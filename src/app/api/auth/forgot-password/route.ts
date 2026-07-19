@@ -26,7 +26,12 @@ export async function POST(req: NextRequest) {
       const result = await requestCode({ email, purpose: "password_reset" });
       if (result.ok) {
         const sent = await sendPasswordResetEmail(email, result.code);
-        if (!sent) logger.warn("reset_email_not_sent", { email, devCode: result.code });
+        // The code is deliberately NOT logged. It is a live credential: with
+        // it (and the email beside it) anyone holding the logs — including a
+        // third-party log aggregator or error tracker — can complete a
+        // password reset for this account. Log that delivery failed, never
+        // what would have been delivered.
+        if (!sent) logger.warn("reset_email_not_sent", { email });
       }
     }
     // Generic response regardless of whether the account exists.

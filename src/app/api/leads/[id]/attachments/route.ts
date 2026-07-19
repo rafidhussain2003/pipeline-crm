@@ -4,6 +4,7 @@ import { leadAttachments, leads } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { and, desc, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { isSafeHttpUrl } from "@/lib/url";
 
 // Design note: attachments are stored as metadata + a URL, not as binary
 // uploads through this server. Render's web service filesystem is
@@ -37,6 +38,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
   const { fileName, fileUrl, fileSize } = await req.json();
   if (!fileName || !fileUrl) return NextResponse.json({ error: "fileName and fileUrl are required" }, { status: 400 });
+
+  // fileUrl is rendered as an <a href> on the lead page. Only http(s) is
+  // accepted: previously ANY string was stored, so a "javascript:..." URL
+  // saved here became stored XSS — it ran in this origin, with the victim's
+  // session, as soon as a colleague opened the lead and clicked the link.
+  if (!isSafeHttpUrl(fileUrl)) {
+    return NextResponse.json({ error: "fileUrl must be an http(s) link." }, { status: 400 });
+  }
 
   const [lead] = await db.select({ id: leads.id }).from(leads).where(and(eq(leads.id, id), eq(leads.companyId, session.companyId))).limit(1);
   if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });

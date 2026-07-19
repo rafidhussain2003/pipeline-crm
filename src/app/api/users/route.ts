@@ -18,8 +18,16 @@ const ASSIGNABLE_ROLES = ["admin", "manager", "agent"] as const;
 type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
 
 export async function GET(req: NextRequest) {
-  const session = await getSession();
-  if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Broken function-level authorization: this listing was authenticated-only
+  // while the PATCH/DELETE on the same resource both require "agents:manage".
+  // Any agent could therefore enumerate the whole company directory — every
+  // colleague's email, phone, role, tier and lock state — which is a ready-made
+  // target list for phishing the admins it also identifies. Gated to match its
+  // siblings; the only caller (/settings/agents) is already admin/manager-only,
+  // so nothing an agent can legitimately reach depends on this.
+  const auth = await requirePermission("agents:manage");
+  if (!auth.ok) return auth.response;
+  const { session } = auth;
 
   const { searchParams } = new URL(req.url);
   const search = searchParams.get("search")?.trim();

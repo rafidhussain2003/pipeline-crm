@@ -25,3 +25,26 @@ export function getPublicAppUrl(): string {
   const raw = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || "http://localhost:3000";
   return raw.replace(/\/+$/, "");
 }
+
+// Is this a user-supplied URL that is safe to put in an href?
+//
+// Anything stored and later rendered as a link must pass this. Only http and
+// https are allowed: a "javascript:" (or "data:", or "vbscript:") URL in an
+// href executes in THIS origin the moment a victim clicks it, which turns any
+// user-supplied-link field into stored XSS against whoever opens the record.
+// Validated at the write boundary so a bad value can never reach the table —
+// sanitizing only at render leaves every future reader of the column exposed.
+export function isSafeHttpUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    // Not absolute, so there is no scheme to trust. Rejected rather than
+    // coerced: a relative value in an href is never what this field is for.
+    return false;
+  }
+  return parsed.protocol === "http:" || parsed.protocol === "https:";
+}
