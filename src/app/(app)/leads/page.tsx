@@ -44,8 +44,10 @@ export default function LeadsPage() {
     if ([50, 75, 100].includes(saved)) setPageSize(saved);
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (opts?: { preserveSelection?: boolean; silent?: boolean }) => {
+    // `silent` skips the loading state: a realtime refresh must not blank the
+    // table out from under someone mid-read (Task 5 — no flickering).
+    if (!opts?.silent) setLoading(true);
     setLoadError("");
     const params = new URLSearchParams();
     if (search) params.set("search", search);
@@ -67,9 +69,17 @@ export default function LeadsPage() {
       setLeads(leadsData.leads || []);
       setTotal(leadsData.total ?? 0);
       setTotalPages(leadsData.totalPages ?? 1);
-      // Selection is per-page: carrying ids across a page change would let a
-      // later bulk action hit rows the user can no longer see.
-      setSelectedIds(new Set());
+      if (opts?.preserveSelection) {
+        // A realtime refresh keeps the user's ticked rows, but only those still
+        // on the page — a lead that slid to page 2 must not stay selected
+        // invisibly (Task 2 preserves work; it does not resurrect hidden state).
+        const visible = new Set<string>((leadsData.leads || []).map((l: Lead) => l.id));
+        setSelectedIds((prev) => new Set([...prev].filter((id) => visible.has(id))));
+      } else {
+        // Selection is per-page: carrying ids across a page change would let a
+        // later bulk action hit rows the user can no longer see.
+        setSelectedIds(new Set());
+      }
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Could not load leads");
       setLeads([]);
@@ -90,6 +100,98 @@ export default function LeadsPage() {
   useEffect(() => {
     if (!loading && page > totalPages) setPage(totalPages);
   }, [loading, page, totalPages]);
+
+  // --- Phase 1B: realtime arrivals ---------------------------------------
+  // Arrivals are COUNTED, never auto-inserted: the table only changes when the
+  // user clicks View (Task 3). Nothing here touches page, search, pageSize,
+  // sorting, selection or scroll (Task 2).
+  const [pendingCount, setPendingCount] = useState(0);
+  const [connected, setConnected] = useState(false);
+  // Ids rather than a bare counter so two tabs, a reconnect replay and a live
+  // push can't count the same lead twice (Task 4 — no duplicate notifications).
+  const pendingIdsRef = useRef<Set<string>>(new Set());
+  // Watermark for reconnect replay. Starts at mount so we only ever ask about
+  // leads that arrived while this tab was actually open.
+  const lastSeenAtRef = useRef<string>(new Date().toISOString());
+  // load() changes identity on every keystroke; the stream must not reconnect
+  // when it does, so the effect reads it through a ref.
+  const loadRef = useRef(load);
+  useEffect(() => { loadRef.current = load; }, [load]);
+
+  useEffect(() => {
+    let es: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    let stopped = false;
+
+    const connect = () => {
+      if (stopped) return;
+      const url = `/api/leads/stream?since=${encodeURIComponent(lastSeenAtRef.current)}`;
+      es = new EventSource(url);
+
+      es.addEventListener("ready", () => {
+        attempt = 0; // a clean connect resets the backoff
+        setConnected(true);
+      });
+
+      es.addEventListener("lead.created", (e) => {
+        try {
+          const data = JSON.parse((e as MessageEvent).data) as { leadId: string; at: string };
+          if (pendingIdsRef.current.has(data.leadId)) return; // already counted
+          pendingIdsRef.current.add(data.leadId);
+          lastSeenAtRef.current = data.at;
+          setPendingCount(pendingIdsRef.current.size);
+        } catch {
+          /* a malformed frame must not kill the stream */
+        }
+      });
+
+      // Arrivals that happened while this tab was disconnected. Counted, not
+      // listed — the exact rows come from the normal query on View.
+      es.addEventListener("missed", (e) => {
+        try {
+          const data = JSON.parse((e as MessageEvent).data) as { count: number };
+          if (data.count > 0) setPendingCount((n) => n + data.count);
+          lastSeenAtRef.current = new Date().toISOString();
+        } catch {
+          /* ignore */
+        }
+      });
+
+      es.onerror = () => {
+        setConnected(false);
+        es?.close();
+        es = null;
+        if (stopped) return;
+        // EventSource retries on its own, but always to the ORIGINAL url — the
+        // stale `since` would then re-report the same missed leads. Reconnect
+        // manually so the watermark is current, with capped backoff.
+        attempt += 1;
+        retry = setTimeout(connect, Math.min(1000 * 2 ** (attempt - 1), 30_000));
+      };
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      if (retry) clearTimeout(retry);
+      es?.close();
+    };
+  }, []);
+
+  // Insert the arrivals: re-run the CURRENT query. The server is the authority
+  // on what page 1 contains, so this can't duplicate a row or shift pagination
+  // — unlike splicing rows in client-side, which would double-count a lead that
+  // the last fetch had already returned.
+  async function showNewLeads() {
+    const y = window.scrollY;
+    pendingIdsRef.current.clear();
+    setPendingCount(0);
+    await loadRef.current({ preserveSelection: true, silent: true });
+    // Same page, same page size, same row count — restore the exact offset so
+    // the list doesn't jump under the cursor (Task 5).
+    requestAnimationFrame(() => window.scrollTo({ top: y }));
+  }
 
   const allOnPageSelected = leads.length > 0 && selectedIds.size === leads.length;
 
@@ -191,6 +293,17 @@ export default function LeadsPage() {
               {total.toLocaleString()} total
               {selectedIds.size > 0 && ` · ${selectedIds.size} selected`}
             </span>
+            {/* Subtle, and only when something is wrong: a permanent green dot
+                is noise, but silently missing live leads is worse. */}
+            {!connected && (
+              <span
+                title="Reconnecting to live updates…"
+                className="ml-2 align-middle inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5"
+              >
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500" />
+                Reconnecting
+              </span>
+            )}
           </h1>
         </div>
         <div className="flex items-center gap-2">
@@ -217,7 +330,7 @@ export default function LeadsPage() {
       {loadError && (
         <div role="alert" className="mb-4 flex items-center justify-between gap-3 text-sm bg-red-50 border border-red-100 text-red-800 rounded-md px-3 py-2">
           <span>{loadError}</span>
-          <button onClick={load} className="shrink-0 text-xs font-semibold text-red-800 bg-red-100 hover:bg-red-200 rounded px-2.5 py-1">
+          <button onClick={() => load()} className="shrink-0 text-xs font-semibold text-red-800 bg-red-100 hover:bg-red-200 rounded px-2.5 py-1">
             Retry
           </button>
         </div>
@@ -231,6 +344,26 @@ export default function LeadsPage() {
           className="w-full max-w-md rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
+
+      {/* New-arrival notification. Deliberately does NOT insert rows on its own
+          — the user decides when the list moves under them (Task 3). */}
+      {pendingCount > 0 && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center justify-between gap-3 mb-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-2.5"
+        >
+          <span className="text-sm font-medium text-blue-900">
+            {pendingCount === 1 ? "1 New Lead Received" : `${pendingCount.toLocaleString()} New Leads Received`}
+          </span>
+          <button
+            onClick={showNewLeads}
+            className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md px-3 py-1.5"
+          >
+            View
+          </button>
+        </div>
+      )}
 
       {/* overflow-x-auto, not overflow-hidden: this table is ~1095px wide and
           its container is ~975px at a 1280px viewport, so `hidden` silently
