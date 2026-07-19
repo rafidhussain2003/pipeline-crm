@@ -87,19 +87,51 @@ export default function AutomationPage() {
         <p className="text-sm text-slate-500">Control how leads get assigned and recycled.</p>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-lg p-4">
-        <div className="flex items-center justify-between">
+      {/* Auto Assignment is the one control here with immediate, company-wide
+          consequences, so its CURRENT STATE is stated in words rather than left
+          to be inferred from a small pill — "paused" is easy to miss, and the
+          cost of missing it is leads silently piling up unassigned. */}
+      <div
+        className={`border rounded-lg p-4 ${
+          settings.autoAssignEnabled ? "bg-white border-slate-200" : "bg-amber-50/60 border-amber-200"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-sm font-medium text-slate-900">Auto Assignment</div>
-            <div className="text-xs text-slate-400 mt-0.5">Automatically assign new leads to agents.</div>
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden="true"
+                className={`inline-block w-2.5 h-2.5 rounded-full ${
+                  settings.autoAssignEnabled ? "bg-emerald-500" : "bg-amber-500"
+                }`}
+              />
+              <span
+                role="status"
+                className={`text-sm font-semibold ${
+                  settings.autoAssignEnabled ? "text-emerald-800" : "text-amber-900"
+                }`}
+              >
+                {settings.autoAssignEnabled ? "Auto Assignment Enabled" : "Auto Assignment Paused"}
+              </span>
+            </div>
+            <div className="text-xs text-slate-500 mt-1.5">
+              {settings.autoAssignEnabled
+                ? "New leads are routed to an available agent automatically."
+                : "New leads still arrive in the CRM — they stay unassigned until you turn this back on. Existing assignments are unaffected."}
+            </div>
           </div>
           <button
             onClick={() => update({ autoAssignEnabled: !settings.autoAssignEnabled })}
-            className={`text-xs font-medium rounded-full px-3 py-1.5 ${
-              settings.autoAssignEnabled ? "text-emerald-700 bg-emerald-50" : "text-slate-500 bg-slate-100"
+            role="switch"
+            aria-checked={settings.autoAssignEnabled}
+            aria-label="Auto Assignment"
+            className={`shrink-0 text-xs font-semibold rounded-full px-4 py-2 border transition-colors ${
+              settings.autoAssignEnabled
+                ? "text-emerald-800 bg-emerald-50 border-emerald-200 hover:bg-emerald-100"
+                : "text-amber-900 bg-amber-100 border-amber-300 hover:bg-amber-200"
             }`}
           >
-            {settings.autoAssignEnabled ? "On" : "Off"}
+            {settings.autoAssignEnabled ? "ON" : "OFF"}
           </button>
         </div>
 
