@@ -2,6 +2,10 @@ node_modules
 .next
 .env
 .env.local
+# Any other .env variant (.env.production, hand-made backups, ...). Only
+# .env.example is tracked — it holds placeholders, never real credentials.
+.env.*
+!.env.example
 *.log
 *.tsbuildinfo
 

@@ -833,12 +833,13 @@ export const leads = pgTable(
     dispositionIdx: index("leads_disposition_idx").on(t.companyId, t.disposition),
     priorityIdx: index("leads_priority_idx").on(t.companyId, t.priority),
     // Trigram GIN indexes on name/phone/email (for the ILIKE '%x%' search
-    // in /api/leads) live in drizzle/manual/0001_trgm_search_indexes.sql,
-    // NOT here. They need the pg_trgm extension and CREATE INDEX
-    // CONCURRENTLY (which cannot run inside drizzle-kit's transactional
-    // migration runner), so they're applied as a one-time manual script
-    // instead of being modeled in this schema — see that file for why and
-    // how to run it.
+    // in /api/leads) are not modeled here — Drizzle's DSL has no way to
+    // declare the pg_trgm extension they depend on. They are created by
+    // drizzle/0035_trgm_search_indexes.sql, a hand-written migration that
+    // IS in the journal, so a new database gets them automatically.
+    // drizzle/manual/0001_trgm_search_indexes.sql holds CONCURRENTLY
+    // variants for applying them to an already-large table without
+    // blocking writes; 0035 is IF NOT EXISTS, so running it first is safe.
   })
 );
 

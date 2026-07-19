@@ -246,6 +246,13 @@
       "when": 1784404977242,
       "tag": "0034_abandoned_shatterstar",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1784455064049,
+      "tag": "0035_trgm_search_indexes",
+      "breakpoints": true
     }
   ]
 }
