@@ -85,13 +85,21 @@ const FINANCE_ITEMS: { href: string; label: string }[] = [
 // feature profile has that module enabled (see lib/features). Untagged items
 // are core CRM. The server layout resolves the profile once and passes it in
 // — a disabled module's navigation simply doesn't exist for that company.
-const navItems: { href: string; label: string; feature?: string }[] = [
+//
+// Order here is the order on screen, and it is deliberate: All Leads first
+// because it is far and away the most-visited page. Website Forms and
+// Conversions API used to be standalone links rendered above this list, which
+// is why All Leads sat sixth; they are folded in as data so one array is the
+// single source of truth for CRM nav order.
+const navItems: { href: string; label: string; feature?: string; roles?: string[] }[] = [
   { href: "/leads", label: "All Leads" },
   // Callbacks (Phase 15) is every role's tool — an agent works their own list,
   // a manager/admin sees the whole company's. Scope is decided server-side, so
   // this needs no role gate.
   { href: "/callbacks", label: "Callbacks", feature: "callback_engine" },
   { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration" },
+  { href: "/settings/website-forms", label: "Website Forms", feature: "website_forms", roles: ["admin"] },
+  { href: "/settings/conversions", label: "Conversions API", feature: "meta_integration", roles: ["admin", "manager"] },
   { href: "/settings/delivery-log", label: "Delivery Log" },
   { href: "/settings/pipeline", label: "Pipeline Settings" },
   { href: "/settings/automation", label: "Automation", feature: "ai_assignment" },
@@ -109,14 +117,9 @@ const SUPERVISOR_NAV_ITEM = { href: "/team", label: "Team" };
 // shared navItems list, which every role sees.
 const AGENTS_NAV_ITEM = { href: "/settings/agents", label: "Agents" };
 
-// Website Forms (Phase 8) exposes the site's public/secret keys, the embed
-// snippet, allowed domains, and the hosted-form builder — all admin-only, so
-// it's gated like Agents rather than shown in the shared navItems list.
-const WEBSITE_FORMS_NAV_ITEM = { href: "/settings/website-forms", label: "Website Forms" };
-
-// Meta Conversions API (Phase 11) — pixel selection, event mapping, delivery
-// log, diagnostics. Admin + manager only (agents cannot configure it).
-const CONVERSIONS_NAV_ITEM = { href: "/settings/conversions", label: "Conversions API" };
+// Website Forms (admin-only) and Meta Conversions API (admin + manager) now
+// live in navItems above, carrying their own `roles` gate, so CRM nav order is
+// defined in exactly one place.
 
 export default function Sidebar({
   companyName,
@@ -257,6 +260,22 @@ export default function Sidebar({
         </button>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
+        {navItems
+          .filter((item) => has(item.feature) && (!item.roles || item.roles.includes(role)))
+          .map((item) => {
+            const active = pathname === item.href;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  active ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                }`}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
         {(role === "admin" || role === "manager") && has("operations_center") && (
           <Link
             href="/operations"
@@ -285,26 +304,6 @@ export default function Sidebar({
             }`}
           >
             {AGENTS_NAV_ITEM.label}
-          </Link>
-        )}
-        {role === "admin" && has("website_forms") && (
-          <Link
-            href={WEBSITE_FORMS_NAV_ITEM.href}
-            className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-              pathname === WEBSITE_FORMS_NAV_ITEM.href ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-            }`}
-          >
-            {WEBSITE_FORMS_NAV_ITEM.label}
-          </Link>
-        )}
-        {(role === "admin" || role === "manager") && has("meta_integration") && (
-          <Link
-            href={CONVERSIONS_NAV_ITEM.href}
-            className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-              pathname === CONVERSIONS_NAV_ITEM.href ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-            }`}
-          >
-            {CONVERSIONS_NAV_ITEM.label}
           </Link>
         )}
         {showAttendance && (
@@ -467,20 +466,6 @@ export default function Sidebar({
             )}
           </div>
         )}
-        {navItems.filter((item) => has(item.feature)).map((item) => {
-          const active = pathname === item.href;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                active ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-              }`}
-            >
-              {item.label}
-            </Link>
-          );
-        })}
         {role === "super_admin" && (
           <>
             <Link

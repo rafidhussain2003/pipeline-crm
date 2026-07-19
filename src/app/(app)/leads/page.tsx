@@ -27,11 +27,30 @@ export default function LeadsPage() {
   const [importResult, setImportResult] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // --- Phase 1A: server-side pagination + bulk-selection infrastructure ---
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  // Selection is keyed by lead id rather than row index so it survives
+  // re-sorting and re-fetching. Scoped to the current page: these ids are what
+  // a future bulk action would operate on.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Restore the saved page size before the first fetch so a reload doesn't
+  // flash 50 rows and then re-request 100.
+  useEffect(() => {
+    const saved = parseInt(localStorage.getItem("leads.pageSize") || "", 10);
+    if ([50, 75, 100].includes(saved)) setPageSize(saved);
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError("");
     const params = new URLSearchParams();
     if (search) params.set("search", search);
+    params.set("page", String(page));
+    params.set("pageSize", String(pageSize));
     // Previously this had no try/catch and setLoading(false) was the last
     // statement: a network failure — or a non-JSON error body, which .json()
     // throws on — rejected the promise, so the spinner never cleared and the
@@ -46,18 +65,62 @@ export default function LeadsPage() {
       }
       const leadsData = await leadsRes.json();
       setLeads(leadsData.leads || []);
+      setTotal(leadsData.total ?? 0);
+      setTotalPages(leadsData.totalPages ?? 1);
+      // Selection is per-page: carrying ids across a page change would let a
+      // later bulk action hit rows the user can no longer see.
+      setSelectedIds(new Set());
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Could not load leads");
       setLeads([]);
+      setTotal(0);
+      setTotalPages(1);
     } finally {
       setLoading(false);
     }
-  }, [search]);
+  }, [search, page, pageSize]);
 
   useEffect(() => {
     const timeout = setTimeout(load, 250);
     return () => clearTimeout(timeout);
   }, [load]);
+
+  // A narrowed search can leave you on a page that no longer exists (page 40 of
+  // a 3-page result), which would render an empty table with no way back.
+  useEffect(() => {
+    if (!loading && page > totalPages) setPage(totalPages);
+  }, [loading, page, totalPages]);
+
+  const allOnPageSelected = leads.length > 0 && selectedIds.size === leads.length;
+
+  function toggleOne(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllOnPage() {
+    setSelectedIds((prev) => (prev.size === leads.length ? new Set() : new Set(leads.map((l) => l.id))));
+  }
+
+  function changePageSize(next: number) {
+    setPageSize(next);
+    localStorage.setItem("leads.pageSize", String(next));
+    // Row N of page 3 at 50/page isn't row N of page 3 at 100/page — resetting
+    // to page 1 keeps the visible window meaningful.
+    setPage(1);
+  }
+
+  // Up to 10 numbers, sliding so the current page stays roughly centred.
+  const pageNumbers = (() => {
+    const MAX = 10;
+    if (totalPages <= MAX) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const start = Math.min(Math.max(1, page - Math.floor(MAX / 2)), totalPages - MAX + 1);
+    return Array.from({ length: MAX }, (_, i) => start + i);
+  })();
 
   // Dispositions are company config, not search results — previously they
   // were refetched alongside the leads on EVERY debounced keystroke (typing
@@ -123,7 +186,11 @@ export default function LeadsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-semibold text-slate-900">
-            Leads CRM <span className="text-blue-600">{leads.length} loaded</span>
+            Leads CRM{" "}
+            <span className="text-blue-600">
+              {total.toLocaleString()} total
+              {selectedIds.size > 0 && ` · ${selectedIds.size} selected`}
+            </span>
           </h1>
         </div>
         <div className="flex items-center gap-2">
@@ -174,6 +241,21 @@ export default function LeadsPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">
+              <th className="px-4 py-3 w-10">
+                <input
+                  type="checkbox"
+                  aria-label="Select all leads on this page"
+                  checked={allOnPageSelected}
+                  // Some-but-not-all selected shows the dash state rather than
+                  // an unticked box, so "select all" stays honest.
+                  ref={(el) => {
+                    if (el) el.indeterminate = selectedIds.size > 0 && !allOnPageSelected;
+                  }}
+                  onChange={toggleAllOnPage}
+                  disabled={leads.length === 0}
+                  className="rounded border-slate-300 cursor-pointer disabled:cursor-not-allowed"
+                />
+              </th>
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Phone</th>
               <th className="px-4 py-3">Email</th>
@@ -185,20 +267,32 @@ export default function LeadsPage() {
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
                   Loading leads…
                 </td>
               </tr>
             )}
             {!loading && leads.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
                   No leads yet. Connect a Facebook page under Connect Facebook to start receiving leads.
                 </td>
               </tr>
             )}
             {leads.map((lead) => (
-              <tr key={lead.id} className="border-b border-slate-100 hover:bg-slate-50">
+              <tr
+                key={lead.id}
+                className={`border-b border-slate-100 hover:bg-slate-50 ${selectedIds.has(lead.id) ? "bg-blue-50/50" : ""}`}
+              >
+                <td className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${lead.name || "lead"}`}
+                    checked={selectedIds.has(lead.id)}
+                    onChange={() => toggleOne(lead.id)}
+                    className="rounded border-slate-300 cursor-pointer"
+                  />
+                </td>
                 <td className="px-4 py-3">
                   <Link href={`/leads/${lead.id}`} className="font-medium text-blue-700 hover:underline">
                     {lead.name || "—"}
@@ -236,6 +330,66 @@ export default function LeadsPage() {
           </tbody>
         </table>
       </div>
+
+      {/* Paginator. Every control drives `page`/`pageSize`, which are sent to
+          the API as query params — the browser only ever holds one page of
+          rows, never the full 6k+ table. */}
+      {!loading && total > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-4">
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <label htmlFor="pageSize" className="text-slate-600">
+              Leads per page
+            </label>
+            <select
+              id="pageSize"
+              value={pageSize}
+              onChange={(e) => changePageSize(Number(e.target.value))}
+              className="rounded-md border border-slate-200 px-2 py-1.5 text-sm text-slate-700"
+            >
+              {[50, 75, 100].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            <span className="hidden sm:inline">
+              Showing {((page - 1) * pageSize + 1).toLocaleString()}–
+              {Math.min(page * pageSize, total).toLocaleString()} of {total.toLocaleString()}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-md px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50"
+            >
+              Previous
+            </button>
+            {pageNumbers.map((n) => (
+              <button
+                key={n}
+                onClick={() => setPage(n)}
+                aria-current={n === page ? "page" : undefined}
+                className={`text-sm font-medium rounded-md px-3 py-1.5 border ${
+                  n === page
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "text-slate-700 bg-white border-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-md px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

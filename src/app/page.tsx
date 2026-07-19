@@ -46,10 +46,10 @@ export default function HomePage() {
         <div className="absolute inset-0 -z-10 bg-gradient-to-b from-slate-50 to-white" aria-hidden="true" />
         <div className="max-w-4xl mx-auto px-6 pt-20 pb-16 sm:pt-28 sm:pb-20 text-center">
           <div className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-full px-3 py-1 mb-6 shadow-sm">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" /> Built for lead generation teams
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" /> Built for sales teams of any size
           </div>
           <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight text-slate-900 leading-[1.05]">
-            AI CRM Built for<br className="hidden sm:block" /> Lead Generation Teams
+            AI CRM Built for<br className="hidden sm:block" /> Sales Teams of Any Size
           </h1>
           <p className="text-slate-600 text-lg sm:text-xl mt-6 max-w-2xl mx-auto leading-relaxed">
             Connect Meta Lead Ads in minutes. AI automatically assigns leads to available agents. No spreadsheets. No manual routing.

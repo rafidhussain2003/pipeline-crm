@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { leads, users } from "@/db/schema";
 import { getSession } from "@/lib/auth";
-import { and, desc, eq, ilike, isNull, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, isNull, or } from "drizzle-orm";
 import "@/lib/assignment"; // registers the "lead.assign" job handler with the queue
 import "@/lib/workflows/registry"; // registers the lead.created -> workflow listener
 import { queue } from "@/lib/infra/queue";
@@ -22,7 +22,13 @@ export async function GET(req: NextRequest) {
   const disposition = searchParams.get("disposition");
   const ownerId = searchParams.get("ownerId");
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
-  const pageSize = 50;
+  // Phase 1A: caller-selectable page size, clamped to a fixed allow-list. Not a
+  // free-form number — an arbitrary ?pageSize=100000 would let one request pull
+  // the whole table into memory, which is exactly what server-side pagination
+  // exists to prevent.
+  const ALLOWED_PAGE_SIZES = [50, 75, 100];
+  const requestedPageSize = parseInt(searchParams.get("pageSize") || "50", 10);
+  const pageSize = ALLOWED_PAGE_SIZES.includes(requestedPageSize) ? requestedPageSize : 50;
 
   const conditions = [eq(leads.companyId, session.companyId), isNull(leads.deletedAt)];
   if (disposition) conditions.push(eq(leads.disposition, disposition));
@@ -52,11 +58,27 @@ export async function GET(req: NextRequest) {
     .from(leads)
     .leftJoin(users, eq(leads.ownerId, users.id))
     .where(and(...conditions))
-    .orderBy(desc(leads.createdAt))
+    // createdAt DESC is the product requirement (newest first). leads.id DESC is
+    // the tiebreaker that makes it a TOTAL order: two leads sharing a createdAt
+    // (a burst import, or two webhook deliveries in the same instant) would
+    // otherwise have no defined relative order, and Postgres is free to return
+    // them differently per query — which with LIMIT/OFFSET silently duplicates a
+    // row on one page and drops another. Never remove the second key.
+    .orderBy(desc(leads.createdAt), desc(leads.id))
     .limit(pageSize)
     .offset((page - 1) * pageSize);
 
-  return NextResponse.json({ leads: rows, page, pageSize });
+  // Total matching rows for the paginator. Counted with the SAME conditions as
+  // the page query so the page count can't disagree with what's listed, and as
+  // a COUNT rather than a fetch — the row data never leaves Postgres.
+  const [{ total }] = await db
+    .select({ total: count() })
+    .from(leads)
+    .leftJoin(users, eq(leads.ownerId, users.id))
+    .where(and(...conditions));
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  return NextResponse.json({ leads: rows, page, pageSize, total, totalPages });
 }
 
 export async function POST(req: NextRequest) {
