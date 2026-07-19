@@ -253,6 +253,13 @@
       "when": 1784455064049,
       "tag": "0035_trgm_search_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1784504252031,
+      "tag": "0036_black_gravity",
+      "breakpoints": true
     }
   ]
 }

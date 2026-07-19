@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { leadSources, connectedAccounts } from "@/db/schema";
 import { getSession } from "@/lib/auth";
+import { canSeeActualSourceName } from "@/lib/leads/source-privacy";
 import { and, eq, isNull } from "drizzle-orm";
 import crypto from "crypto";
 import { recordAudit } from "@/lib/audit";
@@ -16,6 +17,15 @@ import { getProvider } from "@/lib/lead-sources/registry";
 export async function GET() {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Phase 3 — this endpoint returns the REAL campaign names (and the alias
+  // beside them) for the settings UI, so it is restricted to the roles
+  // entitled to see them. It previously required only a session, which meant
+  // an agent could read every actual source name straight from the API even
+  // though no screen showed it to them — the privacy layer would have been
+  // cosmetic. Same predicate as every other resolution point.
+  if (!canSeeActualSourceName(session.role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const [rows, accounts] = await Promise.all([
     db
@@ -25,6 +35,10 @@ export async function GET() {
         platform: leadSources.platform,
         pageId: leadSources.pageId,
         pageName: leadSources.pageName,
+        // Phase 3 — this endpoint is admin/manager only, so it returns BOTH the
+        // real name and the agent-facing alias; the settings UI needs the pair
+        // to show one read-only beside the other without a second query.
+        agentDisplayName: leadSources.agentDisplayName,
         businessId: leadSources.businessId,
         businessName: leadSources.businessName,
         status: leadSources.status,

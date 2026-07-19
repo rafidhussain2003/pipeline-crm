@@ -13,6 +13,7 @@ type Source = {
   platform: string;
   pageId: string | null;
   pageName: string | null;
+  agentDisplayName: string | null;
   businessId: string | null;
   businessName: string | null;
   status: SourceStatus;
@@ -275,6 +276,22 @@ function ConnectorContent() {
       bySource[s.id] = results[i]?.forms || [];
     });
     setDetailFormsBySource(bySource);
+  }
+
+  // Phase 3 — persist the agent-facing alias. Saves on blur rather than per
+  // keystroke so a rename is one request, not one per character.
+  async function saveDisplayName(sourceId: string, value: string) {
+    const res = await fetch(`/api/lead-sources/${sourceId}/display-name`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentDisplayName: value || null }),
+    });
+    if (!res.ok) {
+      setAccountMessage((await res.json().catch(() => ({}))).error || "Could not save the display name.");
+      return;
+    }
+    setAccountMessage(value ? "Agent-facing name saved." : "Agent-facing name cleared — agents now see the actual name.");
+    load();
   }
 
   async function toggleFormEnabled(source: Source, form: ConnectedForm) {
@@ -837,6 +854,32 @@ function ConnectorContent() {
                                 {s.tokenExpiresAt ? new Date(s.tokenExpiresAt).toLocaleDateString() : "Doesn't expire"}
                               </dd>
                             </dl>
+                            {/* Phase 3 — Lead Privacy Layer. The real name is
+                                shown read-only: it comes from Meta, it is what
+                                reporting is keyed on, and letting it be edited
+                                here would destroy the very thing the alias
+                                exists to protect. */}
+                            <div className="mb-3 pb-3 border-b border-slate-100">
+                              <div className="text-xs font-semibold text-slate-500 mb-2">Agent-facing name</div>
+                              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs mb-2">
+                                <dt className="text-slate-400">Actual name</dt>
+                                <dd className="text-slate-700 font-medium">{s.pageName || "—"}</dd>
+                              </dl>
+                              <input
+                                type="text"
+                                defaultValue={s.agentDisplayName || ""}
+                                placeholder={`Shown to agents (default: ${s.pageName || "actual name"})`}
+                                maxLength={255}
+                                onBlur={(e) => {
+                                  const v = e.target.value.trim();
+                                  if (v !== (s.agentDisplayName || "")) saveDisplayName(s.id, v);
+                                }}
+                                className="w-full rounded-md border border-slate-200 px-2.5 py-1.5 text-xs"
+                              />
+                              <p className="text-[11px] text-slate-400 mt-1">
+                                Agents see this instead of the actual name. Leave blank to show the actual name.
+                              </p>
+                            </div>
                             {/* Above the form list on purpose: a Page with a lot
                                 of forms pushes anything below it off-screen, and
                                 importing is a thing you come here to DO, whereas

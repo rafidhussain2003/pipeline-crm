@@ -415,7 +415,14 @@ export const leadSources = pgTable(
     accountId: uuid("account_id").references(() => connectedAccounts.id, { onDelete: "cascade" }),
     platform: sourcePlatformEnum("platform").notNull().default("facebook"),
     pageId: varchar("page_id", { length: 255 }),
+    // The TRUE name, as Meta/the connector reports it. Campaign naming leaks
+    // strategy ("$99 Bundle July"), so this is admin-only and is never
+    // rewritten by the privacy layer — reporting stays accurate.
     pageName: varchar("page_name", { length: 255 }),
+    // Phase 3 — what AGENTS see instead. Null means "no alias set", and every
+    // read falls back to the real name, so the column is purely additive:
+    // nothing changes for a company that never sets one.
+    agentDisplayName: varchar("agent_display_name", { length: 255 }),
     // The Facebook Business Manager account the page belongs to — requires
     // the business_management scope to read (see lib/facebook-oauth.ts).
     // Null for non-Facebook platforms and for pages connected before this
@@ -480,6 +487,9 @@ export const hostedForms = pgTable(
     // The Website connection this form submits through (its id is the public key).
     sourceId: uuid("source_id").references(() => leadSources.id, { onDelete: "cascade" }).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
+    // Phase 3 — agent-facing alias for a hosted website form. Null falls back
+    // to `name`.
+    agentDisplayName: varchar("agent_display_name", { length: 255 }),
     fields: jsonb("fields").notNull(), // FormField[]
     submitText: varchar("submit_text", { length: 100 }).notNull().default("Submit"),
     successMessage: text("success_message"),
@@ -512,6 +522,9 @@ export const leadForms = pgTable(
     sourceId: uuid("source_id").references(() => leadSources.id, { onDelete: "cascade" }).notNull(),
     formId: varchar("form_id", { length: 255 }).notNull(),
     formName: varchar("form_name", { length: 255 }),
+    // Phase 3 — agent-facing alias for this individual form. Same rule as
+    // leadSources.agentDisplayName: null falls back to formName.
+    agentDisplayName: varchar("agent_display_name", { length: 255 }),
     enabled: boolean("enabled").notNull().default(true),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
