@@ -18,6 +18,29 @@ import "@/lib/insights/listeners"; // lead.created -> insight recompute
 
 type Source = typeof leadSources.$inferSelect;
 
+// The customer's own submission time, as reported by Meta in the lead payload
+// ("created_time", ISO-8601 with offset e.g. "2026-04-20T21:42:57+0000").
+//
+// Returns null — meaning "fall back to the column's now() default" — rather
+// than guessing, whenever the value is absent, unparseable, or outside a sane
+// window. The future guard matters: a bad timezone or a garbage value could
+// otherwise park a lead permanently at the top of a createdAt DESC list, above
+// every genuine lead, and no agent would think to look for it. A small skew is
+// allowed for clock drift between Meta and this server.
+const FUTURE_SKEW_MS = 5 * 60 * 1000;
+const EARLIEST_PLAUSIBLE = Date.parse("2004-02-04T00:00:00Z"); // Facebook's own founding — nothing predates it
+
+export function submittedAt(raw: unknown): Date | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = (raw as Record<string, unknown>).created_time;
+  if (typeof value !== "string" || !value.trim()) return null;
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return null;
+  if (ms > Date.now() + FUTURE_SKEW_MS) return null;
+  if (ms < EARLIEST_PLAUSIBLE) return null;
+  return new Date(ms);
+}
+
 export type IngestResult =
   | { outcome: "duplicate"; leadId: string }
   | { outcome: "imported"; leadId: string; assignmentFailed: boolean };
@@ -39,6 +62,7 @@ export async function ingestLead(params: {
   // Normalize before storing — Graph API field values are free-text and can
   // exceed the column width, which previously threw and lost the lead.
   const { name: fbName, phone: fbPhone, email: fbEmail } = normalizeLeadInput(fbLead);
+  const submitted = submittedAt(fbLead.raw);
 
   // Atomic dedup by provider lead id — the single point that guarantees
   // "never create a duplicate lead." Facebook's webhook delivery is
@@ -61,6 +85,14 @@ export async function ingestLead(params: {
       email: fbEmail,
       disposition: "New Lead",
       rawPayload: fbLead.raw,
+      // When Meta tells us when the customer actually submitted, that is the
+      // lead's createdAt — not the moment we happened to write the row. For a
+      // live webhook the two are seconds apart, so this changes nothing; for a
+      // historical import they differ by up to months, and using the write time
+      // made "newest first" mean "imported most recently", interleaving a
+      // April lead above a July one. Falls back to the column default (now())
+      // whenever the payload has no usable timestamp — see submittedAt().
+      ...(submitted ? { createdAt: submitted } : {}),
     })
     // `where` mirrors the partial index's predicate — Postgres requires it
     // to select a partial unique index as the ON CONFLICT arbiter.

@@ -10,6 +10,7 @@ import { decrypt } from "@/lib/crypto";
 import { getProvider } from "@/lib/lead-sources/registry";
 import { eventBus } from "@/lib/events/bus";
 import { normalizeLeadInput } from "@/lib/leads/input";
+import { submittedAt } from "@/lib/lead-sources/ingest-lead";
 import "@/lib/capi/listeners"; // lead.created -> Conversions API enqueue
 import "@/lib/insights/listeners"; // lead.created -> insight recompute
 
@@ -91,6 +92,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         email: normalized.email,
         disposition: "New Lead",
         rawPayload: rawPayload as object,
+        // Same rule as the main ingest path: a retry re-creates a lead whose
+        // first delivery failed, sometimes days later. Its createdAt must be
+        // when the customer submitted, not when the retry ran.
+        ...(submittedAt(rawPayload) ? { createdAt: submittedAt(rawPayload)! } : {}),
       })
       .onConflictDoNothing({ target: [leads.sourceId, leads.externalLeadId], where: sql`${leads.externalLeadId} IS NOT NULL` })
       .returning();
