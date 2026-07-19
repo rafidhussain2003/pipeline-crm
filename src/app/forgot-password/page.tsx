@@ -41,7 +41,7 @@ export default function ForgotPasswordPage() {
           {step === 1 && (
             <form onSubmit={(e) => { e.preventDefault(); requestCode(); }} className="space-y-3">
               <h1 className="text-lg font-semibold text-slate-900">Reset your password</h1>
-              <p className="text-sm text-slate-500">Enter your email and we'll send a reset code.</p>
+              <p className="text-sm text-slate-500">Enter your email and we&apos;ll send a reset code.</p>
               <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" required />
               {error && <p className="text-xs text-red-600">{error}</p>}
               <button type="submit" disabled={busy} className="w-full bg-slate-900 text-white text-sm font-medium px-4 py-2.5 rounded-md disabled:opacity-50">{busy ? "Sending…" : "Send reset code"}</button>

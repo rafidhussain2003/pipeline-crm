@@ -77,7 +77,7 @@ export default function HomePage() {
       <section id="features" className="max-w-6xl mx-auto px-6 py-20 sm:py-24">
         <div className="text-center max-w-2xl mx-auto mb-12">
           <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900">Everything you need to move fast</h2>
-          <p className="text-slate-600 mt-3 text-lg">The core tools a high-volume lead team actually uses — nothing you don't.</p>
+          <p className="text-slate-600 mt-3 text-lg">The core tools a high-volume lead team actually uses — nothing you don&apos;t.</p>
         </div>
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((f) => (

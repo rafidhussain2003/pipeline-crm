@@ -96,7 +96,7 @@ export default function CallbackReminders() {
           return (
             <div key={r.callbackId} className="bg-white border border-slate-200 rounded-lg shadow-sm px-3 py-2 flex items-center gap-2">
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${overdue ? "bg-red-500" : "bg-blue-500"}`} />
-              <span className="text-xs text-slate-600 flex-1 min-w-0 truncate">{r.label} — you're on this lead</span>
+              <span className="text-xs text-slate-600 flex-1 min-w-0 truncate">{r.label} — you&apos;re on this lead</span>
               <button onClick={() => acknowledge(r.callbackId)} className="text-[11px] font-medium text-slate-400 hover:text-slate-600 shrink-0">Dismiss</button>
             </div>
           );

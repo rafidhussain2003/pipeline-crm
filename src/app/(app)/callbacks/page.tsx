@@ -80,7 +80,7 @@ export default function CallbacksPage() {
   return (
     <div className="p-6 max-w-5xl">
       <h1 className="text-xl font-semibold text-slate-900">Callbacks</h1>
-      <p className="text-sm text-slate-500 mt-1">Ordered by what to call first — the AI weighs how overdue it is, the priority, and the lead's value.</p>
+      <p className="text-sm text-slate-500 mt-1">Ordered by what to call first — the AI weighs how overdue it is, the priority, and the lead&apos;s value.</p>
 
       {/* Tabs */}
       <div className="flex gap-1 mt-5 border-b border-slate-200">

@@ -234,7 +234,7 @@ export default function AgentsPage() {
           Add Agent
         </button>
       </div>
-      <p className="text-sm text-slate-500 mb-6">Manage your team's access, roles, and account status.</p>
+      <p className="text-sm text-slate-500 mb-6">Manage your team&apos;s access, roles, and account status.</p>
 
       <div className="flex items-center gap-2 mb-4">
         <input
@@ -453,7 +453,7 @@ export default function AgentsPage() {
                 <option value="manager">Manager</option>
                 {canManageAdmins && <option value="admin">Admin</option>}
               </select>
-              {editing.isOwner && <p className="text-xs text-slate-400">The company owner's role can't be changed.</p>}
+              {editing.isOwner && <p className="text-xs text-slate-400">The company owner&apos;s role can&apos;t be changed.</p>}
             </div>
             {editError && <p className="text-sm text-red-600 mt-2">{editError}</p>}
             <div className="flex justify-end gap-2 mt-4">
@@ -472,7 +472,7 @@ export default function AgentsPage() {
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setResetting(null)}>
           <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-base font-semibold text-slate-900 mb-1">Reset password</h2>
-            <p className="text-sm text-slate-500 mb-4">Set a new temporary password for {resetting.name}. They'll be signed out everywhere.</p>
+            <p className="text-sm text-slate-500 mb-4">Set a new temporary password for {resetting.name}. They&apos;ll be signed out everywhere.</p>
             <input
               placeholder="New temporary password"
               type="password"

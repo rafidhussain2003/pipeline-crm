@@ -13,7 +13,10 @@ export default function TemplatesPage() {
   const [error, setError] = useState("");
   useEffect(() => { fetch("/api/automation/templates").then(async (r) => { if (r.ok) setTemplates((await r.json()).templates || []); }); }, []);
 
-  async function useTemplate(key: string) {
+  // Named applyTemplate, not useTemplate: a plain async function whose name
+  // starts with "use" is treated as a React Hook by the rules-of-hooks lint
+  // (and read as one by anyone skimming the file), which it is not.
+  async function applyTemplate(key: string) {
     setBusy(key); setError("");
     const r = await fetch("/api/automation/templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) });
     setBusy("");
@@ -35,7 +38,7 @@ export default function TemplatesPage() {
             <p className="text-xs text-slate-500 mt-1 flex-1">{t.description}</p>
             <div className="flex items-center justify-between mt-3">
               <span className="text-[11px] text-slate-400 font-mono">{t.triggerType} · {t.actionCount} action(s)</span>
-              <button onClick={() => useTemplate(t.key)} disabled={busy === t.key} className="text-xs font-medium text-indigo-700 bg-indigo-50 rounded px-3 py-1.5 disabled:opacity-50">
+              <button onClick={() => applyTemplate(t.key)} disabled={busy === t.key} className="text-xs font-medium text-indigo-700 bg-indigo-50 rounded px-3 py-1.5 disabled:opacity-50">
                 {busy === t.key ? "Creating…" : "Use template"}
               </button>
             </div>
