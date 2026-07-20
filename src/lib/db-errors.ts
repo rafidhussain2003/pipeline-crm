@@ -5,6 +5,26 @@
 // checking only the top-level message silently never matches, and the caller
 // falls through to a 500 for what is really a 409.
 
+/** True when `err` means the database schema is BEHIND the running code —
+ * a migration that shipped with this build has not been applied yet:
+ *   42703 undefined_column   (e.g. users.current_session_id, 0038)
+ *   42P01 undefined_table    (e.g. trusted_devices, 0038)
+ *   22P02 invalid enum input (e.g. verification_purpose 'device_otp', 0038)
+ * Auth-critical routes use this to degrade gracefully (with loud logs)
+ * instead of hard-failing every login until the boot migrator
+ * (src/instrumentation.ts) lands the schema. */
+export function isSchemaLagError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const cause = (err as { cause?: unknown }).cause;
+  const code = (cause as { code?: string } | undefined)?.code ?? (err as { code?: string }).code;
+  if (code === "42703" || code === "42P01") return true;
+  const top = err instanceof Error ? err.message : "";
+  const causeMsg = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "";
+  const text = `${top} ${causeMsg}`;
+  if (code === "22P02") return text.includes("invalid input value for enum");
+  return (text.includes("column") || text.includes("relation")) && text.includes("does not exist");
+}
+
 /** True when `err` is Postgres 42703 (undefined_column) — the running code
  * references a column the database doesn't have yet, i.e. a migration that
  * shipped with this build has not been applied. Used by routes that can

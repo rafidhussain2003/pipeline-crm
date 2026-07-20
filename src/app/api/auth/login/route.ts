@@ -10,6 +10,7 @@ import { DEVICE_COOKIE_NAME, isTrustedDevice, registerTrustedDevice } from "@/li
 import { requestCode, verifyCode } from "@/lib/auth/verification";
 import { sendLoginOtpEmail } from "@/lib/email/send";
 import { recordAudit } from "@/lib/audit";
+import { isSchemaLagError } from "@/lib/db-errors";
 import { checkPolicy, getClientIp, checkAccountLockout, recordLoginFailure, recordLoginSuccess } from "@/lib/rate-limit";
 import { eq } from "drizzle-orm";
 import { withRoute } from "@/lib/api-handler";
@@ -50,7 +51,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    // Explicit columns, deliberately NOT select() (full row): the full row
+    // includes columns added by recent migrations (current_session_id, 0038),
+    // and against a database where those haven't been applied yet a full-row
+    // select throws 42703 — which made EVERY login 500 before the password
+    // was even checked. Sign-in must never depend on the newest migration.
+    const [user] = await db
+      .select({
+        id: users.id,
+        companyId: users.companyId,
+        email: users.email,
+        passwordHash: users.passwordHash,
+        role: users.role,
+        active: users.active,
+        deletedAt: users.deletedAt,
+      })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
     if (!user || !user.active || user.deletedAt) {
       recordLoginFailure(lockoutKey);
       await recordAudit({
@@ -93,8 +111,17 @@ export async function POST(req: NextRequest) {
     // and passing it registers this browser as trusted for the Remember-Me
     // window (30 days).
     const deviceToken = req.cookies.get(DEVICE_COOKIE_NAME)?.value || null;
-    const trusted = deviceToken ? await isTrustedDevice(user.id, deviceToken) : false;
+    let trusted = false;
     let newDeviceRegistered = false;
+    // Migration lag guard: the whole device/OTP layer depends on 0038 (the
+    // trusted_devices table and the device_otp enum value). If the schema is
+    // behind the code, logins fall back to password-only — loudly logged,
+    // never silent — instead of stranding the entire company at the door.
+    // The layer re-arms by itself the moment the boot migrator
+    // (src/instrumentation.ts) catches the database up.
+    let deviceSecurityDegraded = false;
+    try {
+    trusted = deviceToken ? await isTrustedDevice(user.id, deviceToken) : false;
 
     if (!trusted) {
       if (!otp) {
@@ -148,6 +175,13 @@ export async function POST(req: NextRequest) {
       });
       newDeviceRegistered = true;
     }
+    } catch (err) {
+      if (!isSchemaLagError(err)) throw err;
+      deviceSecurityDegraded = true;
+      logger.error("device_security_degraded_schema_lag", {
+        detail: "trusted_devices/device_otp schema (migration 0038) not applied — proceeding password-only",
+      });
+    }
 
     recordLoginSuccess(lockoutKey);
 
@@ -180,10 +214,15 @@ export async function POST(req: NextRequest) {
       entityType: "user",
       entityId: user.id,
       requestId,
-      metadata: { rememberMe: !!rememberMe, otpUsed: !trusted, newDevice: newDeviceRegistered },
+      metadata: {
+        rememberMe: !!rememberMe,
+        otpUsed: !trusted && !deviceSecurityDegraded,
+        newDevice: newDeviceRegistered,
+        ...(deviceSecurityDegraded ? { deviceSecurityDegraded: true } : {}),
+      },
     });
 
-    logger.info("login_success", { rememberMe: !!rememberMe, otpUsed: !trusted });
+    logger.info("login_success", { rememberMe: !!rememberMe, otpUsed: !trusted && !deviceSecurityDegraded, deviceSecurityDegraded });
     return NextResponse.json({ ok: true, role: user.role });
   });
 }

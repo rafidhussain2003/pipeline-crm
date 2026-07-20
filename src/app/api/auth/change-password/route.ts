@@ -32,7 +32,20 @@ export async function POST(req: NextRequest) {
     }
     const { currentPassword, newPassword } = parsed.data;
 
-    const [user] = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+    // Explicit columns, not select() (full row) — same migration-lag
+    // discipline as the login route: the forced first-login password change
+    // must keep working even when the newest migration's columns aren't in
+    // the database yet.
+    const [user] = await db
+      .select({
+        id: users.id,
+        companyId: users.companyId,
+        passwordHash: users.passwordHash,
+        mustChangePassword: users.mustChangePassword,
+      })
+      .from(users)
+      .where(eq(users.id, session.userId))
+      .limit(1);
     if (!user) return NextResponse.json({ error: "Account not found" }, { status: 404 });
 
     // Enterprise Agent Portal: agents change their password only through the
