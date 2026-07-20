@@ -7,6 +7,7 @@ import { issueRefreshToken } from "@/lib/refresh-tokens";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 import { PLANS } from "@/lib/plans";
+import { DEFAULT_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
 import { eq } from "drizzle-orm";
 import { withRoute } from "@/lib/api-handler";
 
@@ -61,13 +62,17 @@ export async function POST(req: NextRequest) {
         .insert(users)
         .values({ companyId: company.id, name: claims.name || "Admin", email, passwordHash, role: "admin", tier: "1", active: true, passwordChangedAt: now })
         .returning();
-      await tx.insert(dispositionOptions).values([
-        { companyId: company.id, label: "New Lead", color: "#2563eb", sortOrder: 0 },
-        { companyId: company.id, label: "Answering Machine", color: "#d97706", sortOrder: 1 },
-        { companyId: company.id, label: "Not Interested", color: "#dc2626", sortOrder: 2 },
-        { companyId: company.id, label: "Qualified", color: "#16a34a", sortOrder: 3 },
-        { companyId: company.id, label: "Sold", color: "#7c3aed", sortOrder: 4 },
-      ]);
+      // Enterprise disposition taxonomy — same set as the signup route and
+      // migration 0037's backfill (lib/dispositions/taxonomy.ts).
+      await tx.insert(dispositionOptions).values(
+        DEFAULT_DISPOSITIONS.map((d) => ({
+          companyId: company.id,
+          label: d.label,
+          color: d.color,
+          sortOrder: d.sortOrder,
+          category: d.category,
+        }))
+      );
       await tx.insert(assignmentRules).values([
         { companyId: company.id, tier: "1", weight: 3, active: true },
         { companyId: company.id, tier: "2", weight: 2, active: true },

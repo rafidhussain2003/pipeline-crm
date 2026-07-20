@@ -3,7 +3,8 @@
 // states its reasoning, same explainability requirement as scoring.
 import { buildLeadContext } from "./context";
 import { scoreLead } from "./lead-scoring";
-import { WON_DISPOSITION } from "../analytics/kpis";
+import { isWonDisposition } from "../analytics/kpis";
+import { isLostDisposition } from "@/lib/dispositions/taxonomy";
 
 export type NextAction = "call_now" | "send_email" | "send_sms" | "recycle" | "escalate" | "assign_to_another_agent" | "wait";
 
@@ -20,11 +21,11 @@ export async function recommendNextAction(leadId: string): Promise<NextActionRec
   const context = await buildLeadContext(leadId);
   if (!context) return null;
 
-  if (context.disposition === WON_DISPOSITION) {
+  if (isWonDisposition(context.disposition)) {
     return { leadId, action: "wait", reasoning: "Lead is already won — no action needed." };
   }
-  if (context.disposition === "Not Interested") {
-    return { leadId, action: "wait", reasoning: 'Lead is marked "Not Interested" — leave it unless recycled by automation.' };
+  if (isLostDisposition(context.disposition)) {
+    return { leadId, action: "wait", reasoning: `Lead is marked "${context.disposition}" — leave it unless recycled by automation.` };
   }
 
   const daysSinceUpdate = (Date.now() - context.updatedAt.getTime()) / (1000 * 60 * 60 * 24);

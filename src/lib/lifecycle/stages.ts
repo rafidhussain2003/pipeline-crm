@@ -2,7 +2,7 @@
 // logic around it. Distinct from `disposition` (company-configurable, agent-
 // facing): the lifecycle is the engine-owned progression the autonomous queue
 // reasons about (what to recycle, what to rebalance, what's active).
-import { WON_DISPOSITION } from "@/lib/analytics/kpis";
+import { isWonDisposition, isLostDisposition } from "@/lib/dispositions/taxonomy";
 
 export type LifecycleStage =
   | "new"
@@ -35,8 +35,8 @@ export function isActiveStage(stage: LifecycleStage): boolean {
 // progression (still "New Lead"). Any non-terminal, non-New disposition means
 // the agent has engaged → "contacted".
 export function dispositionToLifecycle(disposition: string): LifecycleStage | null {
-  if (disposition === WON_DISPOSITION) return "won";
-  if (disposition === "Not Interested") return "lost";
+  if (isWonDisposition(disposition)) return "won";
+  if (isLostDisposition(disposition)) return "lost";
   if (disposition === "New Lead") return null;
   return "contacted";
 }

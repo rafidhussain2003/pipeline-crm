@@ -7,9 +7,9 @@
 // leads_owner_idx — all already in place).
 import { db } from "@/db";
 import { leads, leadSources, users } from "@/db/schema";
-import { and, count, desc, eq, gte, isNotNull, isNull, lte, sql } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import type { AgentStats, CompanyGrowthStats, ConversionFunnel, DateRange, GroupedCount, LeadSummary, TopPerformer } from "./types";
-import { WON_DISPOSITION, calculateAssignmentSuccessRate, calculateConversionRate } from "./kpis";
+import { WON_DISPOSITIONS, isWonDisposition, calculateAssignmentSuccessRate, calculateConversionRate } from "./kpis";
 
 function leadsInRange(companyId: string, range: DateRange) {
   return and(eq(leads.companyId, companyId), isNull(leads.deletedAt), gte(leads.createdAt, range.from), lte(leads.createdAt, range.to));
@@ -62,7 +62,10 @@ export async function getLeadsGroupedBy(companyId: string, range: DateRange, gro
 export async function getConversionFunnel(companyId: string, range: DateRange): Promise<ConversionFunnel> {
   const stages = await getLeadsGroupedBy(companyId, range, "disposition");
   const totalCount = stages.reduce((sum, s) => sum + s.count, 0);
-  const wonCount = stages.find((s) => s.key === WON_DISPOSITION)?.count || 0;
+  // Sum, not find: with the enterprise taxonomy a company's wins can sit in
+  // several dispositions at once ("Sale Closed", "Installation Scheduled",
+  // legacy "Sold").
+  const wonCount = stages.reduce((sum, s) => sum + (isWonDisposition(s.key) ? s.count : 0), 0);
   return { stages, totalCount, wonCount, conversionRatePct: calculateConversionRate(totalCount, wonCount) };
 }
 
@@ -90,7 +93,7 @@ export async function getAgentStats(companyId: string, range: DateRange): Promis
   const wonRows = await db
     .select({ agentId: leads.ownerId, won: count() })
     .from(leads)
-    .where(and(rangeFilter, isNotNull(leads.ownerId), eq(leads.disposition, WON_DISPOSITION)))
+    .where(and(rangeFilter, isNotNull(leads.ownerId), inArray(leads.disposition, WON_DISPOSITIONS)))
     .groupBy(leads.ownerId);
   const wonByAgent = new Map(wonRows.map((r) => [r.agentId, r.won]));
 

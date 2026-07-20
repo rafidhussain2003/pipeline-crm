@@ -82,7 +82,13 @@ export async function GET(req: NextRequest) {
       }
 
       unsubscribe = leadStreamHub.subscribe(companyId, (signal) => {
-        send("lead.created", { leadId: signal.leadId, at: signal.at, source: signal.source });
+        if (signal.type === "lead.created") {
+          send("lead.created", { leadId: signal.leadId, at: signal.at, source: signal.source });
+        } else if (signal.type === "lead.assigned") {
+          // Ownership moved (manual assign / force-assign / auto engine) —
+          // ids only, the client re-runs its current query to see the change.
+          send("lead.assigned", { leadId: signal.leadId, agentId: signal.agentId, at: signal.at });
+        }
       });
 
       heartbeat = setInterval(() => {

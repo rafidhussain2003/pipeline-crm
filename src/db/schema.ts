@@ -678,6 +678,13 @@ export const dispositionOptions = pgTable(
     label: varchar("label", { length: 100 }).notNull(),
     color: varchar("color", { length: 20 }).notNull().default("#2563eb"),
     sortOrder: integer("sort_order").notNull().default(0),
+    // Display grouping for the disposition select (NEW / CONTACT ATTEMPT /
+    // INTERESTED / SALES / LOST / OTHER — see lib/dispositions/taxonomy.ts).
+    // Presentation only: won/lost/terminal SEMANTICS key off the label lists
+    // in that module, never off this column, so a admin-created custom
+    // disposition defaulting to OTHER can't silently change what counts as
+    // won or closed.
+    category: varchar("category", { length: 40 }).notNull().default("OTHER"),
   },
   (t) => ({
     companyIdx: index("disposition_company_idx").on(t.companyId),

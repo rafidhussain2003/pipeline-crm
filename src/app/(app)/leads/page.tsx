@@ -15,7 +15,142 @@ type Lead = {
   isDuplicate: boolean;
 };
 
-type Disposition = { id: string; label: string; color: string };
+type Disposition = { id: string; label: string; color: string; category?: string };
+
+type Assignee = {
+  id: string;
+  name: string;
+  role: string;
+  online: boolean;
+  presenceStatus: string;
+  openLeadCount: number;
+};
+
+// Display order of disposition groups — mirrors DISPOSITION_CATEGORIES in
+// src/lib/dispositions/taxonomy.ts (not imported: that module sits next to
+// server-only code and this file ships to the browser).
+const CATEGORY_ORDER = ["NEW", "CONTACT ATTEMPT", "INTERESTED", "SALES", "LOST", "OTHER"];
+
+// The Assign picker. Fetches the company roster (online first) when opened;
+// selecting an agent hands the actual POST back to the parent so this stays
+// a pure picker. Works identically for 1 selected lead and for many.
+function AssignModal({
+  count,
+  onClose,
+  onAssign,
+}: {
+  count: number;
+  onClose: () => void;
+  onAssign: (agentId: string) => Promise<string | null>;
+}) {
+  const [assignees, setAssignees] = useState<Assignee[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  // Which row is mid-assignment — locks the list so a double-click or a
+  // second pick can't fire two overlapping bulk assignments.
+  const [assigningId, setAssigningId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/leads/assignees")
+      .then(async (r) => {
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Could not load the team list");
+        setAssignees((await r.json()).assignees || []);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Could not load the team list"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function pick(agentId: string) {
+    if (assigningId) return;
+    setAssigningId(agentId);
+    setError("");
+    const failure = await onAssign(agentId);
+    if (failure) {
+      // On success the parent closes this modal; only a failure comes back.
+      setError(failure);
+      setAssigningId(null);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+      onClick={() => !assigningId && onClose()}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Assign ${count} ${count === 1 ? "lead" : "leads"}`}
+        className="w-full max-w-md bg-white rounded-lg shadow-xl border border-slate-200"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <h2 className="text-sm font-semibold text-slate-900">
+            Assign {count === 1 ? "1 Lead" : `${count.toLocaleString()} Leads`}
+          </h2>
+          <button
+            onClick={onClose}
+            disabled={!!assigningId}
+            aria-label="Close"
+            className="text-slate-400 hover:text-slate-600 disabled:opacity-40 text-lg leading-none px-1"
+          >
+            ×
+          </button>
+        </div>
+
+        {error && (
+          <div role="alert" className="mx-5 mt-4 text-sm bg-red-50 border border-red-100 text-red-800 rounded-md px-3 py-2">
+            {error}
+          </div>
+        )}
+
+        <div className="max-h-80 overflow-y-auto p-2">
+          {loading && <div className="px-4 py-8 text-center text-sm text-slate-400">Loading team…</div>}
+          {!loading && assignees.length === 0 && !error && (
+            <div className="px-4 py-8 text-center text-sm text-slate-400">No active team members to assign to.</div>
+          )}
+          {assignees.map((a) => (
+            <button
+              key={a.id}
+              onClick={() => pick(a.id)}
+              disabled={!!assigningId}
+              className="w-full flex items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left hover:bg-slate-50 disabled:opacity-50"
+            >
+              <span className="flex items-center gap-2.5 min-w-0">
+                <span
+                  className={`inline-block w-2 h-2 rounded-full shrink-0 ${a.online ? "bg-emerald-500" : "bg-slate-300"}`}
+                  title={a.online ? "Online" : "Offline"}
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-slate-900 truncate">
+                    {assigningId === a.id ? "Assigning…" : a.name}
+                  </span>
+                  <span className="block text-xs text-slate-500">
+                    {a.online ? "Online" : "Offline"} · {a.openLeadCount.toLocaleString()} open{" "}
+                    {a.openLeadCount === 1 ? "lead" : "leads"}
+                  </span>
+                </span>
+              </span>
+              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">
+                {a.role}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        <div className="px-5 py-3 border-t border-slate-200 text-right">
+          <button
+            onClick={onClose}
+            disabled={!!assigningId}
+            className="text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-md px-3 py-1.5 hover:bg-slate-50 disabled:opacity-40"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -42,6 +177,24 @@ export default function LeadsPage() {
   useEffect(() => {
     const saved = parseInt(localStorage.getItem("leads.pageSize") || "", 10);
     if ([50, 75, 100].includes(saved)) setPageSize(saved);
+  }, []);
+
+  // --- Manual assignment (leads:supervise) --------------------------------
+  // Whether the signed-in user may assign leads. Mirrors ROLE_PERMISSIONS in
+  // src/lib/permissions.ts (leads:supervise is admin-only) — display gating
+  // only; the assign API re-checks the same permission server-side.
+  const [canAssign, setCanAssign] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignResult, setAssignResult] = useState("");
+
+  useEffect(() => {
+    fetch("/api/me")
+      .then(async (r) => {
+        if (!r.ok) return;
+        const data = await r.json();
+        setCanAssign(data.user?.role === "admin");
+      })
+      .catch(() => {});
   }, []);
 
   const load = useCallback(async (opts?: { preserveSelection?: boolean; silent?: boolean }) => {
@@ -117,6 +270,9 @@ export default function LeadsPage() {
   // when it does, so the effect reads it through a ref.
   const loadRef = useRef(load);
   useEffect(() => { loadRef.current = load; }, [load]);
+  // Coalesces the per-lead "lead.assigned" frames of a bulk assignment into
+  // one silent refetch.
+  const assignedReloadRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let es: EventSource | null = null;
@@ -148,6 +304,18 @@ export default function LeadsPage() {
 
       // Arrivals that happened while this tab was disconnected. Counted, not
       // listed — the exact rows come from the normal query on View.
+      // Ownership changed somewhere (this tab, a colleague, the automatic
+      // engine). Re-run the CURRENT query — silently, keeping selection and
+      // scroll — so the Owner column is live for every connected user.
+      // Debounced: a bulk assignment emits one frame per lead, and 50 frames
+      // should cost one refetch, not 50.
+      es.addEventListener("lead.assigned", () => {
+        if (assignedReloadRef.current) clearTimeout(assignedReloadRef.current);
+        assignedReloadRef.current = setTimeout(() => {
+          loadRef.current({ preserveSelection: true, silent: true });
+        }, 400);
+      });
+
       es.addEventListener("missed", (e) => {
         try {
           const data = JSON.parse((e as MessageEvent).data) as { count: number };
@@ -175,6 +343,7 @@ export default function LeadsPage() {
     return () => {
       stopped = true;
       if (retry) clearTimeout(retry);
+      if (assignedReloadRef.current) clearTimeout(assignedReloadRef.current);
       es?.close();
     };
   }, []);
@@ -257,6 +426,53 @@ export default function LeadsPage() {
     return dispositions.find((d) => d.label === label)?.color || "#64748b";
   }
 
+  // Options grouped for the <optgroup> select: taxonomy categories in fixed
+  // order, any admin-invented category after them, options keeping the API's
+  // sortOrder within each group.
+  const groupedDispositions = (() => {
+    const groups = new Map<string, Disposition[]>();
+    for (const d of dispositions) {
+      const cat = d.category || "OTHER";
+      const list = groups.get(cat);
+      if (list) list.push(d);
+      else groups.set(cat, [d]);
+    }
+    const ordered = [
+      ...CATEGORY_ORDER.filter((c) => groups.has(c)),
+      ...[...groups.keys()].filter((c) => !CATEGORY_ORDER.includes(c)),
+    ];
+    return ordered.map((category) => ({ category, options: groups.get(category)! }));
+  })();
+
+  // Assign the current selection to one agent. Returns an error message for
+  // the modal to display, or null on success (parent closes the modal). The
+  // same call serves ONE selected lead and a whole page of them.
+  async function assignSelected(agentId: string): Promise<string | null> {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return "No leads are selected.";
+    try {
+      const res = await fetch("/api/leads/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadIds: ids, agentId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return data.error || "Could not assign the selected leads.";
+      setAssignOpen(false);
+      setSelectedIds(new Set());
+      setAssignResult(
+        `Assigned ${data.assignedCount === 1 ? "1 lead" : `${Number(data.assignedCount).toLocaleString()} leads`}.` +
+          (data.skippedCount > 0 ? ` ${data.skippedCount} could not be found and ${data.skippedCount === 1 ? "was" : "were"} skipped.` : "")
+      );
+      // The owner column must update immediately for the user who assigned —
+      // a silent refetch of the current page, no flicker, no scroll jump.
+      await load({ silent: true });
+      return null;
+    } catch {
+      return "Could not assign the selected leads.";
+    }
+  }
+
   function exportCsv() {
     window.location.href = "/api/leads/export";
   }
@@ -325,6 +541,18 @@ export default function LeadsPage() {
         <div className="mb-4 text-sm bg-blue-50 border border-blue-100 text-blue-800 rounded-md px-3 py-2">{importResult}</div>
       )}
 
+      {assignResult && (
+        <div
+          role="status"
+          className="mb-4 flex items-center justify-between gap-3 text-sm bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-md px-3 py-2"
+        >
+          <span>{assignResult}</span>
+          <button onClick={() => setAssignResult("")} aria-label="Dismiss" className="shrink-0 text-emerald-700 hover:text-emerald-900">
+            ×
+          </button>
+        </div>
+      )}
+
       {/* A failure is stated plainly and is RECOVERABLE without a page reload —
           previously any load failure was indistinguishable from "no leads". */}
       {loadError && (
@@ -362,6 +590,31 @@ export default function LeadsPage() {
           >
             View
           </button>
+        </div>
+      )}
+
+      {/* Bulk-action bar. Rendered ONLY when at least one lead is ticked (zero
+          selected = no bulk actions on screen at all) and only for users who
+          can actually assign — the API enforces the same permission again. */}
+      {selectedIds.size > 0 && canAssign && (
+        <div className="flex items-center justify-between gap-3 mb-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-2.5">
+          <span className="text-sm font-medium text-blue-900">
+            {selectedIds.size === 1 ? "1 Lead Selected" : `${selectedIds.size.toLocaleString()} Leads Selected`}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="text-sm font-medium text-slate-600 hover:text-slate-800 px-2 py-1.5"
+            >
+              Clear
+            </button>
+            <button
+              onClick={() => setAssignOpen(true)}
+              className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md px-4 py-1.5"
+            >
+              Assign
+            </button>
+          </div>
         </div>
       )}
 
@@ -450,10 +703,14 @@ export default function LeadsPage() {
                     style={{ backgroundColor: `${colorFor(lead.disposition)}1a`, color: colorFor(lead.disposition) }}
                     className="text-xs font-medium rounded-full px-3 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    {dispositions.map((d) => (
-                      <option key={d.id} value={d.label}>
-                        {d.label}
-                      </option>
+                    {groupedDispositions.map((g) => (
+                      <optgroup key={g.category} label={g.category}>
+                        {g.options.map((d) => (
+                          <option key={d.id} value={d.label}>
+                            {d.label}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </td>
@@ -522,6 +779,10 @@ export default function LeadsPage() {
             </button>
           </div>
         </div>
+      )}
+
+      {assignOpen && (
+        <AssignModal count={selectedIds.size} onClose={() => setAssignOpen(false)} onAssign={assignSelected} />
       )}
     </div>
   );

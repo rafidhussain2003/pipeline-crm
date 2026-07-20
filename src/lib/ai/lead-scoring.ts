@@ -12,9 +12,10 @@
 // ignored, so it's visible in the breakdown rather than a hidden gap.
 import { db } from "@/db";
 import { dispositionOptions, leads } from "@/db/schema";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, inArray } from "drizzle-orm";
 import { buildLeadContext } from "./context";
-import { WON_DISPOSITION, percentage } from "../analytics/kpis";
+import { WON_DISPOSITIONS, isWonDisposition, percentage } from "../analytics/kpis";
+import { isLostDisposition } from "@/lib/dispositions/taxonomy";
 
 export type ScoreFactor = {
   label: string;
@@ -48,20 +49,28 @@ export async function scoreLead(leadId: string): Promise<LeadScore | null> {
     .where(eq(dispositionOptions.companyId, context.companyId));
   const currentDispositionRow = dispositionRows.find((d) => d.label === context.disposition);
   const maxSortOrder = dispositionRows.reduce((max, d) => Math.max(max, d.sortOrder), 0);
+  // Lost dispositions sit at the END of the taxonomy's sort order (LOST /
+  // OTHER groups), so the position ratio below would read a dead lead as
+  // maximally progressed — they get 0 stage points instead, matching what
+  // "progress" means.
   const stagePoints =
-    context.disposition === WON_DISPOSITION
+    isWonDisposition(context.disposition)
       ? 30
-      : currentDispositionRow && maxSortOrder > 0
-        ? Math.round((currentDispositionRow.sortOrder / maxSortOrder) * 30)
-        : 10;
+      : isLostDisposition(context.disposition)
+        ? 0
+        : currentDispositionRow && maxSortOrder > 0
+          ? Math.round((currentDispositionRow.sortOrder / maxSortOrder) * 30)
+          : 10;
   factors.push({
     label: "Pipeline stage",
     points: stagePoints,
     maxPoints: 30,
     reason:
-      context.disposition === WON_DISPOSITION
+      isWonDisposition(context.disposition)
         ? "Lead is already won"
-        : `Disposition "${context.disposition}" is ${currentDispositionRow ? `stage ${currentDispositionRow.sortOrder} of ${maxSortOrder}` : "not in this company's configured pipeline"}`,
+        : isLostDisposition(context.disposition)
+          ? `Disposition "${context.disposition}" is terminal — the lead is closed without a sale`
+          : `Disposition "${context.disposition}" is ${currentDispositionRow ? `stage ${currentDispositionRow.sortOrder} of ${maxSortOrder}` : "not in this company's configured pipeline"}`,
   });
 
   // 2. Engagement / activity (20 pts) — notes and tags both indicate
@@ -111,7 +120,7 @@ export async function scoreLead(leadId: string): Promise<LeadScore | null> {
     const [{ value: wonFromSource }] = await db
       .select({ value: count() })
       .from(leads)
-      .where(and(eq(leads.companyId, context.companyId), eq(leads.sourceId, context.sourceId), eq(leads.disposition, WON_DISPOSITION)));
+      .where(and(eq(leads.companyId, context.companyId), eq(leads.sourceId, context.sourceId), inArray(leads.disposition, WON_DISPOSITIONS)));
     const winRate = percentage(wonFromSource, totalFromSource);
     sourcePoints = Math.round((winRate / 100) * 20);
     sourceReason = `This source has a ${winRate}% historical win rate (${wonFromSource}/${totalFromSource} leads)`;

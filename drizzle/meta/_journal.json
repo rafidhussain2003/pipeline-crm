@@ -260,6 +260,13 @@
       "when": 1784504252031,
       "tag": "0036_black_gravity",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1784554723280,
+      "tag": "0037_classy_jean_grey",
+      "breakpoints": true
     }
   ]
 }

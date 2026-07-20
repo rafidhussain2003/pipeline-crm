@@ -5,6 +5,7 @@ import { getSession } from "@/lib/auth";
 import { asc, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { isUniqueViolation } from "@/lib/db-errors";
+import { DISPOSITION_CATEGORIES } from "@/lib/dispositions/taxonomy";
 
 export async function GET() {
   const session = await getSession();
@@ -24,9 +25,16 @@ export async function POST(req: NextRequest) {
   if (!session || !session.companyId || session.role !== "admin") {
     return NextResponse.json({ error: "Only company admins can edit disposition options" }, { status: 403 });
   }
-  const { label, color } = await req.json();
+  const { label, color, category } = await req.json();
   const trimmed = typeof label === "string" ? label.trim() : "";
   if (!trimmed) return NextResponse.json({ error: "Label is required" }, { status: 400 });
+  // Category is display grouping only (see taxonomy.ts) — unknown values are
+  // rejected rather than silently stored so the grouped select stays coherent.
+  const requestedCategory =
+    typeof category === "string" && (DISPOSITION_CATEGORIES as readonly string[]).includes(category) ? category : undefined;
+  if (category !== undefined && !requestedCategory) {
+    return NextResponse.json({ error: `Category must be one of: ${DISPOSITION_CATEGORIES.join(", ")}` }, { status: 400 });
+  }
 
   // Leads store their disposition as this LABEL, so two options sharing one
   // would be indistinguishable on a lead and would split every pipeline count.
@@ -36,7 +44,7 @@ export async function POST(req: NextRequest) {
   try {
     [created] = await db
       .insert(dispositionOptions)
-      .values({ companyId: session.companyId, label: trimmed, color: color || "#2563eb", sortOrder: 999 })
+      .values({ companyId: session.companyId, label: trimmed, color: color || "#2563eb", sortOrder: 999, category: requestedCategory || "OTHER" })
       .returning();
   } catch (err) {
     if (isUniqueViolation(err, "disposition_options_company_label_uniq")) {

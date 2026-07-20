@@ -6,7 +6,8 @@
 // no LLM, no generative text (per the phase's "explain WHY / no chat" rules).
 import type { LeadScore } from "@/lib/ai/lead-scoring";
 import type { NextAction } from "@/lib/ai/next-best-action";
-import { WON_DISPOSITION } from "@/lib/analytics/kpis";
+import { isWonDisposition } from "@/lib/analytics/kpis";
+import { LOST_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
 import type { InsightSignals } from "./signals";
 import { sourceLabel } from "./signals";
 
@@ -29,7 +30,7 @@ export type InsightAction =
 export type Recommendation = { action: InsightAction; label: string; reason: string };
 export type FollowUp = { followUpAt: Date | null; label: string };
 
-const NEGATIVE_TERMINAL = new Set(["Not Interested", "Lost"]);
+const NEGATIVE_TERMINAL = new Set(LOST_DISPOSITIONS);
 
 export function temperatureOf(score: number): Temperature {
   if (score >= 70) return "hot";
@@ -43,7 +44,7 @@ function ageDays(from: Date): number {
 
 // Headline label. Mostly Hot/Warm/Cold, with a couple of specific standouts.
 export function scoreLabelOf(score: number, temp: Temperature, s: InsightSignals): string {
-  if (s.disposition === WON_DISPOSITION) return "Won";
+  if (isWonDisposition(s.disposition)) return "Won";
   if (score >= 85 && s.hasPhone && ageDays(s.createdAt) < 1) return "Very High Potential";
   return temp === "hot" ? "Hot" : temp === "warm" ? "Warm" : "Cold";
 }
@@ -51,12 +52,12 @@ export function scoreLabelOf(score: number, temp: Temperature, s: InsightSignals
 // Non-exclusive descriptor tags. Each has a reason surfaced in the explanation.
 export function tagsOf(score: number, temp: Temperature, s: InsightSignals): string[] {
   const tags: string[] = [];
-  if (s.disposition === WON_DISPOSITION) tags.push("Won");
+  if (isWonDisposition(s.disposition)) tags.push("Won");
   if (NEGATIVE_TERMINAL.has(s.disposition)) tags.push("Closed");
   if (s.isDuplicate) tags.push("Returning Customer");
-  if (s.priority === "high" || (temp === "hot" && s.hasPhone && s.disposition !== WON_DISPOSITION)) tags.push("High Value");
+  if (s.priority === "high" || (temp === "hot" && s.hasPhone && !isWonDisposition(s.disposition))) tags.push("High Value");
   if (s.sourcePlatform === "website" && s.submittedInBusinessHours && ageDays(s.createdAt) < 1) tags.push("High Intent");
-  if ((s.recycleCount >= 2 || ageDays(s.lastActivityAt) > 7) && s.disposition !== WON_DISPOSITION && !NEGATIVE_TERMINAL.has(s.disposition)) {
+  if ((s.recycleCount >= 2 || ageDays(s.lastActivityAt) > 7) && !isWonDisposition(s.disposition) && !NEGATIVE_TERMINAL.has(s.disposition)) {
     tags.push("Low Response Probability");
   }
   return [...new Set(tags)];
@@ -67,7 +68,7 @@ export function tagsOf(score: number, temp: Temperature, s: InsightSignals): str
 // ONLY — nothing acts on it.
 export function deriveRecommendation(base: NextAction, baseReason: string, score: number, temp: Temperature, tags: string[], s: InsightSignals): Recommendation {
   if (s.isBlacklisted) return { action: "archive", label: "Archive", reason: "Lead is blacklisted from auto-assignment — archive or handle manually." };
-  if (s.disposition === WON_DISPOSITION) return { action: "no_action", label: "No action needed", reason: "Lead is already won." };
+  if (isWonDisposition(s.disposition)) return { action: "no_action", label: "No action needed", reason: "Lead is already won." };
   if (NEGATIVE_TERMINAL.has(s.disposition)) return { action: "archive", label: "Archive", reason: `Lead is marked "${s.disposition}" — archive unless it is recycled.` };
 
   const returningOrHighValue = tags.includes("Returning Customer") || tags.includes("High Value");
@@ -135,7 +136,7 @@ export function composeSummary(s: InsightSignals, tags: string[]): string {
     parts.push(`${s.name || "Lead"} submitted an inquiry from ${src}${timing}`);
   }
 
-  if (s.disposition === WON_DISPOSITION) parts.push("and has been won");
+  if (isWonDisposition(s.disposition)) parts.push("and has been won");
   else if (NEGATIVE_TERMINAL.has(s.disposition)) parts.push(`and is currently "${s.disposition}"`);
   else if (s.ownerName) parts.push(`currently with ${s.ownerName} at "${s.disposition}"`);
   else parts.push(`awaiting assignment at "${s.disposition}"`);

@@ -8,11 +8,12 @@
 //   lead value         — the lead's AI insight score (0-100), when available
 //   waiting duration   — how long the lead has been in the pipeline
 //   customer status    — returning customer boosts; closed/lost sinks
-import { WON_DISPOSITION } from "@/lib/analytics/kpis";
+import { isWonDisposition } from "@/lib/analytics/kpis";
+import { LOST_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
 import type { CallbackPriority } from "./types";
 
 const PRIORITY_WEIGHT: Record<string, number> = { urgent: 40, high: 25, normal: 10, low: 0 };
-const NEGATIVE_TERMINAL = new Set(["Not Interested", "Lost"]);
+const NEGATIVE_TERMINAL = new Set(LOST_DISPOSITIONS);
 
 export interface PrioritySignals {
   scheduledAt: Date;
@@ -50,7 +51,7 @@ export function computePriorityScore(s: PrioritySignals): number {
 
   // 5. Customer status.
   if (s.isDuplicate) score += 8; // returning customer
-  if (s.disposition === WON_DISPOSITION) score -= 15; // already won
+  if (isWonDisposition(s.disposition)) score -= 15; // already won
   if (s.disposition && NEGATIVE_TERMINAL.has(s.disposition)) score -= 20;
 
   return Math.round(score * 100) / 100;

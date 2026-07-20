@@ -7,8 +7,9 @@
 // came through.
 import { db } from "@/db";
 import { users, leads, assignmentLog } from "@/db/schema";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "./audit";
+import { eventBus } from "./events/bus";
 import { metrics } from "./infra/metrics";
 import { createLogger } from "./logger";
 import { assignLead } from "./assignment";
@@ -89,6 +90,69 @@ export async function forceAssignLead(
   metrics.increment("supervisor.force_assigned");
   logger.info("force_assigned", { leadId, agentId });
   return { ok: true, value: { ownerId: agentId } };
+}
+
+// Manual assignment (leads page bulk bar) — one or many leads to one agent.
+// Same write discipline as forceAssignLead: ownerId (+updatedAt) is the ONLY
+// lead column touched, so Facebook ids, original created time, source, notes,
+// tags, disposition, privacy and every other field are structurally untouched.
+// Each lead gets its own assignment_log row and its own audit entry (previous
+// owner -> new owner), and each emits "lead.assigned" so notifications,
+// insights, activity and the leads-page live stream all see it — identical to
+// what an automatic assignment produces.
+export async function bulkAssignLeads(
+  leadIds: string[],
+  companyId: string,
+  agentId: string,
+  actorUserId: string
+): Promise<SupervisorResult<{ assignedCount: number; skippedCount: number }>> {
+  // Unlike forceAssignLead (supervisor override, any company member), the
+  // assign modal only offers active teammates — enforce the same here so a
+  // crafted request can't hand leads to a disabled or deleted account.
+  const [agent] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, agentId), eq(users.companyId, companyId), eq(users.active, true), isNull(users.deletedAt)))
+    .limit(1);
+  if (!agent) return { ok: false, error: "That agent is not an active member of this company." };
+
+  // Previous owners are captured BEFORE the write — they are the audit
+  // trail's before-state. Company-scoped and soft-delete-aware: ids from
+  // another tenant or deleted leads simply drop out and are reported skipped.
+  const before = await db
+    .select({ id: leads.id, ownerId: leads.ownerId })
+    .from(leads)
+    .where(and(inArray(leads.id, leadIds), eq(leads.companyId, companyId), isNull(leads.deletedAt)));
+  if (before.length === 0) return { ok: false, error: "None of the selected leads were found." };
+
+  const foundIds = before.map((l) => l.id);
+  await db
+    .update(leads)
+    .set({ ownerId: agentId, updatedAt: new Date() })
+    .where(and(inArray(leads.id, foundIds), eq(leads.companyId, companyId)));
+
+  // Every ownerId change must land in assignment_log (round-robin cursor and
+  // "assigned today" counts both derive from it) — one row per lead, same as
+  // the automatic engine writes.
+  await db.insert(assignmentLog).values(foundIds.map((leadId) => ({ leadId, assignedTo: agentId, ruleUsed: "manual:bulk_assign" })));
+
+  for (const lead of before) {
+    await recordAudit({
+      companyId,
+      userId: actorUserId,
+      action: "lead.reassigned",
+      entityType: "lead",
+      entityId: lead.id,
+      before: { ownerId: lead.ownerId },
+      after: { ownerId: agentId },
+      metadata: { via: "manual_bulk_assign", bulkCount: before.length },
+    });
+    await eventBus.emit("lead.assigned", { leadId: lead.id, companyId, agentId });
+  }
+
+  metrics.increment("supervisor.manual_assigned", before.length);
+  logger.info("manual_bulk_assigned", { agentId, count: before.length, actorUserId });
+  return { ok: true, value: { assignedCount: before.length, skippedCount: leadIds.length - before.length } };
 }
 
 // Force recycle — immediately re-routes a lead away from its current

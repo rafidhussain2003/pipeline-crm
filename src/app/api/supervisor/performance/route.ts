@@ -3,9 +3,9 @@ import { db } from "@/db";
 import { leads, users, assignmentLog } from "@/db/schema";
 import { requirePermission } from "@/lib/permissions";
 import { checkPolicy } from "@/lib/rate-limit";
-import { and, eq, gte, count, desc, isNull, gt } from "drizzle-orm";
+import { and, eq, gte, count, desc, inArray, isNull, gt } from "drizzle-orm";
 import { resolveDateRange } from "@/lib/analytics/range";
-import { WON_DISPOSITION } from "@/lib/analytics/kpis";
+import { WON_DISPOSITIONS } from "@/lib/analytics/kpis";
 
 // Team performance leaderboard (Part 5) + recent routing decisions (Part 3
 // "view routing decisions") — built entirely on assignment_log and leads,
@@ -26,7 +26,7 @@ export async function GET() {
       .select({ ownerId: leads.ownerId, ownerName: users.name, value: count() })
       .from(leads)
       .leftJoin(users, eq(leads.ownerId, users.id))
-      .where(and(eq(leads.companyId, session.companyId), eq(leads.disposition, WON_DISPOSITION), gte(leads.updatedAt, startOfToday)))
+      .where(and(eq(leads.companyId, session.companyId), inArray(leads.disposition, WON_DISPOSITIONS), gte(leads.updatedAt, startOfToday)))
       .groupBy(leads.ownerId, users.name)
       .orderBy(desc(count()))
       .limit(1),

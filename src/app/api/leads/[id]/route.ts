@@ -89,6 +89,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // src/lib/supervisor.ts); this is the other place ownerId can change.
     if (body.ownerId) {
       await db.insert(assignmentLog).values({ leadId: id, assignedTo: body.ownerId, ruleUsed: "manual:direct_edit" });
+      // Same event every other assignment path emits — notifications,
+      // insights, and the leads-page live stream (open tabs see the owner
+      // change without refreshing) all key off it.
+      await eventBus.emit("lead.assigned", { leadId: id, companyId: session.companyId, agentId: String(body.ownerId) });
     }
     await recordAudit({
       companyId: session.companyId,

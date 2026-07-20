@@ -13,13 +13,27 @@
 import { eventBus } from "@/lib/events/bus";
 
 export type NewLeadSignal = {
+  type: "lead.created";
   leadId: string;
   companyId: string;
   source: "manual" | "import" | "webhook";
   at: string; // ISO
 };
 
-type Listener = (signal: NewLeadSignal) => void;
+// Owner changed (manual assign, supervisor force-assign, automatic engine).
+// Same signal-not-data discipline as arrivals: ids only, the client re-runs
+// its own query to see the new owner.
+export type LeadAssignedSignal = {
+  type: "lead.assigned";
+  leadId: string;
+  companyId: string;
+  agentId: string;
+  at: string; // ISO
+};
+
+export type LeadStreamSignal = NewLeadSignal | LeadAssignedSignal;
+
+type Listener = (signal: LeadStreamSignal) => void;
 
 class LeadStreamHub {
   private subscribers = new Map<string, Set<Listener>>();
@@ -41,7 +55,7 @@ class LeadStreamHub {
     };
   }
 
-  publish(signal: NewLeadSignal): void {
+  publish(signal: LeadStreamSignal): void {
     const subs = this.subscribers.get(signal.companyId);
     if (!subs) return;
     // One dead stream must never break the others — same discipline as the
@@ -70,9 +84,23 @@ export function ensureLeadStreamListener(): void {
   registered = true;
   eventBus.on("lead.created", (p) => {
     leadStreamHub.publish({
+      type: "lead.created",
       leadId: p.leadId,
       companyId: p.companyId,
       source: p.source,
+      at: new Date().toISOString(),
+    });
+  });
+  // Owner changes ride the same hub/stream. "lead.assigned" is emitted by
+  // every assignment path — automatic engine, manual bulk assign, the
+  // leads/[id] PATCH — so an open leads page sees ownership move live no
+  // matter which path changed it.
+  eventBus.on("lead.assigned", (p) => {
+    leadStreamHub.publish({
+      type: "lead.assigned",
+      leadId: p.leadId,
+      companyId: p.companyId,
+      agentId: p.agentId,
       at: new Date().toISOString(),
     });
   });

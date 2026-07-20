@@ -5,7 +5,7 @@ import { requirePermission } from "@/lib/permissions";
 import { checkPolicy } from "@/lib/rate-limit";
 import { and, eq, gte, count, isNull, notInArray, inArray, desc } from "drizzle-orm";
 import { resolveDateRange } from "@/lib/analytics/range";
-import { WON_DISPOSITION, percentage } from "@/lib/analytics/kpis";
+import { WON_DISPOSITIONS, percentage } from "@/lib/analytics/kpis";
 import { TERMINAL_DISPOSITIONS } from "@/lib/assignment";
 import { deriveDisplayStatus, type PresenceStatus } from "@/lib/presence";
 import { automationSettings } from "@/db/schema";
@@ -66,7 +66,7 @@ export async function GET() {
     db
       .select({ ownerId: leads.ownerId, value: count() })
       .from(leads)
-      .where(and(eq(leads.companyId, session.companyId), eq(leads.disposition, WON_DISPOSITION), gte(leads.updatedAt, startOfToday)))
+      .where(and(eq(leads.companyId, session.companyId), inArray(leads.disposition, WON_DISPOSITIONS), gte(leads.updatedAt, startOfToday)))
       .groupBy(leads.ownerId),
     // "Last active lead" = most recently touched open lead per agent —
     // scoped to just these agents' ids (not a company-wide scan) and

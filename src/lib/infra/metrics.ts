@@ -58,7 +58,8 @@ export type MetricName =
   | "assignment.skill_fallback"
   | "assignment.schedule_skipped"
   | "supervisor.force_assigned"
-  | "supervisor.force_recycled";
+  | "supervisor.force_recycled"
+  | "supervisor.manual_assigned";
 
 // Phase 10 — latency timings, kept separate from the counters above. Each name
 // tracks count/sum/min/max plus a bounded ring of recent samples so a p50/p95
@@ -136,6 +137,7 @@ const ALL_METRIC_NAMES: MetricName[] = [
   "assignment.schedule_skipped",
   "supervisor.force_assigned",
   "supervisor.force_recycled",
+  "supervisor.manual_assigned",
 ];
 
 const ALL_TIMING_NAMES: TimingName[] = ["assignment.decision_ms", "assignment.progressive_cycle_ms", "ingest.lead_ms", "insights.recompute_ms", "queue.reserve_ms", "capi.send_ms", "db.ping_ms"];

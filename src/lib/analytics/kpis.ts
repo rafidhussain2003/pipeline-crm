@@ -10,14 +10,13 @@ export function percentage(numerator: number, denominator: number): number {
   return Math.round((numerator / denominator) * 1000) / 10; // one decimal place
 }
 
-// "Won" is currently defined as disposition === "Sold" — the one
-// disposition that's seeded for every company and treated as a terminal,
-// positive outcome elsewhere in the app (see db/seed.ts / the signup
-// route's default dispositions). Companies can rename/add dispositions, so
-// this is a reasonable default, not a hardcoded assumption about every
-// possible pipeline — revisit if/when dispositions gain a "counts as won"
-// flag of their own.
-export const WON_DISPOSITION = "Sold";
+// "Won" is defined by membership in WON_DISPOSITIONS (the enterprise
+// taxonomy's SALES labels plus the legacy "Sold" every pre-taxonomy company
+// was seeded with) — see src/lib/dispositions/taxonomy.ts, the single
+// source of truth. Re-exported here because this file is the historical
+// home every analytics/AI consumer already imports "what counts as won"
+// from.
+export { WON_DISPOSITIONS, isWonDisposition } from "@/lib/dispositions/taxonomy";
 
 export function calculateConversionRate(totalLeads: number, wonLeads: number): number {
   return percentage(wonLeads, totalLeads);
@@ -43,7 +42,7 @@ export function calculateAverageLeadAgeHours(createdAtTimestamps: Date[], now: D
 // `updatedAt` reflects the most recent change to the row, which is usually
 // (but not guaranteed to be) the disposition change to "won". A precise
 // version would read the first `lead.disposition_changed` audit log entry
-// where metadata.to === WON_DISPOSITION instead of `leads.updatedAt` —
+// where metadata.to is a won disposition instead of `leads.updatedAt` —
 // noted as a Phase 5 recommendation rather than built now, to avoid a
 // JSONB-path query this pass didn't need to introduce.
 export function calculateAveragePipelineVelocityHours(wonLeads: { createdAt: Date; updatedAt: Date }[]): number {

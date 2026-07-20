@@ -7,6 +7,7 @@ import { hashPassword, setSessionCookie, setRefreshCookie } from "@/lib/auth";
 import { issueRefreshToken } from "@/lib/refresh-tokens";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
+import { DEFAULT_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
 import { eq } from "drizzle-orm";
 
 const schema = z.object({
@@ -112,13 +113,17 @@ export async function POST(req: NextRequest) {
       log("admin_user_created", { userId: admin.id, companyId: company.id });
 
       // Seed sensible defaults so a new company isn't empty on first login.
-      await tx.insert(dispositionOptions).values([
-        { companyId: company.id, label: "New Lead", color: "#2563eb", sortOrder: 0 },
-        { companyId: company.id, label: "Answering Machine", color: "#d97706", sortOrder: 1 },
-        { companyId: company.id, label: "Not Interested", color: "#dc2626", sortOrder: 2 },
-        { companyId: company.id, label: "Qualified", color: "#16a34a", sortOrder: 3 },
-        { companyId: company.id, label: "Sold", color: "#7c3aed", sortOrder: 4 },
-      ]);
+      // The enterprise disposition taxonomy (lib/dispositions/taxonomy.ts) —
+      // the same set migration 0037 backfilled to pre-existing companies.
+      await tx.insert(dispositionOptions).values(
+        DEFAULT_DISPOSITIONS.map((d) => ({
+          companyId: company.id,
+          label: d.label,
+          color: d.color,
+          sortOrder: d.sortOrder,
+          category: d.category,
+        }))
+      );
       log("disposition_options_seeded", { companyId: company.id });
 
       await tx.insert(assignmentRules).values([

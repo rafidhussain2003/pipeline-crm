@@ -8,9 +8,9 @@
 // hit, which is the common case at volume.
 import { db } from "@/db";
 import { assignmentHistory, leads } from "@/db/schema";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { cache } from "@/lib/infra/cache";
-import { WON_DISPOSITION } from "@/lib/analytics/kpis";
+import { WON_DISPOSITIONS } from "@/lib/analytics/kpis";
 import { getAgentSkills } from "./skills";
 import { getAgentProfiles, profileFor, DEFAULT_AGENT_PROFILE, type AgentProfile } from "./agent-profile";
 
@@ -59,7 +59,7 @@ async function closeStats(companyId: string): Promise<Map<string, { won: number;
       .select({
         owner: leads.ownerId,
         total: sql<number>`count(*)::int`,
-        won: sql<number>`count(*) filter (where ${leads.disposition} = ${WON_DISPOSITION})::int`,
+        won: sql<number>`count(*) filter (where ${inArray(leads.disposition, WON_DISPOSITIONS)})::int`,
       })
       .from(leads)
       .where(and(eq(leads.companyId, companyId), sql`${leads.ownerId} is not null`, sql`${leads.deletedAt} is null`))
