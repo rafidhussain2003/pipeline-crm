@@ -9,6 +9,10 @@ export async function GET() {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Agent Portal: the Delivery Log is management tooling — an agent's
+  // sidebar no longer links here and the API refuses them outright.
+  if (session.role === "agent") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
   const rows = await db
     .select({
       id: webhookLogs.id,

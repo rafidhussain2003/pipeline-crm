@@ -34,6 +34,43 @@ export async function sendVerificationEmail(email: string, code: string): Promis
   return res.ok;
 }
 
+// New-device login OTP (Enterprise Agent Portal). Sent to the signing-in
+// user's own email when their browser is not a trusted device.
+export async function sendLoginOtpEmail(email: string, code: string): Promise<boolean> {
+  const html = shell(
+    "Verify this sign-in",
+    `<p style="font-size:14px;color:#475569">A sign-in to your Ziplod account was attempted from a device we don't recognize. Enter this code to continue. It expires in 10 minutes.</p>${codeBlock(code)}<p style="font-size:12px;color:#94a3b8">If this wasn't you, change your password now — your password was entered correctly.</p>`
+  );
+  const res = await sendViaResend({ from: FROM, to: [email], subject: `${code} is your Ziplod sign-in code`, html, text: `Your Ziplod sign-in verification code is ${code}. It expires in 10 minutes. If this wasn't you, change your password.` });
+  return res.ok;
+}
+
+// Admin-approval code for an agent's email/password change request (Enterprise
+// Agent Portal). Sent ONLY to the company administrator — the agent completes
+// the change by entering the code their administrator relays to them.
+export async function sendAgentChangeApprovalEmail(params: {
+  adminEmail: string;
+  code: string;
+  agentName: string;
+  agentEmail: string;
+  changeType: "email" | "password";
+  newEmail?: string;
+}): Promise<boolean> {
+  const what = params.changeType === "email" ? `change their login email to <strong>${params.newEmail || "a new address"}</strong>` : "change their password";
+  const html = shell(
+    "Approval needed: agent account change",
+    `<p style="font-size:14px;color:#475569"><strong>${params.agentName}</strong> (${params.agentEmail}) has requested to ${what}.</p><p style="font-size:14px;color:#475569">If you approve, give them this code — they need it to complete the change. It expires in 10 minutes.</p>${codeBlock(params.code)}<p style="font-size:12px;color:#94a3b8">If you don't approve, do nothing. The request expires on its own and no change is made.</p>`
+  );
+  const res = await sendViaResend({
+    from: FROM,
+    to: [params.adminEmail],
+    subject: `Approval needed: ${params.agentName} wants to change their ${params.changeType}`,
+    html,
+    text: `${params.agentName} (${params.agentEmail}) requested a ${params.changeType} change. Approval code (give it to them if you approve): ${params.code}. Expires in 10 minutes.`,
+  });
+  return res.ok;
+}
+
 export async function sendPasswordResetEmail(email: string, code: string): Promise<boolean> {
   const html = shell(
     "Reset your password",

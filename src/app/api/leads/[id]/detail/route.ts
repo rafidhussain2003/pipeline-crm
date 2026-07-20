@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { leads, users } from "@/db/schema";
-import { getSession } from "@/lib/auth";
+import { getSession, type CompanySession } from "@/lib/auth";
+import { leadVisibilityConditions } from "@/lib/leads/access";
 import { isUuid } from "@/lib/url";
 import { and, eq, isNull } from "drizzle-orm";
 
@@ -33,7 +34,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     })
     .from(leads)
     .leftJoin(users, eq(leads.ownerId, users.id))
-    .where(and(eq(leads.id, id), eq(leads.companyId, session.companyId), isNull(leads.deletedAt)))
+    // Agent Portal: leadVisibilityConditions scopes agents to their own
+    // leads — another agent's lead 404s exactly like a nonexistent one.
+    .where(and(eq(leads.id, id), ...leadVisibilityConditions(session as CompanySession), isNull(leads.deletedAt)))
     .limit(1);
 
   if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });

@@ -91,19 +91,24 @@ const FINANCE_ITEMS: { href: string; label: string }[] = [
 // Conversions API used to be standalone links rendered above this list, which
 // is why All Leads sat sixth; they are folded in as data so one array is the
 // single source of truth for CRM nav order.
+// Agent Portal: an agent's CRM navigation is exactly All Leads, Callbacks
+// (both roleless below) and Profile (bottom section) — every settings/ops
+// entry carries a roles gate that excludes "agent". Hiding is presentation
+// only; the proxy redirects agents off these PAGES and the APIs enforce
+// their own permissions, so a typed URL gets the same answer.
 const navItems: { href: string; label: string; feature?: string; roles?: string[] }[] = [
   { href: "/leads", label: "All Leads" },
   // Callbacks (Phase 15) is every role's tool — an agent works their own list,
   // a manager/admin sees the whole company's. Scope is decided server-side, so
   // this needs no role gate.
   { href: "/callbacks", label: "Callbacks", feature: "callback_engine" },
-  { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration" },
+  { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration", roles: ["admin", "manager"] },
   { href: "/settings/website-forms", label: "Website Forms", feature: "website_forms", roles: ["admin"] },
   { href: "/settings/conversions", label: "Conversions API", feature: "meta_integration", roles: ["admin", "manager"] },
-  { href: "/settings/delivery-log", label: "Delivery Log" },
-  { href: "/settings/pipeline", label: "Pipeline Settings" },
-  { href: "/settings/automation", label: "Automation", feature: "ai_assignment" },
-  { href: "/settings/audit-log", label: "Audit Log" },
+  { href: "/settings/delivery-log", label: "Delivery Log", roles: ["admin", "manager"] },
+  { href: "/settings/pipeline", label: "Pipeline Settings", roles: ["admin", "manager"] },
+  { href: "/settings/automation", label: "Automation", feature: "ai_assignment", roles: ["admin", "manager"] },
+  { href: "/settings/audit-log", label: "Audit Log", roles: ["admin"] },
 ];
 
 // Team dashboard is a supervisor tool (force assign/recycle, lock agents,
@@ -513,7 +518,7 @@ export default function Sidebar({
       </nav>
       {role !== "super_admin" && <PresenceHeartbeat />}
       <div className="px-3 py-4 border-t border-slate-100 space-y-1">
-        {role !== "super_admin" && (
+        {role !== "super_admin" && role !== "agent" && (
           <Link
             href="/subscription"
             className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${

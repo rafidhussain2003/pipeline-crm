@@ -267,6 +267,13 @@
       "when": 1784554723280,
       "tag": "0037_classy_jean_grey",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1784556557601,
+      "tag": "0038_lyrical_thor",
+      "breakpoints": true
     }
   ]
 }

@@ -89,6 +89,10 @@ export async function proxy(req: NextRequest) {
     pathname.startsWith("/settings") ||
     pathname.startsWith("/callbacks") ||
     pathname.startsWith("/operations") ||
+    pathname === "/team" ||
+    pathname.startsWith("/team/") ||
+    pathname === "/subscription" ||
+    pathname.startsWith("/subscription/") ||
     pathname === "/finance" ||
     pathname.startsWith("/finance/") ||
     pathname === "/attendance" ||
@@ -112,6 +116,30 @@ export async function proxy(req: NextRequest) {
 
   if (isSuperAdminRoute && session?.role !== "super_admin") {
     return NextResponse.redirect(new URL("/leads", getPublicAppUrl()));
+  }
+
+  // Enterprise Agent Portal — an agent's app surface is Leads, Callbacks and
+  // Profile, nothing else. Every management page (settings, operations, team,
+  // subscription — and the module dashboards agents hold no permission for)
+  // redirects to /leads as if it did not exist. This is the server-side page
+  // gate; the APIs behind those pages carry their own permission checks —
+  // except the company-wide analytics surface, whose routes are shared by
+  // several admin dashboards and are simplest to deny agents here at the
+  // same single chokepoint the billing/feature gates already use.
+  if (session?.role === "agent") {
+    if (pathname.startsWith("/api/analytics")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    const agentBlocked =
+      pathname.startsWith("/settings") ||
+      pathname.startsWith("/operations") ||
+      pathname === "/team" ||
+      pathname.startsWith("/team/") ||
+      pathname === "/subscription" ||
+      pathname.startsWith("/subscription/");
+    if (agentBlocked) {
+      return NextResponse.redirect(new URL("/leads", getPublicAppUrl()));
+    }
   }
 
   // Subscription gate — the single chokepoint every company-scoped API
@@ -172,6 +200,8 @@ export const config = {
     "/payroll/:path*",
     "/hr/:path*",
     "/automation/:path*",
+    "/team/:path*",
+    "/subscription/:path*",
     "/super-admin/:path*",
     "/api/:path*",
   ],

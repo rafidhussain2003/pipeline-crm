@@ -6,6 +6,8 @@ import { requirePermission } from "@/lib/permissions";
 import { and, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { revokeAllRefreshTokensForUser } from "@/lib/refresh-tokens";
+import { invalidateAllSessions } from "@/lib/auth/session-registry";
+import { revokeTrustedDevicesForUser } from "@/lib/auth/device-trust";
 
 // Admin/manager sets a new temporary password for an agent — same
 // "type a temp password" UX as the Add Agent form, not an auto-generated
@@ -34,8 +36,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     .set({ passwordHash, passwordChangedAt: new Date() })
     .where(and(eq(users.id, id), eq(users.companyId, session.companyId)));
 
-  // Force the agent to sign in again with the new password everywhere.
+  // Administrator-forced logout: revoke the refresh chain, kill the live
+  // session immediately (single-device registry), and drop every trusted
+  // device — the next login requires the new password AND an email OTP.
   await revokeAllRefreshTokensForUser(id);
+  await invalidateAllSessions(id);
+  await revokeTrustedDevicesForUser(id);
 
   await recordAudit({
     companyId: session.companyId,

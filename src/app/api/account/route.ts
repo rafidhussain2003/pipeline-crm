@@ -13,7 +13,11 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const [user] = await db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, session.userId)).limit(1);
+  const [user] = await db
+    .select({ name: users.name, email: users.email, phone: users.phone, role: users.role })
+    .from(users)
+    .where(eq(users.id, session.userId))
+    .limit(1);
   if (!user) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ user });
 }
@@ -35,8 +39,21 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Name cannot be empty." }, { status: 400 });
   }
 
+  if ("phone" in body && body.phone !== null && (typeof body.phone !== "string" || body.phone.length > 50)) {
+    return NextResponse.json({ error: "Please enter a valid phone number." }, { status: 400 });
+  }
+
   const changingEmail = "email" in body && body.email !== before.email;
   if (changingEmail) {
+    // Enterprise Agent Portal: an agent's login email can only change through
+    // the administrator-approval workflow (/api/account/change-request) —
+    // never directly, no matter what the client sends.
+    if (session.role === "agent") {
+      return NextResponse.json(
+        { error: "Agents can't change their login email directly. Use the change request — your administrator must approve it." },
+        { status: 403 }
+      );
+    }
     if (typeof body.email !== "string" || !EMAIL_RE.test(body.email)) {
       return NextResponse.json({ error: "Please enter a valid email address." }, { status: 400 });
     }
@@ -58,12 +75,17 @@ export async function PATCH(req: NextRequest) {
 
   const allowed: Record<string, unknown> = {};
   if ("name" in body) allowed.name = body.name.trim();
+  if ("phone" in body) allowed.phone = body.phone ? String(body.phone).trim() : null;
   if (changingEmail) allowed.email = body.email;
   if (Object.keys(allowed).length === 0) {
     return NextResponse.json({ error: "No valid fields to update." }, { status: 400 });
   }
 
-  const [updated] = await db.update(users).set(allowed).where(eq(users.id, session.userId)).returning({ name: users.name, email: users.email });
+  const [updated] = await db
+    .update(users)
+    .set(allowed)
+    .where(eq(users.id, session.userId))
+    .returning({ name: users.name, email: users.email, phone: users.phone });
 
   if (changingEmail) {
     await recordAudit({
@@ -82,8 +104,8 @@ export async function PATCH(req: NextRequest) {
       action: "account.updated",
       entityType: "user",
       entityId: session.userId,
-      before: { name: before.name },
-      after: { name: updated.name },
+      before: { name: before.name, phone: before.phone },
+      after: { name: updated.name, phone: updated.phone },
     });
   }
 

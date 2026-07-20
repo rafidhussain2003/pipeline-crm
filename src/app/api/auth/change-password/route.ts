@@ -35,6 +35,18 @@ export async function POST(req: NextRequest) {
     const [user] = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
     if (!user) return NextResponse.json({ error: "Account not found" }, { status: 404 });
 
+    // Enterprise Agent Portal: agents change their password only through the
+    // administrator-approval workflow (/api/account/change-request). The one
+    // exception is the forced first-login change — an invited agent replacing
+    // the temporary password their admin just handed them IS the admin-
+    // sanctioned path, and must keep working.
+    if (session.role === "agent" && !user.mustChangePassword) {
+      return NextResponse.json(
+        { error: "Agents can't change their password directly. Use the change request — your administrator must approve it." },
+        { status: 403 }
+      );
+    }
+
     const valid = await verifyPassword(currentPassword, user.passwordHash);
     if (!valid) {
       logger.warn("wrong_current_password");

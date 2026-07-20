@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leadAttachments, leads } from "@/db/schema";
-import { getSession } from "@/lib/auth";
-import { and, desc, eq } from "drizzle-orm";
+import { leadAttachments } from "@/db/schema";
+import { getSession, type CompanySession } from "@/lib/auth";
+import { canAccessLead } from "@/lib/leads/access";
+import { desc, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { isSafeHttpUrl, isUuid } from "@/lib/url";
 
@@ -23,8 +24,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   // empty-bodied 500; treat it as the missing record it describes.
   if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const [lead] = await db.select({ id: leads.id }).from(leads).where(and(eq(leads.id, id), eq(leads.companyId, session.companyId))).limit(1);
-  if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // Agent Portal: agents reach only their own leads (see lib/leads/access).
+  if (!(await canAccessLead(session as CompanySession, id))) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const rows = await db
     .select()
@@ -53,8 +54,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "fileUrl must be an http(s) link." }, { status: 400 });
   }
 
-  const [lead] = await db.select({ id: leads.id }).from(leads).where(and(eq(leads.id, id), eq(leads.companyId, session.companyId))).limit(1);
-  if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // Agent Portal: agents reach only their own leads (see lib/leads/access).
+  if (!(await canAccessLead(session as CompanySession, id))) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const [attachment] = await db
     .insert(leadAttachments)

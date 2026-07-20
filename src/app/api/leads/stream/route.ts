@@ -68,7 +68,16 @@ export async function GET(req: NextRequest) {
       // indicator settles immediately rather than after the first arrival.
       send("ready", { at: new Date().toISOString() });
 
-      if (sinceValid) {
+      // Agent Portal: an agent's stream carries no company-wide information.
+      // New-arrival counts describe unassigned leads an agent can't see, so
+      // both the live "lead.created" frames and the reconnect "missed" replay
+      // are admin/manager-only. Assignment signals ARE forwarded to agents —
+      // an assignment may add or remove one of THEIR leads — but stripped to
+      // a bare timestamp: no lead ids, no other agents' ids, nothing to
+      // correlate. The client just re-runs its own (owner-scoped) query.
+      const isAgent = session.role === "agent";
+
+      if (sinceValid && !isAgent) {
         try {
           const [{ missed }] = await db
             .select({ missed: count() })
@@ -83,11 +92,12 @@ export async function GET(req: NextRequest) {
 
       unsubscribe = leadStreamHub.subscribe(companyId, (signal) => {
         if (signal.type === "lead.created") {
-          send("lead.created", { leadId: signal.leadId, at: signal.at, source: signal.source });
+          if (!isAgent) send("lead.created", { leadId: signal.leadId, at: signal.at, source: signal.source });
         } else if (signal.type === "lead.assigned") {
           // Ownership moved (manual assign / force-assign / auto engine) —
-          // ids only, the client re-runs its current query to see the change.
-          send("lead.assigned", { leadId: signal.leadId, agentId: signal.agentId, at: signal.at });
+          // the client re-runs its current query to see the change.
+          if (isAgent) send("lead.assigned", { at: signal.at });
+          else send("lead.assigned", { leadId: signal.leadId, agentId: signal.agentId, at: signal.at });
         }
       });
 

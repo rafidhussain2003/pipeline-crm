@@ -14,7 +14,7 @@ type CompanyForm = {
   businessPhone: string;
 };
 
-type Session = { role: "super_admin" | "admin" | "agent"; companyId: string | null };
+type Session = { role: "super_admin" | "admin" | "manager" | "agent"; companyId: string | null };
 
 export default function ProfilePage() {
   const [session, setSession] = useState<Session | null>(null);
@@ -60,7 +60,7 @@ export default function ProfilePage() {
       </div>
 
       {tab === "company" && hasCompany && <CompanyTab canEdit={isAdmin} />}
-      {tab === "account" && <AccountTab />}
+      {tab === "account" && <AccountTab isAgent={session.role === "agent"} />}
       {tab === "notifications" && <NotificationsTab />}
       {tab === "security" && <SecurityTab />}
     </div>
@@ -168,8 +168,9 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
 // ---------------------------------------------------------------------------
 // Account tab
 // ---------------------------------------------------------------------------
-function AccountTab() {
+function AccountTab({ isAgent }: { isAgent: boolean }) {
   const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [originalEmail, setOriginalEmail] = useState("");
   const [currentPasswordForEmail, setCurrentPasswordForEmail] = useState("");
@@ -189,6 +190,7 @@ function AccountTab() {
       .then((r) => r.json())
       .then((d) => {
         setName(d.user?.name || "");
+        setPhone(d.user?.phone || "");
         setEmail(d.user?.email || "");
         setOriginalEmail(d.user?.email || "");
       });
@@ -202,10 +204,11 @@ function AccountTab() {
     setProfileSaving(true);
     setProfileError("");
     setProfileSaved(false);
-    const body: Record<string, string> = { name };
+    const body: Record<string, string> = { name, phone };
     // Only send email + password if the email field actually changed —
     // avoids asking for a password confirmation on a plain name edit.
-    if (email !== originalEmail) {
+    // (Agents can't reach this branch — their email field is read-only.)
+    if (!isAgent && email !== originalEmail) {
       if (!currentPasswordForEmail) {
         setProfileSaving(false);
         setProfileError("Enter your current password to change your login email.");
@@ -263,9 +266,9 @@ function AccountTab() {
   return (
     <div className="space-y-6">
       <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
-        <h2 className="text-sm font-semibold text-slate-700">Owner Details</h2>
+        <h2 className="text-sm font-semibold text-slate-700">{isAgent ? "My Details" : "Owner Details"}</h2>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Owner Name</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">{isAgent ? "Name" : "Owner Name"}</label>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -273,14 +276,29 @@ function AccountTab() {
           />
         </div>
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-1">Login Email</label>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number</label>
           <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+1 555 000 0000"
             className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
-        {email !== originalEmail && (
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">Login Email</label>
+          <input
+            value={email}
+            disabled={isAgent}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          {isAgent && (
+            <p className="text-xs text-slate-400 mt-1">
+              Changing your email requires administrator approval — use the request below.
+            </p>
+          )}
+        </div>
+        {!isAgent && email !== originalEmail && (
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Current Password (required to change email)</label>
             <input
@@ -305,6 +323,9 @@ function AccountTab() {
         </div>
       </div>
 
+      {isAgent && <AgentChangeRequests />}
+
+      {!isAgent && (
       <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
         <h2 className="text-sm font-semibold text-slate-700">Change Password</h2>
         <div>
@@ -343,6 +364,185 @@ function AccountTab() {
         >
           {passwordSaving ? "Updating…" : "Change Password"}
         </button>
+      </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Agent change requests (administrator approval workflow)
+// ---------------------------------------------------------------------------
+// Agents can't change their login email or password directly. They submit a
+// request here; a verification code goes ONLY to the company administrator,
+// who relays it if they approve; the agent then completes the change with
+// that code. Both steps are backed by /api/account/change-request.
+function AgentChangeRequests() {
+  return (
+    <>
+      <ChangeRequestCard
+        type="email"
+        title="Request Email Change"
+        description="Enter your new email and your current password. Your administrator receives an approval code — enter it here once they share it with you."
+      />
+      <ChangeRequestCard
+        type="password"
+        title="Request Password Change"
+        description="Confirm your current password to request a change. Once your administrator shares the approval code, choose your new password here."
+      />
+    </>
+  );
+}
+
+function ChangeRequestCard({ type, title, description }: { type: "email" | "password"; title: string; description: string }) {
+  const [step, setStep] = useState<"request" | "complete">("request");
+  const [newEmail, setNewEmail] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function submitRequest() {
+    setError("");
+    setMessage("");
+    if (type === "email" && !newEmail.trim()) {
+      setError("Enter the new email address you want.");
+      return;
+    }
+    if (!currentPassword) {
+      setError("Your current password is required.");
+      return;
+    }
+    setBusy(true);
+    const res = await fetch("/api/account/change-request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, currentPassword, ...(type === "email" ? { newEmail } : {}) }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) {
+      setError(typeof data.error === "string" ? data.error : "Could not submit the request.");
+      return;
+    }
+    setStep("complete");
+    setMessage(data.message || "Your administrator has been emailed an approval code.");
+  }
+
+  async function submitComplete() {
+    setError("");
+    if (!code.trim()) {
+      setError("Enter the approval code from your administrator.");
+      return;
+    }
+    if (type === "password") {
+      if (newPassword.length < 8) {
+        setError("New password must be at least 8 characters.");
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setError("New password and confirm password do not match.");
+        return;
+      }
+    }
+    setBusy(true);
+    const res = await fetch("/api/account/change-request/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, code, ...(type === "password" ? { newPassword } : {}) }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) {
+      setError(typeof data.error === "string" ? data.error : "Could not complete the change.");
+      return;
+    }
+    setMessage(data.message || "Change completed.");
+    setStep("request");
+    setNewEmail("");
+    setCurrentPassword("");
+    setCode("");
+    setNewPassword("");
+    setConfirmPassword("");
+    if (type === "email") window.location.reload();
+  }
+
+  const inputCls = "w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+      <h2 className="text-sm font-semibold text-slate-700">{title}</h2>
+      <p className="text-xs text-slate-500">{description}</p>
+
+      {step === "request" && (
+        <>
+          {type === "email" && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">New Email</label>
+              <input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} className={inputCls} />
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Current Password</label>
+            <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className={inputCls} />
+          </div>
+        </>
+      )}
+
+      {step === "complete" && (
+        <>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Approval Code</label>
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              inputMode="numeric"
+              placeholder="6-digit code from your administrator"
+              className={`${inputCls} tracking-widest`}
+            />
+          </div>
+          {type === "password" && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">New Password</label>
+                <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Confirm New Password</label>
+                <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className={inputCls} />
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      {message && <p className="text-sm text-emerald-700">{message}</p>}
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={step === "request" ? submitRequest : submitComplete}
+          disabled={busy}
+          className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50"
+        >
+          {busy ? "Working…" : step === "request" ? "Submit Request" : "Complete Change"}
+        </button>
+        {step === "complete" && (
+          <button
+            onClick={() => {
+              setStep("request");
+              setError("");
+              setMessage("");
+            }}
+            disabled={busy}
+            className="text-sm font-medium text-slate-500 hover:text-slate-700 disabled:opacity-50"
+          >
+            Start over
+          </button>
+        )}
       </div>
     </div>
   );

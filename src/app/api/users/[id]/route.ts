@@ -4,8 +4,20 @@ import { users } from "@/db/schema";
 import { requirePermission } from "@/lib/permissions";
 import { and, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { revokeAllRefreshTokensForUser } from "@/lib/refresh-tokens";
+import { invalidateAllSessions } from "@/lib/auth/session-registry";
+import { revokeTrustedDevicesForUser } from "@/lib/auth/device-trust";
 
 const ASSIGNABLE_ROLES = ["admin", "manager", "agent"] as const;
+
+// Administrator-forced logout: dead session, dead refresh chain, dead device
+// trust — the account cannot act again until (re-enabled and) freshly logged
+// in with an OTP. Used on deactivation and removal below.
+async function forceLogout(userId: string) {
+  await revokeAllRefreshTokensForUser(userId);
+  await invalidateAllSessions(userId);
+  await revokeTrustedDevicesForUser(userId);
+}
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requirePermission("agents:manage");
@@ -52,6 +64,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Disabling an account must end its access NOW, not when its JWT expires.
+  if (before.active && updated.active === false) {
+    await forceLogout(id);
+  }
+
   await recordAudit({
     companyId: session.companyId,
     userId: session.userId,
@@ -89,6 +106,8 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     .returning();
 
   if (!deleted) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  await forceLogout(id);
 
   await recordAudit({
     companyId: session.companyId,

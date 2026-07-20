@@ -8,6 +8,7 @@ import { recordAudit } from "@/lib/audit";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 import { PLANS } from "@/lib/plans";
 import { DEFAULT_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
+import { activateSession } from "@/lib/auth/session-registry";
 import { eq } from "drizzle-orm";
 import { withRoute } from "@/lib/api-handler";
 
@@ -82,7 +83,8 @@ export async function POST(req: NextRequest) {
       return { company, admin };
     });
 
-    await setSessionCookie({ userId: admin.id, companyId: company.id, role: "admin", email: admin.email });
+    // Single-device security: new accounts are registered from the start.
+    await setSessionCookie({ userId: admin.id, companyId: company.id, role: "admin", email: admin.email, sessionId: await activateSession(admin.id) });
     const { rawToken, expiresAt } = await issueRefreshToken(admin.id, req.headers.get("user-agent") || undefined);
     await setRefreshCookie(rawToken, expiresAt);
 

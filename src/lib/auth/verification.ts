@@ -8,7 +8,15 @@ import { emailVerifications } from "@/db/schema";
 import { and, eq, isNotNull, lt, or } from "drizzle-orm";
 import crypto from "crypto";
 
-export type VerificationPurpose = "signup" | "password_reset";
+export type VerificationPurpose =
+  | "signup"
+  | "password_reset"
+  // Agent Portal: admin-approval codes for an agent's email/password change —
+  // the code is emailed ONLY to the company administrator.
+  | "agent_email_change"
+  | "agent_password_change"
+  // New-device login OTP, emailed to the signing-in user themselves.
+  | "device_otp";
 
 const CODE_TTL_MS = 10 * 60_000; // 10 minutes
 const RESEND_COOLDOWN_MS = 60_000; // 60 seconds

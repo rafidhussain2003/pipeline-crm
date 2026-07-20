@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/db";
-import { leads } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
 import { requireCompanySession } from "@/lib/auth";
+import { canAccessLead } from "@/lib/leads/access";
 import { recommendNextAction } from "@/lib/ai/next-best-action";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -10,8 +8,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!auth.ok) return auth.response;
   const { id } = await params;
 
-  const [lead] = await db.select({ id: leads.id }).from(leads).where(and(eq(leads.id, id), eq(leads.companyId, auth.session.companyId))).limit(1);
-  if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // Agent Portal: agents reach only their own leads (see lib/leads/access).
+  if (!(await canAccessLead(auth.session, id))) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const recommendation = await recommendNextAction(id);
   if (!recommendation) return NextResponse.json({ error: "Not found" }, { status: 404 });

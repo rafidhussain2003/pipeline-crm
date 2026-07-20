@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { leads, users } from "@/db/schema";
-import { getSession } from "@/lib/auth";
+import { getSession, type CompanySession } from "@/lib/auth";
+import { leadVisibilityConditions } from "@/lib/leads/access";
 import { and, count, desc, eq, ilike, isNull, or } from "drizzle-orm";
 import "@/lib/assignment"; // registers the "lead.assign" job handler with the queue
 import "@/lib/workflows/registry"; // registers the lead.created -> workflow listener
@@ -30,9 +31,12 @@ export async function GET(req: NextRequest) {
   const requestedPageSize = parseInt(searchParams.get("pageSize") || "50", 10);
   const pageSize = ALLOWED_PAGE_SIZES.includes(requestedPageSize) ? requestedPageSize : 50;
 
-  const conditions = [eq(leads.companyId, session.companyId), isNull(leads.deletedAt)];
+  // Agent Portal: agents are hard-scoped to their OWN leads server-side —
+  // leadVisibilityConditions adds ownerId = session.userId for them, and the
+  // client's ?ownerId= filter is ignored so it can't widen the scope.
+  const conditions = [...leadVisibilityConditions(session as CompanySession), isNull(leads.deletedAt)];
   if (disposition) conditions.push(eq(leads.disposition, disposition));
-  if (ownerId) conditions.push(eq(leads.ownerId, ownerId));
+  if (ownerId && session.role !== "agent") conditions.push(eq(leads.ownerId, ownerId));
   if (search) {
     const searchCond = or(
       ilike(leads.name, `%${search}%`),

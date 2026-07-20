@@ -8,6 +8,7 @@ import { issueRefreshToken } from "@/lib/refresh-tokens";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy, getClientIp } from "@/lib/rate-limit";
 import { DEFAULT_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
+import { activateSession } from "@/lib/auth/session-registry";
 import { eq } from "drizzle-orm";
 
 const schema = z.object({
@@ -152,6 +153,8 @@ export async function POST(req: NextRequest) {
       companyId: company.id,
       role: "admin",
       email: admin.email,
+      // Single-device security: new accounts are registered from the start.
+      sessionId: await activateSession(admin.id),
     });
     log("session_cookie_set", { userId: admin.id });
 

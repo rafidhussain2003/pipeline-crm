@@ -34,6 +34,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const [before] = await db.select().from(leads).where(and(eq(leads.id, id), eq(leads.companyId, session.companyId))).limit(1);
   if (!before) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Agent Portal: an agent may edit ONLY leads assigned to them. Same 404 a
+  // nonexistent lead produces — the existence of other people's leads is not
+  // revealed. Admin/manager behavior is unchanged.
+  if (session.role === "agent" && before.ownerId !== session.userId) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const allowed: Record<string, unknown> = {};
   for (const key of ["disposition", "ownerId", "followUpAt", "name", "phone", "email", "state", "priority", "isBlacklisted"]) {
     if (key in body) allowed[key] = body[key];
@@ -113,6 +120,11 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   const session = await getSession();
   if (!session || !session.companyId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  // Agent Portal: agents may never delete leads — not even their own.
+  // Admin/manager behavior is unchanged.
+  if (session.role === "agent") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   const { id } = await params;
   // A malformed id would otherwise reach a uuid column and surface as an

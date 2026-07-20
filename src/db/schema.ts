@@ -268,6 +268,14 @@ export const users = pgTable(
     // is forced to create their own password on first login (temp passwords can
     // never become permanent). Cleared the moment they set a real password.
     mustChangePassword: boolean("must_change_password").notNull().default(false),
+    // Enterprise single-device security: the ONE session allowed to be alive
+    // for this user. Every login rotates it (and stamps it into the JWT), so
+    // any previously issued session token stops validating immediately. Null
+    // = the user has not logged in since this column shipped; their legacy
+    // token (which carries no session id) is honored until their next login.
+    // Written ONLY by login/logout/forced-logout paths; read via a short-TTL
+    // cache in getSession() (see lib/auth-session.ts).
+    currentSessionId: uuid("current_session_id"),
     // Phase 5 per-agent routing profile: capacity limits (max active leads,
     // daily assignments, concurrent conversations, queue size, recycled) and a
     // working schedule (days, start/end, timezone, lunch, vacation ranges).
@@ -299,6 +307,30 @@ export const refreshTokens = pgTable(
   },
   (t) => ({
     userIdx: index("refresh_tokens_user_idx").on(t.userId),
+  })
+);
+
+// Enterprise Agent Portal: devices a user has proven with an email OTP.
+// The browser holds a random token in an httpOnly cookie; only its SHA-256
+// lands here (same discipline as refresh_tokens). A login from a device with
+// a live row skips the OTP; everything else must pass one. Trust expires
+// after the Remember-Me window and is revoked when an administrator forces
+// a logout (password reset / deactivation).
+export const trustedDevices = pgTable(
+  "trusted_devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    tokenHash: text("token_hash").notNull(),
+    userAgent: varchar("user_agent", { length: 255 }),
+    expiresAt: timestamp("expires_at").notNull(),
+    revokedAt: timestamp("revoked_at"),
+    lastUsedAt: timestamp("last_used_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    userIdx: index("trusted_devices_user_idx").on(t.userId),
+    tokenIdx: index("trusted_devices_token_idx").on(t.tokenHash),
   })
 );
 
@@ -1877,7 +1909,16 @@ export const capiEvents = pgTable(
 // plaintext). One active row per (email, purpose) is used; expiry, attempt,
 // and resend limits are enforced in src/lib/auth/verification.ts.
 // ===========================================================================
-export const verificationPurposeEnum = pgEnum("verification_purpose", ["signup", "password_reset"]);
+export const verificationPurposeEnum = pgEnum("verification_purpose", [
+  "signup",
+  "password_reset",
+  // Agent Portal (Enterprise): codes sent ONLY to the company administrator,
+  // who relays them to approve an agent's email/password change request.
+  "agent_email_change",
+  "agent_password_change",
+  // New-device login OTP, sent to the signing-in user's own email.
+  "device_otp",
+]);
 
 export const emailVerifications = pgTable(
   "email_verifications",

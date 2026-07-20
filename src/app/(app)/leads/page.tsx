@@ -179,20 +179,23 @@ export default function LeadsPage() {
     if ([50, 75, 100].includes(saved)) setPageSize(saved);
   }, []);
 
-  // --- Manual assignment (leads:supervise) --------------------------------
-  // Whether the signed-in user may assign leads. Mirrors ROLE_PERMISSIONS in
-  // src/lib/permissions.ts (leads:supervise is admin-only) — display gating
-  // only; the assign API re-checks the same permission server-side.
-  const [canAssign, setCanAssign] = useState(false);
+  // --- Role-dependent UI --------------------------------------------------
+  // Display gating only; every action is re-checked server-side. canAssign
+  // mirrors ROLE_PERMISSIONS in src/lib/permissions.ts (leads:supervise is
+  // admin-only); agents additionally lose Import/Export (the export API
+  // refuses them and import is admin-only).
+  const [role, setRole] = useState<string>("");
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignResult, setAssignResult] = useState("");
+  const canAssign = role === "admin";
+  const isAgent = role === "agent";
 
   useEffect(() => {
     fetch("/api/me")
       .then(async (r) => {
         if (!r.ok) return;
         const data = await r.json();
-        setCanAssign(data.user?.role === "admin");
+        setRole(data.user?.role || "");
       })
       .catch(() => {});
   }, []);
@@ -522,19 +525,23 @@ export default function LeadsPage() {
             )}
           </h1>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importing}
-            className="text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-md px-3 py-2 disabled:opacity-40"
-          >
-            {importing ? "Importing…" : "Import CSV"}
-          </button>
-          <input ref={fileInputRef} type="file" accept=".csv" onChange={handleImportFile} className="hidden" />
-          <button onClick={exportCsv} className="text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-md px-3 py-2">
-            Export CSV
-          </button>
-        </div>
+        {/* Import/Export are management tools — hidden from agents, and the
+            APIs behind them refuse agents regardless. */}
+        {!isAgent && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing}
+              className="text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-md px-3 py-2 disabled:opacity-40"
+            >
+              {importing ? "Importing…" : "Import CSV"}
+            </button>
+            <input ref={fileInputRef} type="file" accept=".csv" onChange={handleImportFile} className="hidden" />
+            <button onClick={exportCsv} className="text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-md px-3 py-2">
+              Export CSV
+            </button>
+          </div>
+        )}
       </div>
 
       {importResult && (

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth";
+import { getSession, type CompanySession } from "@/lib/auth";
+import { canAccessLead } from "@/lib/leads/access";
 import { isUuid } from "@/lib/url";
 import { buildLeadTimeline } from "@/lib/insights/timeline";
 
@@ -15,6 +16,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   // A malformed id would otherwise reach a uuid column and surface as an
   // empty-bodied 500; treat it as the missing record it describes.
   if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Agent Portal: history is visible only for leads the agent owns —
+  // same 404 as a nonexistent lead (see lib/leads/access).
+  if (!(await canAccessLead(session as CompanySession, id))) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const events = await buildLeadTimeline(id, session.companyId);
   if (events === null) return NextResponse.json({ error: "Not found" }, { status: 404 });

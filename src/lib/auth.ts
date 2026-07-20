@@ -36,6 +36,12 @@ export type SessionPayload = {
   companyId: string | null;
   role: (typeof roleEnum.enumValues)[number];
   email: string;
+  // Enterprise single-device security: the login session this JWT belongs
+  // to. getSession() only honors the token when this matches the user row's
+  // current_session_id (see lib/auth/session-registry.ts). Optional because
+  // tokens issued before the rollout carry no claim — they're honored only
+  // until the user's next login stamps a real id.
+  sessionId?: string;
 };
 
 export async function hashPassword(password: string) {
@@ -65,7 +71,17 @@ export async function getSession(): Promise<SessionPayload | null> {
   const store = await cookies();
   const token = store.get(COOKIE_NAME)?.value;
   if (!token) return null;
-  return verifySession(token);
+  const payload = verifySession(token);
+  if (!payload) return null;
+  // Single-device enforcement: a cryptographically valid JWT from a session
+  // that has since been replaced (new login elsewhere, forced logout) is
+  // treated exactly like no session at all. Cached, ~one SELECT per user per
+  // 15s — see lib/auth/session-registry.ts. Imported lazily so modules that
+  // only need verifySession/signSession (e.g. the edge-adjacent proxy) don't
+  // drag the DB client in through this file.
+  const { isSessionCurrent } = await import("@/lib/auth/session-registry");
+  if (!(await isSessionCurrent(payload.userId, payload.sessionId))) return null;
+  return payload;
 }
 
 // The `const session = await getSession(); if (!session || !session.companyId)
