@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leads, users, leadSources, leadForms, webhookLogs } from "@/db/schema";
+import { leads, users, leadSources, leadForms, webhookLogs, callbacks } from "@/db/schema";
 import { getSession, type CompanySession } from "@/lib/auth";
 import { leadVisibilityConditions } from "@/lib/leads/access";
 import { resolveSourceName } from "@/lib/leads/source-privacy";
+import { computeFollowUp } from "@/lib/followup/engine";
 import { isUuid } from "@/lib/url";
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
@@ -48,6 +49,26 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Follow-up engine input: the earliest still-open callback (indexed on
+  // leadId). One small query; the engine itself is pure computation.
+  const [openCallback] = await db
+    .select({ scheduledAt: callbacks.scheduledAt, priority: callbacks.priority, reason: callbacks.reason })
+    .from(callbacks)
+    .where(and(eq(callbacks.leadId, id), eq(callbacks.companyId, session.companyId), inArray(callbacks.status, ["scheduled", "due", "missed"])))
+    .orderBy(asc(callbacks.scheduledAt))
+    .limit(1);
+
+  const followUp = computeFollowUp(
+    {
+      disposition: lead.disposition,
+      createdAt: lead.createdAt,
+      updatedAt: lead.updatedAt,
+      followUpAt: lead.followUpAt,
+      priority: lead.priority,
+    },
+    openCallback ?? null
+  );
+
   // Facebook form (Lead Workspace left panel). The lead row doesn't carry a
   // form id — the delivery log does. One indexed lookup, only for
   // provider-sourced leads; best-effort (a lead without a delivery row simply
@@ -73,6 +94,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       sourceName: resolveSourceName(session.role, sourcePageName, sourceAlias),
       formName,
     },
+    // The follow-up engine's verdict — Next Action / Due / Priority for the
+    // workspace card. Computed here so the page needs no extra API call.
+    followUp,
     // Saves the workspace a separate /api/me round trip for its role-gated
     // controls (Assign button, note Edit buttons). The server re-checks
     // permissions on every action regardless.

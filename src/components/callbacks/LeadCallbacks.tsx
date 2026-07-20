@@ -4,6 +4,18 @@ import { useCallback, useEffect, useState } from "react";
 import ScheduleCallbackModal from "./ScheduleCallbackModal";
 import { STATUS_STYLES } from "./styles";
 
+// Follow-up & Pipeline Part 3: at-a-glance due indicators on open callbacks.
+function dueBadge(scheduledAt: string): { label: string; cls: string } | null {
+  const due = new Date(scheduledAt);
+  const now = new Date();
+  if (due.getTime() < now.getTime()) return { label: "Overdue", cls: "text-red-700 bg-red-50" };
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const daysAhead = Math.floor((due.getTime() - startOfToday.getTime()) / 86_400_000);
+  if (daysAhead <= 0) return { label: "Today", cls: "text-amber-700 bg-amber-50" };
+  if (daysAhead === 1) return { label: "Tomorrow", cls: "text-sky-700 bg-sky-50" };
+  return null;
+}
+
 type Callback = {
   id: string;
   scheduledAt: string;
@@ -99,6 +111,12 @@ export default function LeadCallbacks({
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${STATUS_STYLES[c.status] || STATUS_STYLES.scheduled}`}>{c.status}</span>
+                  {(() => {
+                    const badge = dueBadge(c.scheduledAt);
+                    return badge ? (
+                      <span className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${badge.cls}`}>{badge.label}</span>
+                    ) : null;
+                  })()}
                   <span className="text-sm font-medium text-slate-900">{new Date(c.scheduledAt).toLocaleString()}</span>
                   {c.priority !== "normal" && <span className="text-[10px] font-medium text-slate-500 capitalize">{c.priority} priority</span>}
                 </div>

@@ -39,6 +39,46 @@ type TimelineEvent = { id: string; at: string; label: string; detail: string | n
 type Disposition = { id: string; label: string; color: string; category?: string };
 type Assignee = { id: string; name: string; role: string; online: boolean; openLeadCount: number };
 
+// The follow-up engine's verdict (computed server-side in the detail route).
+type FollowUp = {
+  nextAction: string;
+  dueAt: string | null;
+  priority: "urgent" | "high" | "normal" | "low";
+  reason: string;
+  dueBucket: "overdue" | "today" | "tomorrow" | "upcoming" | "none";
+};
+
+const FOLLOWUP_PRIORITY_STYLES: Record<FollowUp["priority"], string> = {
+  urgent: "text-red-700 bg-red-50",
+  high: "text-amber-700 bg-amber-50",
+  normal: "text-slate-600 bg-slate-100",
+  low: "text-slate-400 bg-slate-50",
+};
+
+const DUE_BUCKET_STYLES: Record<FollowUp["dueBucket"], { label: string; cls: string } | null> = {
+  overdue: { label: "Overdue", cls: "text-red-700 bg-red-50" },
+  today: { label: "Today", cls: "text-amber-700 bg-amber-50" },
+  tomorrow: { label: "Tomorrow", cls: "text-sky-700 bg-sky-50" },
+  upcoming: null,
+  none: null,
+};
+
+// Dispositions that end outbound dialing: the workspace's Call/SMS actions
+// go dark and the phone renders as plain text (Part 1 — Wrong Number / DNC).
+const NO_DIAL_DISPOSITIONS = new Set(["Do Not Call", "Wrong Number"]);
+
+// Note-required dispositions (Part 1): the disposition saves only together
+// with a short note explaining it.
+const NOTE_REQUIRED: Record<string, { title: string; placeholder: string }> = {
+  "Hung Up": { title: "Customer hung up", placeholder: "What happened on the call?" },
+  "High Price": { title: "Pricing objection", placeholder: "What price/offer did the customer object to?" },
+  "Not Interested": { title: "Not interested — why?", placeholder: "Reason the customer gave…" },
+};
+
+// Callback-suggested dispositions (Part 1): saving offers — never forces —
+// a callback.
+const CALLBACK_SUGGESTED = new Set(["No Answer", "Busy", "Voicemail Left"]);
+
 type Insight = {
   score: number;
   scoreLabel: string;
@@ -101,6 +141,7 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
   const [leadTagIds, setLeadTagIds] = useState<string[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [dispositions, setDispositions] = useState<Disposition[]>([]);
+  const [followUp, setFollowUp] = useState<FollowUp | null>(null);
   const [insight, setInsight] = useState<Insight | null>(null);
   const [customerInsights, setCustomerInsights] = useState<CustomerInsights | null>(null);
   const [showWhy, setShowWhy] = useState(false);
@@ -117,11 +158,22 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
   const [cbOpenRequest, setCbOpenRequest] = useState(0);
   const [cbRefresh, setCbRefresh] = useState(0);
 
-  // Disposition special flows (Lead Workspace spec).
+  // Disposition special flows (Lead Workspace + Follow-up & Pipeline specs).
   const [confirmDnc, setConfirmDnc] = useState(false);
   const [saleClosedOpen, setSaleClosedOpen] = useState(false);
   const [installDate, setInstallDate] = useState("");
+  const [saleNote, setSaleNote] = useState("");
   const [callBackLaterOpen, setCallBackLaterOpen] = useState(false);
+  // Note-required flow (Hung Up / High Price / Not Interested).
+  const [noteGate, setNoteGate] = useState<{ disposition: string; title: string; placeholder: string } | null>(null);
+  const [gateNote, setGateNote] = useState("");
+  // Suggest-a-callback flow (No Answer / Busy / Voicemail Left).
+  const [suggestCallbackFor, setSuggestCallbackFor] = useState<string | null>(null);
+  // Duplicate Lead linking flow.
+  const [dupOpen, setDupOpen] = useState(false);
+  const [dupCandidates, setDupCandidates] = useState<{ id: string; name: string | null; phone: string | null; email: string | null; createdAt: string }[]>([]);
+  const [dupLoading, setDupLoading] = useState(false);
+  const [dupSelected, setDupSelected] = useState<string | null>(null);
 
   const [assignOpen, setAssignOpen] = useState(false);
 
@@ -152,6 +204,7 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
     const leadTagsData = await leadTagsRes.json().catch(() => ({}));
     const timelineData = await timelineRes.json().catch(() => ({}));
     setLead(leadData.lead || null);
+    setFollowUp(leadData.followUp || null);
     setViewerRole(leadData.viewerRole || "");
     setViewerUserId(leadData.viewerUserId || "");
     setNotes(notesData.notes || []);
@@ -282,8 +335,9 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
     load();
   }
 
-  // The Quick Actions disposition select. Three dispositions carry an extra
-  // step (Lead Workspace spec); everything else applies immediately.
+  // The Quick Actions disposition select — Part 1's disposition rules. Each
+  // disposition routes into its workflow; anything without a rule applies
+  // immediately.
   function handleDispositionPick(next: string) {
     if (!lead || next === lead.disposition) return;
     if (next === "Do Not Call") {
@@ -291,15 +345,72 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
       return;
     }
     if (next === "Call Back Later") {
+      // Mandatory callback: the disposition only saves after one is booked.
       setCallBackLaterOpen(true);
       return;
     }
     if (next === "Sale Closed") {
       setInstallDate("");
+      setSaleNote("");
       setSaleClosedOpen(true);
       return;
     }
+    const gate = NOTE_REQUIRED[next];
+    if (gate) {
+      setGateNote("");
+      setNoteGate({ disposition: next, ...gate });
+      return;
+    }
+    if (CALLBACK_SUGGESTED.has(next)) {
+      setSuggestCallbackFor(next);
+      return;
+    }
+    if (next === "Duplicate Lead") {
+      openDuplicateFlow();
+      return;
+    }
     applyDisposition(next);
+  }
+
+  // Duplicate Lead: offer linking to the original. Candidates come from the
+  // normal (owner-scoped for agents) leads search on this customer's own
+  // phone/email — "if available", never mandatory.
+  async function openDuplicateFlow() {
+    setDupSelected(null);
+    setDupCandidates([]);
+    setDupOpen(true);
+    const query = lead?.phone || lead?.email || lead?.name;
+    if (!query) return;
+    setDupLoading(true);
+    try {
+      const res = await fetch(`/api/leads?search=${encodeURIComponent(query)}&pageSize=50`);
+      if (res.ok) {
+        const data = await res.json();
+        setDupCandidates(
+          ((data.leads || []) as { id: string; name: string | null; phone: string | null; email: string | null; createdAt: string }[]).filter(
+            (l) => l.id !== id
+          )
+        );
+      }
+    } catch {
+      /* candidates are best-effort */
+    } finally {
+      setDupLoading(false);
+    }
+  }
+
+  async function saveNoteGated() {
+    if (!noteGate || !gateNote.trim()) return;
+    const gate = noteGate;
+    setNoteGate(null);
+    await applyDisposition(gate.disposition);
+    await fetch(`/api/leads/${id}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: `${gate.disposition}: ${gateNote.trim()}` }),
+    });
+    setGateNote("");
+    load();
   }
 
   // --- Notes ---------------------------------------------------------------
@@ -387,6 +498,9 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
     return ordered.map((category) => ({ category, options: groups.get(category)! }));
   })();
 
+  // Part 1: Wrong Number / Do Not Call end outbound dialing from this page.
+  const noDial = lead ? NO_DIAL_DISPOSITIONS.has(lead.disposition) : false;
+
   if (loadFailed) {
     return (
       <div className="p-6">
@@ -473,9 +587,15 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
             {infoRow(
               "Phone",
               lead.phone ? (
-                <a href={`tel:${lead.phone}`} className="text-blue-700 hover:underline">
-                  {lead.phone}
-                </a>
+                noDial ? (
+                  <span className="text-slate-400 line-through" title={`Dialing blocked — disposition is "${lead.disposition}"`}>
+                    {lead.phone}
+                  </span>
+                ) : (
+                  <a href={`tel:${lead.phone}`} className="text-blue-700 hover:underline">
+                    {lead.phone}
+                  </a>
+                )
               ) : (
                 "—"
               )
@@ -734,13 +854,45 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
           </div>
         </div>
 
-        {/* ── RIGHT: Quick Actions ───────────────────────────────────── */}
+        {/* ── RIGHT: Next Action + Quick Actions ─────────────────────── */}
         <div className="space-y-6 lg:sticky lg:top-6">
+          {/* Follow-up engine (Part 2): what to do next, when, how urgent. */}
+          {followUp && (
+            <div className="bg-white border border-slate-200 rounded-lg p-5">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-sm font-semibold text-slate-700">Next Action</h2>
+                <span className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${FOLLOWUP_PRIORITY_STYLES[followUp.priority]}`}>
+                  {followUp.priority}
+                </span>
+              </div>
+              <div className="text-sm font-medium text-slate-900">{followUp.nextAction}</div>
+              <div className="text-xs text-slate-500 mt-1">{followUp.reason}</div>
+              {followUp.dueAt && (
+                <div className="flex items-center gap-2 mt-2">
+                  {DUE_BUCKET_STYLES[followUp.dueBucket] && (
+                    <span className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${DUE_BUCKET_STYLES[followUp.dueBucket]!.cls}`}>
+                      {DUE_BUCKET_STYLES[followUp.dueBucket]!.label}
+                    </span>
+                  )}
+                  <span className="text-xs text-slate-600">{new Date(followUp.dueAt).toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="bg-white border border-slate-200 rounded-lg p-5">
             <h2 className="text-sm font-semibold text-slate-700 mb-3">Quick Actions</h2>
             <div className="space-y-2">
-              <QuickAction href={lead.phone ? `tel:${lead.phone}` : undefined} label="Call" hint={lead.phone || "No phone number"} />
-              <QuickAction href={lead.phone ? `sms:${lead.phone}` : undefined} label="SMS" hint={lead.phone || "No phone number"} />
+              <QuickAction
+                href={lead.phone && !noDial ? `tel:${lead.phone}` : undefined}
+                label="Call"
+                hint={noDial ? `Blocked — ${lead.disposition}` : lead.phone || "No phone number"}
+              />
+              <QuickAction
+                href={lead.phone && !noDial ? `sms:${lead.phone}` : undefined}
+                label="SMS"
+                hint={noDial ? `Blocked — ${lead.disposition}` : lead.phone || "No phone number"}
+              />
               <QuickAction href={lead.email ? `mailto:${lead.email}` : undefined} label="Email" hint={lead.email || "No email address"} />
               <button
                 onClick={focusNoteComposer}
@@ -820,10 +972,18 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
         </WorkspaceModal>
       )}
 
-      {/* Sale Closed — optional installation date. */}
+      {/* Sale Closed — sales note REQUIRED, installation date optional. */}
       {saleClosedOpen && (
         <WorkspaceModal title="Sale Closed 🎉" onClose={() => setSaleClosedOpen(false)}>
-          <p className="text-sm text-slate-600 mb-3">If an installation is booked, record its date (optional).</p>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Sales note (required)</label>
+          <textarea
+            value={saleNote}
+            onChange={(e) => setSaleNote(e.target.value)}
+            rows={2}
+            placeholder="Package sold, price, anything the installer should know…"
+            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm mb-3"
+          />
+          <label className="block text-xs font-medium text-slate-600 mb-1">Installation date (optional)</label>
           <input
             type="datetime-local"
             value={installDate}
@@ -831,32 +991,139 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
             className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm mb-4"
           />
           <div className="flex justify-end gap-2">
-            <button
-              onClick={() => {
-                setSaleClosedOpen(false);
-                applyDisposition("Sale Closed");
-              }}
-              className="text-sm font-medium text-slate-600 border border-slate-200 rounded-md px-3 py-1.5"
-            >
-              Skip
+            <button onClick={() => setSaleClosedOpen(false)} className="text-sm font-medium text-slate-600 border border-slate-200 rounded-md px-3 py-1.5">
+              Cancel
             </button>
             <button
+              disabled={!saleNote.trim()}
               onClick={async () => {
                 setSaleClosedOpen(false);
                 const followUpAt = installDate ? new Date(installDate).toISOString() : undefined;
                 await applyDisposition("Sale Closed", followUpAt ? { followUpAt } : undefined);
-                if (followUpAt) {
-                  await fetch(`/api/leads/${id}/notes`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ body: `Installation scheduled for ${new Date(followUpAt).toLocaleString()}` }),
-                  });
-                  load();
-                }
+                const body =
+                  `Sale Closed: ${saleNote.trim()}` +
+                  (followUpAt ? `\nInstallation scheduled for ${new Date(followUpAt).toLocaleString()}` : "");
+                await fetch(`/api/leads/${id}/notes`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ body }),
+                });
+                setSaleNote("");
+                load();
               }}
-              className="text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-md px-3 py-1.5"
+              className="text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-md px-3 py-1.5 disabled:opacity-40"
             >
               Save
+            </button>
+          </div>
+        </WorkspaceModal>
+      )}
+
+      {/* Note-required dispositions (Hung Up / High Price / Not Interested). */}
+      {noteGate && (
+        <WorkspaceModal title={noteGate.title} onClose={() => setNoteGate(null)}>
+          <p className="text-sm text-slate-600 mb-3">
+            Saving “{noteGate.disposition}” needs a short note so the next person understands what happened.
+          </p>
+          <textarea
+            value={gateNote}
+            onChange={(e) => setGateNote(e.target.value)}
+            rows={3}
+            placeholder={noteGate.placeholder}
+            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm mb-4"
+          />
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setNoteGate(null)} className="text-sm font-medium text-slate-600 border border-slate-200 rounded-md px-3 py-1.5">
+              Cancel
+            </button>
+            <button
+              disabled={!gateNote.trim()}
+              onClick={saveNoteGated}
+              className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md px-3 py-1.5 disabled:opacity-40"
+            >
+              Save
+            </button>
+          </div>
+        </WorkspaceModal>
+      )}
+
+      {/* Suggest-a-callback dispositions (No Answer / Busy / Voicemail Left). */}
+      {suggestCallbackFor && (
+        <WorkspaceModal title={`${suggestCallbackFor} — schedule a callback?`} onClose={() => setSuggestCallbackFor(null)}>
+          <p className="text-sm text-slate-600 mb-4">
+            You didn’t reach the customer. Booking a callback keeps this lead moving — or save without one.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => {
+                const d = suggestCallbackFor;
+                setSuggestCallbackFor(null);
+                applyDisposition(d);
+              }}
+              className="text-sm font-medium text-slate-600 border border-slate-200 rounded-md px-3 py-1.5"
+            >
+              Save only
+            </button>
+            <button
+              onClick={() => {
+                const d = suggestCallbackFor;
+                setSuggestCallbackFor(null);
+                applyDisposition(d);
+                setCbOpenRequest((n) => n + 1);
+              }}
+              className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md px-3 py-1.5"
+            >
+              Save & Schedule Callback
+            </button>
+          </div>
+        </WorkspaceModal>
+      )}
+
+      {/* Duplicate Lead — offer linking to the original (if findable). */}
+      {dupOpen && (
+        <WorkspaceModal title="Duplicate Lead" onClose={() => setDupOpen(false)}>
+          <p className="text-sm text-slate-600 mb-3">
+            If this duplicates another lead, link it to the original so history stays connected.
+          </p>
+          <div className="max-h-56 overflow-y-auto mb-4 space-y-1">
+            {dupLoading && <div className="py-4 text-center text-sm text-slate-400">Searching…</div>}
+            {!dupLoading && dupCandidates.length === 0 && (
+              <div className="py-4 text-center text-sm text-slate-400">No matching leads found — you can still save.</div>
+            )}
+            {dupCandidates.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => setDupSelected((prev) => (prev === c.id ? null : c.id))}
+                className={`w-full text-left rounded-md border px-3 py-2 ${
+                  dupSelected === c.id ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                <span className="block text-sm font-medium text-slate-900 truncate">{c.name || "Unknown"}</span>
+                <span className="block text-xs text-slate-500 truncate">
+                  {c.phone || "—"} · {c.email || "—"} · {new Date(c.createdAt).toLocaleDateString()}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => {
+                setDupOpen(false);
+                applyDisposition("Duplicate Lead");
+              }}
+              className="text-sm font-medium text-slate-600 border border-slate-200 rounded-md px-3 py-1.5"
+            >
+              Save without linking
+            </button>
+            <button
+              disabled={!dupSelected}
+              onClick={() => {
+                setDupOpen(false);
+                applyDisposition("Duplicate Lead", { duplicateOfLeadId: dupSelected });
+              }}
+              className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md px-3 py-1.5 disabled:opacity-40"
+            >
+              Link & Save
             </button>
           </div>
         </WorkspaceModal>

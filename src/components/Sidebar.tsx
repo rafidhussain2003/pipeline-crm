@@ -98,6 +98,10 @@ const FINANCE_ITEMS: { href: string; label: string }[] = [
 // their own permissions, so a typed URL gets the same answer.
 const navItems: { href: string; label: string; feature?: string; roles?: string[] }[] = [
   { href: "/leads", label: "All Leads" },
+  // My Tasks (Follow-up & Pipeline) — every role's daily queue, agents
+  // included; scope is decided server-side (personal for everyone, plus the
+  // pipeline overview for supervisors).
+  { href: "/tasks", label: "My Tasks" },
   // Callbacks (Phase 15) is every role's tool — an agent works their own list,
   // a manager/admin sees the whole company's. Scope is decided server-side, so
   // this needs no role gate.

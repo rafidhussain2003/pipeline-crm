@@ -49,6 +49,31 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   for (const key of ["disposition", "ownerId", "followUpAt", "name", "phone", "email", "state", "priority", "isBlacklisted"]) {
     if (key in body) allowed[key] = body[key];
   }
+
+  // Follow-up & Pipeline: "Duplicate Lead" can link to the original lead.
+  // Validated hard — the target must be a real, different lead in THIS
+  // company (a raw id from another tenant 404s here and never lands in the
+  // column), and linking also flags isDuplicate so lists badge it.
+  if ("duplicateOfLeadId" in body) {
+    const target = body.duplicateOfLeadId;
+    if (target === null) {
+      allowed.duplicateOfLeadId = null;
+      allowed.isDuplicate = false;
+    } else {
+      if (typeof target !== "string" || !isUuid(target) || target === id) {
+        return NextResponse.json({ error: "duplicateOfLeadId must be another lead's id." }, { status: 400 });
+      }
+      const [original] = await db
+        .select({ id: leads.id })
+        .from(leads)
+        .where(and(eq(leads.id, target), eq(leads.companyId, session.companyId)))
+        .limit(1);
+      if (!original) return NextResponse.json({ error: "That lead could not be found." }, { status: 404 });
+      allowed.duplicateOfLeadId = target;
+      allowed.isDuplicate = true;
+    }
+  }
+
   allowed.updatedAt = new Date();
 
   const [updated] = await db
@@ -91,6 +116,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
     }
   }
+  if ("duplicateOfLeadId" in body && allowed.duplicateOfLeadId !== before.duplicateOfLeadId) {
+    await recordAudit({
+      companyId: session.companyId,
+      userId: session.userId,
+      action: "lead.duplicate_linked",
+      entityType: "lead",
+      entityId: id,
+      before: { duplicateOfLeadId: before.duplicateOfLeadId },
+      after: { duplicateOfLeadId: allowed.duplicateOfLeadId },
+    });
+  }
+
   if ("ownerId" in body && body.ownerId !== before.ownerId) {
     // Any path that changes ownerId must also log to assignment_log — the
     // "assignments today" counts (Team dashboard) and the round-robin

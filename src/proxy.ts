@@ -86,6 +86,7 @@ export async function proxy(req: NextRequest) {
 
   const isAppRoute =
     pathname.startsWith("/leads") ||
+    pathname.startsWith("/tasks") ||
     pathname.startsWith("/settings") ||
     pathname.startsWith("/callbacks") ||
     pathname.startsWith("/operations") ||
@@ -200,6 +201,7 @@ export const config = {
     "/payroll/:path*",
     "/hr/:path*",
     "/automation/:path*",
+    "/tasks/:path*",
     "/team/:path*",
     "/subscription/:path*",
     "/super-admin/:path*",
