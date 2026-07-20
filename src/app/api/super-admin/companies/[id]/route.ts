@@ -1,13 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { companies } from "@/db/schema";
+import { companies, users } from "@/db/schema";
 import { requireSuperAdmin } from "@/lib/permissions";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
+import { isUuid } from "@/lib/url";
 import { recordAudit } from "@/lib/audit";
+import { validateCompanyProfile, diffCompanyFields } from "@/lib/companies/profile-validation";
 import { checkPolicy } from "@/lib/rate-limit";
 import { yearsFromNow, invalidateBillingSnapshot } from "@/lib/billing";
 
 const SUBSCRIPTION_STATUSES = new Set(["trial", "active", "past_due", "cancelled"]);
+
+// Phase 4A — one company for the detail page. Returns the whole row (every
+// administrative field already stored) plus the derived owner, so the page
+// renders from a single request.
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireSuperAdmin();
+  if (!auth.ok) return auth.response;
+  const { id } = await params;
+  if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const [company] = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
+  if (!company || company.deletedAt) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Owner is DERIVED (the company's oldest admin), never a stored column, and
+  // is strictly read-only here — Phase 4A does not touch user records.
+  const admins = await db
+    .select({ name: users.name, email: users.email, createdAt: users.createdAt })
+    .from(users)
+    .where(and(eq(users.companyId, id), eq(users.role, "admin"), isNull(users.deletedAt)))
+    .orderBy(asc(users.createdAt))
+    .limit(1);
+
+  return NextResponse.json({ company, owner: admins[0] ?? null });
+}
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireSuperAdmin();
@@ -19,7 +45,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
   }
   const { id } = await params;
-  const { status, customDomain, customDomainVerified, plan, subscriptionStatus, freeYears } = await req.json();
+  const body = await req.json();
+  const { status, customDomain, customDomainVerified, plan, subscriptionStatus, freeYears } = body;
 
   const [beforeRow] = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
 
@@ -28,6 +55,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (customDomain !== undefined) allowed.customDomain = customDomain;
   if (customDomainVerified !== undefined) allowed.customDomainVerified = customDomainVerified;
   if (plan) allowed.plan = plan;
+
+  // Phase 4A — company profile fields. Deliberately COMPANY-only: nothing here
+  // touches users, login emails or credentials. supportEmail is the company's
+  // published contact address, not an authentication identity.
+  const profile = validateCompanyProfile(body);
+  if (!profile.ok) return NextResponse.json({ error: profile.error }, { status: 400 });
+  Object.assign(allowed, profile.values);
 
   // Lets the platform owner activate any already-signed-up company — any
   // plan, including "free" — for however many years, without Stripe. Same
@@ -53,6 +87,24 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
   // This patch can change subscription fields — drop the proxy gate's cached snapshot.
   await invalidateBillingSnapshot(id);
+
+  // Phase 4A — a profile edit is its own audit entry, recording only the fields
+  // that actually changed with both old and new values. Kept separate from the
+  // status/plan entry below so "the owner renamed this company" is not buried
+  // inside a status-change record.
+  const PROFILE_KEYS = ["name", "supportEmail", "businessPhone", "address", "website", "timezone"];
+  const diff = diffCompanyFields(beforeRow as unknown as Record<string, unknown>, updated as unknown as Record<string, unknown>, PROFILE_KEYS);
+  if (diff.changed.length > 0) {
+    await recordAudit({
+      companyId: id,
+      userId: session.userId,
+      action: "company.profile_updated",
+      entityType: "company",
+      entityId: id,
+      before: diff.before,
+      after: { ...diff.after, changedFields: diff.changed },
+    });
+  }
 
   await recordAudit({
     companyId: id,

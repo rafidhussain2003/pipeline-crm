@@ -477,6 +477,14 @@ export default function Sidebar({
               Super Admin
             </Link>
             <Link
+              href="/super-admin/companies"
+              className={`block px-3 py-2 rounded-md text-sm font-medium ${
+                pathname.startsWith("/super-admin/companies") ? "bg-purple-50 text-purple-700" : "text-purple-700 hover:bg-purple-50"
+              }`}
+            >
+              Company Management
+            </Link>
+            <Link
               href="/super-admin/feature-management"
               className={`block px-3 py-2 rounded-md text-sm font-medium ${
                 pathname.startsWith("/super-admin/feature-management") ? "bg-purple-50 text-purple-700" : "text-purple-700 hover:bg-purple-50"

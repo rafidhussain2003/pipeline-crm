@@ -5,7 +5,7 @@ import { db } from "@/db";
 import { companies, users, dispositionOptions, assignmentRules, automationSettings } from "@/db/schema";
 import { hashPassword } from "@/lib/auth";
 import { requireSuperAdmin } from "@/lib/permissions";
-import { isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 import { yearsFromNow } from "@/lib/billing";
@@ -34,12 +34,84 @@ function slugify(name: string) {
   );
 }
 
-export async function GET() {
+// Phase 4A — Company Management list.
+//
+// Extended in place rather than adding a second endpoint: the existing
+// super-admin dashboard already consumes `companies`, and that key still
+// returns the same rows in the same shape. Search/sort/pagination are opt-in
+// query params, so a caller that passes none gets the previous behaviour.
+const SORTABLE = {
+  name: companies.name,
+  status: companies.status,
+  plan: companies.plan,
+  createdAt: companies.createdAt,
+  updatedAt: companies.updatedAt,
+} as const;
+
+export async function GET(req: NextRequest) {
   const auth = await requireSuperAdmin();
   if (!auth.ok) return auth.response;
 
-  const rows = await db.select().from(companies).where(isNull(companies.deletedAt));
-  return NextResponse.json({ companies: rows });
+  const sp = req.nextUrl.searchParams;
+  const search = sp.get("search")?.trim();
+  const sortKey = (sp.get("sort") ?? "createdAt") as keyof typeof SORTABLE;
+  const sortCol = SORTABLE[sortKey] ?? companies.createdAt;
+  const dir = sp.get("dir") === "asc" ? asc : desc;
+  const page = Math.max(1, parseInt(sp.get("page") || "1", 10));
+  // Same allow-list discipline as the leads list: an arbitrary page size would
+  // let one request pull every tenant into memory.
+  const ALLOWED = [25, 50, 100];
+  const requested = parseInt(sp.get("pageSize") || "25", 10);
+  const pageSize = ALLOWED.includes(requested) ? requested : 25;
+
+  const conditions = [isNull(companies.deletedAt)];
+  if (search) {
+    const like = `%${search}%`;
+    const cond = or(
+      ilike(companies.name, like),
+      ilike(companies.supportEmail, like),
+      ilike(companies.businessPhone, like)
+    );
+    if (cond) conditions.push(cond);
+  }
+
+  const rows = await db
+    .select()
+    .from(companies)
+    .where(and(...conditions))
+    // id as tiebreaker: two companies sharing a name or created_at would
+    // otherwise have no defined order, which under LIMIT/OFFSET silently
+    // repeats one row on a page and drops another.
+    .orderBy(dir(sortCol), desc(companies.id))
+    .limit(pageSize)
+    .offset((page - 1) * pageSize);
+
+  const [{ total }] = await db.select({ total: count() }).from(companies).where(and(...conditions));
+
+  // Company Owner is DERIVED — it is the company's admin user, not a column.
+  // Fetched as ONE grouped query over just the companies on this page rather
+  // than per row, so the list stays a fixed two queries however many tenants
+  // exist (Task 7 of the previous phase's performance rule, same discipline).
+  const ids = rows.map((r) => r.id);
+  const owners = ids.length
+    ? await db
+        .select({ companyId: users.companyId, name: users.name, email: users.email, createdAt: users.createdAt })
+        .from(users)
+        .where(and(inArray(users.companyId, ids), eq(users.role, "admin"), isNull(users.deletedAt)))
+    : [];
+  // Oldest admin wins — that is the account created with the company.
+  const ownerByCompany = new Map<string, { name: string; email: string }>();
+  for (const o of [...owners].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
+    if (o.companyId && !ownerByCompany.has(o.companyId)) ownerByCompany.set(o.companyId, { name: o.name, email: o.email });
+  }
+
+  return NextResponse.json({
+    companies: rows.map((r) => ({ ...r, owner: ownerByCompany.get(r.id) ?? null })),
+    total,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  });
 }
 
 // Super-admin can add a company directly, bypassing public signup (e.g. for
