@@ -1,0 +1,1 @@
+ALTER TABLE "lead_notes" ADD COLUMN "edited_at" timestamp;

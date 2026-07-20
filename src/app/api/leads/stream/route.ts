@@ -98,6 +98,15 @@ export async function GET(req: NextRequest) {
           // the client re-runs its current query to see the change.
           if (isAgent) send("lead.assigned", { at: signal.at });
           else send("lead.assigned", { leadId: signal.leadId, agentId: signal.agentId, at: signal.at });
+        } else if (signal.type === "lead.updated") {
+          // In-place change (note / callback / disposition) — the Lead
+          // Workspace re-fetches what it's showing. Agents get a bare
+          // timestamp (their page's refetch is owner-scoped server-side
+          // anyway, and no lead ids from other agents' work should reach
+          // them); admins/managers get the leadId so only the open lead's
+          // page bothers to refetch.
+          if (isAgent) send("lead.updated", { at: signal.at });
+          else send("lead.updated", { leadId: signal.leadId, at: signal.at });
         }
       });
 

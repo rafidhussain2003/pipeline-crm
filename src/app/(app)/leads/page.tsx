@@ -181,13 +181,13 @@ export default function LeadsPage() {
 
   // --- Role-dependent UI --------------------------------------------------
   // Display gating only; every action is re-checked server-side. canAssign
-  // mirrors ROLE_PERMISSIONS in src/lib/permissions.ts (leads:supervise is
-  // admin-only); agents additionally lose Import/Export (the export API
+  // mirrors ROLE_PERMISSIONS in src/lib/permissions.ts (leads:assign is
+  // admin + manager); agents additionally lose Import/Export (the export API
   // refuses them and import is admin-only).
   const [role, setRole] = useState<string>("");
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignResult, setAssignResult] = useState("");
-  const canAssign = role === "admin";
+  const canAssign = role === "admin" || role === "manager";
   const isAgent = role === "agent";
 
   useEffect(() => {

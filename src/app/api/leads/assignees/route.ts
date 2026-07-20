@@ -18,7 +18,7 @@ import { TERMINAL_DISPOSITIONS } from "@/lib/assignment/constants";
 // "open workload" definition the assignment engine and Team dashboard use:
 // not deleted, not in a terminal disposition).
 export async function GET() {
-  const auth = await requirePermission("leads:supervise");
+  const auth = await requirePermission("leads:assign");
   if (!auth.ok) return auth.response;
   const { session } = auth;
 

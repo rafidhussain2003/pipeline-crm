@@ -18,6 +18,7 @@ export type Permission =
   | "tags:manage"
   | "agents:manage" // Agents module: create/edit/reset-password/enable-disable/delete agents
   | "leads:supervise" // force assign/reassign/recycle, lock/unlock agents (Team dashboard)
+  | "leads:assign" // manually assign/reassign leads (leads page bulk bar, Lead Workspace)
   | "callbacks:supervise" // see/act on the whole company's callbacks, not just your own
   | "company_settings:edit" // Profile > Company tab
   | "billing:manage" // Subscription page actions (checkout, portal)
@@ -48,11 +49,18 @@ const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
     "tags:manage",
     "agents:manage",
     "leads:supervise",
+    "leads:assign",
     "callbacks:supervise",
     "company_settings:edit",
     "billing:manage",
   ]),
-  manager: new Set(["agents:manage", "callbacks:supervise"]),
+  // leads:assign is deliberately SEPARATE from leads:supervise: the Lead
+  // Workspace spec gives managers manual assignment, but leads:supervise also
+  // carries the Team dashboard's force-recycle and agent lock/unlock powers —
+  // granting those as a side effect of an Assign button would be an unrelated,
+  // invisible expansion of what a manager can do (same reasoning as
+  // callbacks:supervise above).
+  manager: new Set(["agents:manage", "callbacks:supervise", "leads:assign"]),
   agent: new Set(["tags:manage"]),
 };
 

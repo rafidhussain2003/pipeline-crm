@@ -19,7 +19,24 @@ type Callback = {
 
 // The "Schedule Callback" surface on the Lead Details page: the button the spec
 // asks for on every lead, plus this lead's callback history right underneath it.
-export default function LeadCallbacks({ leadId, leadName }: { leadId: string; leadName: string | null }) {
+//
+// Lead Workspace additions (both optional, both counters so repeat triggers
+// work): `openRequest` — bumping it opens the schedule modal (the Quick
+// Actions panel's button); `refreshToken` — bumping it re-fetches the list
+// (the page's realtime stream saw a callback change).
+export default function LeadCallbacks({
+  leadId,
+  leadName,
+  openRequest,
+  refreshToken,
+  onChanged,
+}: {
+  leadId: string;
+  leadName: string | null;
+  openRequest?: number;
+  refreshToken?: number;
+  onChanged?: () => void;
+}) {
   const [items, setItems] = useState<Callback[]>([]);
   const [modal, setModal] = useState<{ existingId?: string; initial?: Callback } | null>(null);
   // null = first load in flight; false = module disabled for this company
@@ -41,6 +58,14 @@ export default function LeadCallbacks({ leadId, leadName }: { leadId: string; le
     load();
   }, [load]);
 
+  useEffect(() => {
+    if (openRequest) setModal({});
+  }, [openRequest]);
+
+  useEffect(() => {
+    if (refreshToken) load();
+  }, [refreshToken, load]);
+
   async function act(id: string, action: "complete" | "cancel") {
     await fetch(`/api/callbacks/${id}`, {
       method: "PATCH",
@@ -48,6 +73,7 @@ export default function LeadCallbacks({ leadId, leadName }: { leadId: string; le
       body: JSON.stringify({ action }),
     });
     load();
+    onChanged?.();
   }
 
   const open = items.filter((c) => c.status === "scheduled" || c.status === "due" || c.status === "missed");
@@ -112,7 +138,10 @@ export default function LeadCallbacks({ leadId, leadName }: { leadId: string; le
           existingId={modal.existingId}
           initial={modal.initial}
           onClose={() => setModal(null)}
-          onSaved={load}
+          onSaved={() => {
+            load();
+            onChanged?.();
+          }}
         />
       )}
     </div>

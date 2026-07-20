@@ -906,6 +906,10 @@ export const leadNotes = pgTable(
     authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
     body: text("body").notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
+    // Lead Workspace: set on every edit — the UI's "Edited" indicator. Null =
+    // never edited. createdAt is deliberately never rewritten, so the note's
+    // place in the timeline stays where the author originally wrote it.
+    editedAt: timestamp("edited_at"),
   },
   (t) => ({
     leadIdx: index("lead_notes_lead_idx").on(t.leadId),

@@ -21,13 +21,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const body = await req.json();
 
-  // Reassigning a lead or exempting it from auto-assignment are supervisor
-  // decisions (same permission the Team dashboard's force-assign requires)
-  // — everything else on this endpoint (disposition, notes fields, etc.)
-  // is a normal everyday edit any company member can make. Without this,
+  // Reassigning a lead requires leads:assign (admin + manager — the Lead
+  // Workspace's Assign permission); exempting it from auto-assignment stays
+  // a supervisor decision (leads:supervise, Team dashboard). Everything else
+  // on this endpoint (disposition, notes fields, etc.) is a normal everyday
+  // edit any company member can make — on leads they can see. Without this,
   // any authenticated agent could reassign leads or blacklist them via a
   // raw API call, bypassing the Lock/workload-cap/routing rules entirely.
-  if (("ownerId" in body || "isBlacklisted" in body) && !hasPermission(session.role, "leads:supervise")) {
+  if ("ownerId" in body && !hasPermission(session.role, "leads:assign")) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if ("isBlacklisted" in body && !hasPermission(session.role, "leads:supervise")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

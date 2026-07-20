@@ -8,13 +8,13 @@ import { bulkAssignLeads } from "@/lib/supervisor";
 // leads to one agent. Single and bulk are the same operation — a one-element
 // array — so "works with exactly one lead selected" is true by construction.
 //
-// Guarded by the same permission as every other owner-changing path
-// (supervisor force-assign, the leads/[id] PATCH ownerId branch): a company
-// member without leads:supervise gets a 403 here no matter what the UI shows.
+// Guarded by leads:assign (admin + manager — the Lead Workspace spec's
+// "Assign, admins/managers only"): a company member without it gets a 403
+// here no matter what the UI shows. Agents can never assign.
 const MAX_BULK = 100; // matches the largest leads-page size — one page max
 
 export async function POST(req: NextRequest) {
-  const auth = await requirePermission("leads:supervise");
+  const auth = await requirePermission("leads:assign");
   if (!auth.ok) return auth.response;
   const { session } = auth;
 

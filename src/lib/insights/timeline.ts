@@ -5,7 +5,7 @@
 // paths already record. Extracted into lib so both the timeline API route and
 // the Phase 9 verification test build the exact same feed.
 import { db } from "@/db";
-import { leads, leadSources, leadNotes, assignmentLog, auditLog, leadLifecycleEvents, users } from "@/db/schema";
+import { leads, leadSources, leadNotes, assignmentLog, auditLog, leadLifecycleEvents, callbacks, users } from "@/db/schema";
 import { and, eq, desc } from "drizzle-orm";
 
 export type TimelineEvent = { id: string; at: Date; label: string; detail: string | null; actor: string | null };
@@ -26,6 +26,12 @@ function humanizeAudit(action: string, metadata: unknown): { label: string; deta
       return { label: "Updated", detail: Array.isArray(m.changedFields) ? (m.changedFields as string[]).join(", ") : null };
     case "note.added":
       return { label: "Note added", detail: null };
+    // Note bodies already appear as their own timeline entries (from
+    // lead_notes) — the audit rows would duplicate them, so both are skipped
+    // here; the edit is instead reflected on the note event itself.
+    case "lead.note_added":
+    case "lead.note_edited":
+      return null;
     case "attachment.added":
       return { label: "Attachment added", detail: typeof m.fileName === "string" ? m.fileName : null };
     default:
@@ -52,7 +58,7 @@ export async function buildLeadTimeline(leadId: string, companyId: string): Prom
   // production database). If the lead isn't in this company we return null
   // and the batch results are discarded — nothing crosses the tenancy
   // boundary, because nothing is returned.
-  const [[lead], assignments, auditEntries, lifecycle, notes] = await Promise.all([
+  const [[lead], assignments, auditEntries, lifecycle, notes, callbackRows] = await Promise.all([
     db
       .select({ id: leads.id, createdAt: leads.createdAt, sourcePlatform: leadSources.platform, sourceName: leadSources.pageName })
       .from(leads)
@@ -77,11 +83,29 @@ export async function buildLeadTimeline(leadId: string, companyId: string): Prom
       .where(eq(leadLifecycleEvents.leadId, leadId))
       .orderBy(desc(leadLifecycleEvents.createdAt)),
     db
-      .select({ id: leadNotes.id, body: leadNotes.body, createdAt: leadNotes.createdAt, authorName: users.name })
+      .select({ id: leadNotes.id, body: leadNotes.body, createdAt: leadNotes.createdAt, editedAt: leadNotes.editedAt, authorName: users.name })
       .from(leadNotes)
       .leftJoin(users, eq(leadNotes.authorId, users.id))
       .where(eq(leadNotes.leadId, leadId))
       .orderBy(desc(leadNotes.createdAt)),
+    // Lead Workspace: callbacks belong on the activity feed. Company-scoped
+    // like every other query in this batch.
+    db
+      .select({
+        id: callbacks.id,
+        scheduledAt: callbacks.scheduledAt,
+        reason: callbacks.reason,
+        priority: callbacks.priority,
+        status: callbacks.status,
+        createdAt: callbacks.createdAt,
+        completedAt: callbacks.completedAt,
+        cancelledAt: callbacks.cancelledAt,
+        agentName: users.name,
+      })
+      .from(callbacks)
+      .leftJoin(users, eq(callbacks.agentId, users.id))
+      .where(and(eq(callbacks.leadId, leadId), eq(callbacks.companyId, companyId)))
+      .orderBy(desc(callbacks.createdAt)),
   ]);
   if (!lead) return null;
 
@@ -102,7 +126,29 @@ export async function buildLeadTimeline(leadId: string, companyId: string): Prom
   }
 
   for (const n of notes) {
-    events.push({ id: `note:${n.id}`, at: n.createdAt, label: "Note added", detail: n.body.length > 140 ? `${n.body.slice(0, 140)}…` : n.body, actor: n.authorName });
+    events.push({
+      id: `note:${n.id}`,
+      at: n.createdAt,
+      label: n.editedAt ? "Note added (edited)" : "Note added",
+      detail: n.body.length > 140 ? `${n.body.slice(0, 140)}…` : n.body,
+      actor: n.authorName,
+    });
+  }
+
+  for (const c of callbackRows) {
+    events.push({
+      id: `callback:${c.id}`,
+      at: c.createdAt,
+      label: "Callback scheduled",
+      detail: `${c.reason || "Callback"} — ${new Date(c.scheduledAt).toLocaleString()} (${c.priority})`,
+      actor: c.agentName,
+    });
+    if (c.completedAt) {
+      events.push({ id: `callback-done:${c.id}`, at: c.completedAt, label: "Callback completed", detail: c.reason || null, actor: c.agentName });
+    }
+    if (c.cancelledAt) {
+      events.push({ id: `callback-cancelled:${c.id}`, at: c.cancelledAt, label: "Callback cancelled", detail: c.reason || null, actor: c.agentName });
+    }
   }
 
   for (const e of auditEntries) {

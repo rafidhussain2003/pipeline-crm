@@ -31,7 +31,17 @@ export type LeadAssignedSignal = {
   at: string; // ISO
 };
 
-export type LeadStreamSignal = NewLeadSignal | LeadAssignedSignal;
+// Something about a lead changed in place — notes, callbacks, disposition
+// (Lead Workspace realtime). Same signal-not-data discipline: the client
+// re-fetches what it is showing.
+export type LeadUpdatedSignal = {
+  type: "lead.updated";
+  leadId: string;
+  companyId: string;
+  at: string; // ISO
+};
+
+export type LeadStreamSignal = NewLeadSignal | LeadAssignedSignal | LeadUpdatedSignal;
 
 type Listener = (signal: LeadStreamSignal) => void;
 
@@ -103,5 +113,14 @@ export function ensureLeadStreamListener(): void {
       agentId: p.agentId,
       at: new Date().toISOString(),
     });
+  });
+  // Lead Workspace realtime: in-place changes. "lead.updated" is emitted by
+  // the notes routes and the callback service; disposition changes already
+  // have their own bus event and ride the same wire.
+  eventBus.on("lead.updated", (p) => {
+    leadStreamHub.publish({ type: "lead.updated", leadId: p.leadId, companyId: p.companyId, at: new Date().toISOString() });
+  });
+  eventBus.on("lead.disposition_changed", (p) => {
+    leadStreamHub.publish({ type: "lead.updated", leadId: p.leadId, companyId: p.companyId, at: new Date().toISOString() });
   });
 }

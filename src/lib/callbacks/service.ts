@@ -8,6 +8,7 @@ import { db } from "@/db";
 import { callbacks, leadInsights, leads, users } from "@/db/schema";
 import { and, asc, desc, eq, gte, ilike, inArray, lt, lte, or, sql, type SQL } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { eventBus } from "@/lib/events/bus";
 import { hasPermission } from "@/lib/permissions";
 import type { SessionPayload } from "@/lib/auth";
 import { getCallbackSettings } from "./config";
@@ -108,6 +109,9 @@ export async function scheduleCallback(session: SessionPayload, input: ScheduleI
 
   await recordCallbackEvent({ callbackId: row.id, companyId, type: "created", actorUserId: session.userId, metadata: { scheduledAt: row.scheduledAt.toISOString(), reason: row.reason, priority } });
   await recordAudit({ companyId, userId: session.userId, action: "callback.scheduled", entityType: "callback", entityId: row.id, after: { leadId: lead.id, agentId, scheduledAt: row.scheduledAt, reason: row.reason, priority } });
+  // Lead Workspace realtime: anyone with this lead open sees the new
+  // callback without refreshing (forwarded to the SSE stream by the hub).
+  await eventBus.emit("lead.updated", { leadId: lead.id, companyId, changedFields: ["callbacks"] });
   return row;
 }
 
@@ -144,6 +148,7 @@ export async function rescheduleCallback(session: SessionPayload, id: string, in
   await recordCallbackEvent({ callbackId: old.id, companyId, type: "rescheduled", actorUserId: session.userId, metadata: { to: row.id, from: old.scheduledAt.toISOString(), toTime: row.scheduledAt.toISOString() } });
   await recordCallbackEvent({ callbackId: row.id, companyId, type: "created", actorUserId: session.userId, metadata: { rescheduledFrom: old.id, attempt: row.rescheduleCount + 1 } });
   await recordAudit({ companyId, userId: session.userId, action: "callback.rescheduled", entityType: "callback", entityId: row.id, before: { id: old.id, scheduledAt: old.scheduledAt }, after: { id: row.id, scheduledAt: row.scheduledAt, reason, priority } });
+  await eventBus.emit("lead.updated", { leadId: old.leadId, companyId, changedFields: ["callbacks"] });
   return row;
 }
 
@@ -158,6 +163,7 @@ export async function cancelCallback(session: SessionPayload, id: string, note?:
 
   await recordCallbackEvent({ callbackId: old.id, companyId, type: "cancelled", actorUserId: session.userId, metadata: { note: note || null } });
   await recordAudit({ companyId, userId: session.userId, action: "callback.cancelled", entityType: "callback", entityId: old.id, before: { status: old.status }, after: { status: "cancelled", note: note || null } });
+  await eventBus.emit("lead.updated", { leadId: old.leadId, companyId, changedFields: ["callbacks"] });
   return row;
 }
 
@@ -171,6 +177,7 @@ export async function completeCallback(session: SessionPayload, id: string, outc
 
   await recordCallbackEvent({ callbackId: old.id, companyId, type: "completed", actorUserId: session.userId, metadata: { outcome: outcome || null, wasOverdue: old.scheduledAt.getTime() < Date.now() } });
   await recordAudit({ companyId, userId: session.userId, action: "callback.completed", entityType: "callback", entityId: old.id, before: { status: old.status }, after: { status: "completed", outcome: outcome || null } });
+  await eventBus.emit("lead.updated", { leadId: old.leadId, companyId, changedFields: ["callbacks"] });
   return row;
 }
 
