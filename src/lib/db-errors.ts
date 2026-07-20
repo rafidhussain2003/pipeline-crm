@@ -5,6 +5,20 @@
 // checking only the top-level message silently never matches, and the caller
 // falls through to a 500 for what is really a 409.
 
+/** True when `err` is Postgres 42703 (undefined_column) — the running code
+ * references a column the database doesn't have yet, i.e. a migration that
+ * shipped with this build has not been applied. Used by routes that can
+ * degrade gracefully instead of answering 500 until migrations land. */
+export function isUndefinedColumn(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const cause = (err as { cause?: unknown }).cause;
+  const code = (cause as { code?: string } | undefined)?.code ?? (err as { code?: string }).code;
+  const top = err instanceof Error ? err.message : "";
+  const causeMsg = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "";
+  const text = `${top} ${causeMsg}`;
+  return code === "42703" || (text.includes("column") && text.includes("does not exist"));
+}
+
 /** True when `err` is a unique-constraint violation for the named index. */
 export function isUniqueViolation(err: unknown, constraintName: string): boolean {
   if (!err || typeof err !== "object") return false;

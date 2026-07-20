@@ -16,6 +16,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { cache } from "@/lib/infra/cache";
+import { isUndefinedColumn } from "@/lib/db-errors";
 
 const SESSION_CHECK_TTL_MS = 15_000;
 const cacheKey = (userId: string) => `current-session:${userId}`;
@@ -52,7 +53,17 @@ export async function isSessionCurrent(userId: string, sessionId: string | undef
 // goes into the JWT; everything issued before this call stops validating.
 export async function activateSession(userId: string): Promise<string> {
   const sessionId = crypto.randomUUID();
-  await db.update(users).set({ currentSessionId: sessionId }).where(eq(users.id, userId));
+  try {
+    await db.update(users).set({ currentSessionId: sessionId }).where(eq(users.id, userId));
+  } catch (err) {
+    // Migration lag (users.current_session_id ships in 0038): a login must
+    // not hard-fail because the column isn't there yet. The JWT still
+    // carries the id; isSessionCurrent treats the null/absent column as the
+    // legacy grace state, and enforcement begins the moment the boot
+    // migrator (src/instrumentation.ts) lands the column.
+    if (!isUndefinedColumn(err)) throw err;
+    console.error("[session-registry] current_session_id column missing — migration 0038 not applied yet; single-device enforcement deferred");
+  }
   await cache.delete(cacheKey(userId));
   return sessionId;
 }
@@ -60,6 +71,13 @@ export async function activateSession(userId: string): Promise<string> {
 // Kill every session without blessing a new one — logout, admin-forced
 // logout, deactivation. Stores a fresh random id that no JWT has ever seen.
 export async function invalidateAllSessions(userId: string): Promise<void> {
-  await db.update(users).set({ currentSessionId: crypto.randomUUID() }).where(eq(users.id, userId));
+  try {
+    await db.update(users).set({ currentSessionId: crypto.randomUUID() }).where(eq(users.id, userId));
+  } catch (err) {
+    // Same migration-lag guard as activateSession — logout still clears
+    // cookies and revokes the refresh chain even when this column is absent.
+    if (!isUndefinedColumn(err)) throw err;
+    console.error("[session-registry] current_session_id column missing — migration 0038 not applied yet; session invalidation deferred");
+  }
   await cache.delete(cacheKey(userId));
 }

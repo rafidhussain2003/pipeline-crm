@@ -4,20 +4,44 @@ import { dispositionOptions } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { asc, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
-import { isUniqueViolation } from "@/lib/db-errors";
+import { isUniqueViolation, isUndefinedColumn } from "@/lib/db-errors";
 import { DISPOSITION_CATEGORIES } from "@/lib/dispositions/taxonomy";
 
 export async function GET() {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const rows = await db
-    .select()
-    .from(dispositionOptions)
-    .where(eq(dispositionOptions.companyId, session.companyId))
-    .orderBy(asc(dispositionOptions.sortOrder));
-
-  return NextResponse.json({ dispositions: rows });
+  try {
+    const rows = await db
+      .select()
+      .from(dispositionOptions)
+      .where(eq(dispositionOptions.companyId, session.companyId))
+      .orderBy(asc(dispositionOptions.sortOrder));
+    return NextResponse.json({ dispositions: rows });
+  } catch (err) {
+    // Migration lag guard. This select includes the `category` column
+    // (migration 0037); against a database where that migration hasn't been
+    // applied yet, Postgres answers 42703 and this route used to 500 — which
+    // blanked every disposition dropdown in the CRM (the page treats a
+    // failed fetch as "no options"). Agents being unable to record call
+    // outcomes is far worse than briefly ungrouped options, so fall back to
+    // the pre-0037 columns with everything under one bucket until the boot
+    // migrator (src/instrumentation.ts) catches the schema up.
+    if (!isUndefinedColumn(err)) throw err;
+    console.error("[dispositions] category column missing — migration 0037 not applied yet; serving legacy shape");
+    const rows = await db
+      .select({
+        id: dispositionOptions.id,
+        companyId: dispositionOptions.companyId,
+        label: dispositionOptions.label,
+        color: dispositionOptions.color,
+        sortOrder: dispositionOptions.sortOrder,
+      })
+      .from(dispositionOptions)
+      .where(eq(dispositionOptions.companyId, session.companyId))
+      .orderBy(asc(dispositionOptions.sortOrder));
+    return NextResponse.json({ dispositions: rows.map((r) => ({ ...r, category: "OTHER" })) });
+  }
 }
 
 export async function POST(req: NextRequest) {
