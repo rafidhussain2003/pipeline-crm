@@ -48,6 +48,7 @@ function employeeQuery(companyId: string, extra?: SQL) {
       managerUserId: hrEmployees.managerUserId,
       managerName: sql<string | null>`(select u.name from users u where u.id = ${hrEmployees.managerUserId})`,
       workLocation: hrEmployees.workLocation,
+      monthlySalary: hrEmployees.monthlySalary,
       emergencyContact: hrEmployees.emergencyContact,
       profilePhotoUrl: hrEmployees.profilePhotoUrl,
       notes: hrEmployees.notes,
@@ -118,7 +119,18 @@ export interface CreateEmployeeInput {
   employmentTypeId?: string | null;
   managerUserId?: string | null;
   workLocation?: string | null;
+  // Enterprise Workspace: optional HR-side salary record (Payroll's salary
+  // structures stay the payout source of truth).
+  monthlySalary?: number | string | null;
   notes?: string | null;
+}
+
+// "" / null clears; anything else must be a non-negative number.
+function normalizeSalary(v: number | string | null | undefined): string | null {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) throw new HRError("Salary must be a non-negative number");
+  return n.toFixed(2);
 }
 
 async function validateRefs(companyId: string, input: { departmentId?: string | null; designationId?: string | null; employmentTypeId?: string | null; managerUserId?: string | null; dateOfBirth?: string | null; joiningDate?: string | null; employmentStatus?: string }) {
@@ -160,6 +172,7 @@ export async function createEmployee(companyId: string, actorUserId: string, inp
         employmentTypeId: input.employmentTypeId ?? settings.defaultEmploymentTypeId ?? null,
         managerUserId: input.managerUserId ?? null,
         workLocation: input.workLocation?.trim() || null,
+        monthlySalary: normalizeSalary(input.monthlySalary),
         notes: input.notes?.trim() || null,
       })
       .returning();
@@ -195,6 +208,7 @@ export async function updateEmployee(companyId: string, actorUserId: string, id:
       set[col] = typeof v === "string" ? (req ? v.trim() : v.trim() || null) : v;
     }
   }
+  if (patch.monthlySalary !== undefined) set.monthlySalary = normalizeSalary(patch.monthlySalary);
   const [row] = await db.update(hrEmployees).set(set).where(eq(hrEmployees.id, id)).returning();
   const statusChanged = patch.employmentStatus !== undefined && patch.employmentStatus !== existing.employmentStatus;
   await recordAudit({
@@ -203,8 +217,8 @@ export async function updateEmployee(companyId: string, actorUserId: string, id:
     action: statusChanged ? "hr.employee_status_changed" : "hr.employee_updated",
     entityType: "hr_employee",
     entityId: id,
-    before: { employmentStatus: existing.employmentStatus, departmentId: existing.departmentId, managerUserId: existing.managerUserId },
-    after: { employmentStatus: row.employmentStatus, departmentId: row.departmentId, managerUserId: row.managerUserId },
+    before: { employmentStatus: existing.employmentStatus, departmentId: existing.departmentId, managerUserId: existing.managerUserId, monthlySalary: existing.monthlySalary },
+    after: { employmentStatus: row.employmentStatus, departmentId: row.departmentId, managerUserId: row.managerUserId, monthlySalary: row.monthlySalary },
   });
   return getEmployee(companyId, id);
 }

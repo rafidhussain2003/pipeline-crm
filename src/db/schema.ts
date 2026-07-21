@@ -276,6 +276,12 @@ export const users = pgTable(
     // Written ONLY by login/logout/forced-logout paths; read via a short-TTL
     // cache in getSession() (see lib/auth-session.ts).
     currentSessionId: uuid("current_session_id"),
+    // Enterprise Workspaces: per-user module access — { crm: true, finance:
+    // false, ... }. NULL = role defaults (exactly the pre-existing behavior),
+    // so nothing changes for anyone until an admin explicitly assigns access.
+    // Written only via lib/module-access.ts (validated + audited); read
+    // through its short-TTL cache by the module guards and the proxy.
+    moduleAccess: jsonb("module_access"),
     // Phase 5 per-agent routing profile: capacity limits (max active leads,
     // daily assignments, concurrent conversations, queue size, recycled) and a
     // working schedule (days, start/end, timezone, lunch, vacation ranges).
@@ -2328,6 +2334,41 @@ export const financeExpenses = pgTable(
   })
 );
 
+// Company investments (Enterprise Finance Workspace). Each purchase posts a
+// balanced journal (debit the Investments asset account, credit the payment
+// account) so the ledger's asset totals stay truthful; a withdrawal posts the
+// reverse for the withdrawn amount. currentValue is a valuation the admin
+// maintains — gain/loss is COMPUTED for display (currentValue - purchaseValue),
+// never posted, keeping the "extremely simple" promise while the books stay
+// double-entry clean.
+export const financeInvestments = pgTable(
+  "finance_investments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    category: varchar("category", { length: 80 }),
+    purchaseDate: date("purchase_date").notNull(),
+    purchaseValue: numeric("purchase_value", { precision: 14, scale: 2 }).notNull(),
+    currentValue: numeric("current_value", { precision: 14, scale: 2 }).notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("active"), // active | withdrawn
+    withdrawnValue: numeric("withdrawn_value", { precision: 14, scale: 2 }),
+    withdrawnAt: timestamp("withdrawn_at"),
+    paymentAccountId: uuid("payment_account_id").references(() => financeAccounts.id),
+    journalId: uuid("journal_id").references(() => financeJournals.id),
+    withdrawalJournalId: uuid("withdrawal_journal_id").references(() => financeJournals.id),
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyIdx: index("finance_investments_company_idx").on(t.companyId, t.status),
+  })
+);
+
 // ---------------------------------------------------------------------------
 // Phase 20 — Attendance & Shift Management Engine. Like Finance, an
 // independent bounded context: it references users only for identity, never
@@ -2879,6 +2920,10 @@ export const hrEmployees = pgTable(
     // which is what powers the org chart.
     managerUserId: uuid("manager_user_id").references(() => users.id, { onDelete: "set null" }),
     workLocation: varchar("work_location", { length: 120 }), // placeholder
+    // Enterprise Workspaces: optional HR-side salary record (display + HR
+    // reporting). Payroll's salary STRUCTURES remain the payout source of
+    // truth — this is the HR file's own field, per the workspace spec.
+    monthlySalary: numeric("monthly_salary", { precision: 12, scale: 2 }),
     emergencyContact: jsonb("emergency_contact"), // placeholder — { name, phone, relation }
     profilePhotoUrl: varchar("profile_photo_url", { length: 500 }), // placeholder — no upload
     notes: text("notes"),

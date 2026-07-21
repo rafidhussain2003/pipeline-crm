@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AccountSelect, money, moneyNum, PageHeader, useAccounts } from "@/components/finance/shared";
+import { AccountSelect, money, moneyNum, PageHeader, useAccounts, useFinanceCurrency } from "@/components/finance/shared";
 
 type LedgerData = {
   account: { code: string; name: string; type: string };
@@ -11,6 +11,7 @@ type LedgerData = {
 };
 
 export default function GeneralLedgerPage() {
+  useFinanceCurrency();
   const { accounts } = useAccounts();
   const [accountId, setAccountId] = useState("");
   const [from, setFrom] = useState("");

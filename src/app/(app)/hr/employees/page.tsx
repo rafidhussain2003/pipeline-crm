@@ -4,7 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import { EMPLOYMENT_STATUSES, Field, PageHeader, StatusBadge } from "@/components/hr/shared";
 
 type Employee = { id: string; userId: string; employeeCode: string; firstName: string; lastName: string | null; email: string; employmentStatus: string; departmentName: string | null; designationTitle: string | null; managerUserId: string | null };
-type Detail = Employee & { phone: string | null; loginName: string; preferredName: string | null; dateOfBirth: string | null; gender: string | null; joiningDate: string | null; confirmationDate: string | null; employmentTypeName: string | null; managerName: string | null; workLocation: string | null; notes: string | null };
+type Detail = Employee & { phone: string | null; loginName: string; preferredName: string | null; dateOfBirth: string | null; gender: string | null; joiningDate: string | null; confirmationDate: string | null; employmentTypeName: string | null; managerName: string | null; workLocation: string | null; monthlySalary: string | null; notes: string | null };
+type AuditEntry = { id: string; action: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; createdAt: string; actorName: string | null };
+type ModuleDef = { key: string; label: string; description: string };
 type Ref = { id: string; name?: string; title?: string };
 type UserOpt = { id: string; name: string; email: string };
 
@@ -105,8 +107,12 @@ function DetailModal({ detail, onClose, onEdit, onDeleted, onError }: { detail: 
           <Field label="Date of birth" value={detail.dateOfBirth} />
           <Field label="Work location" value={detail.workLocation} />
           <Field label="Gender" value={detail.gender} />
+          <Field label="Monthly salary" value={detail.monthlySalary ? Number(detail.monthlySalary).toLocaleString("en-US", { minimumFractionDigits: 2 }) : null} />
         </div>
         {detail.notes && <div className="mt-3"><Field label="Notes" value={detail.notes} /></div>}
+
+        <ModuleAccessCard userId={detail.userId} />
+        <AuditHistoryCard employeeId={detail.id} />
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={del} className="text-sm font-medium text-red-600 px-3 py-2 rounded-md hover:bg-red-50">Delete</button>
           <button onClick={onEdit} className="text-sm font-medium text-slate-600 bg-slate-100 px-4 py-2 rounded-md">Edit</button>
@@ -119,7 +125,7 @@ function DetailModal({ detail, onClose, onEdit, onDeleted, onError }: { detail: 
 
 function EmployeeModal({ editId, departments, designations, types, employees, onClose, onSaved, onError }: { editId?: string; departments: Ref[]; designations: Ref[]; types: Ref[]; employees: Employee[]; onClose: () => void; onSaved: () => void; onError: (s: string) => void }) {
   const [unprofiled, setUnprofiled] = useState<UserOpt[]>([]);
-  const [form, setForm] = useState<Record<string, string>>({ userId: "", firstName: "", lastName: "", employmentStatus: "active", departmentId: "", designationId: "", employmentTypeId: "", managerUserId: "", joiningDate: "", dateOfBirth: "", workLocation: "", notes: "" });
+  const [form, setForm] = useState<Record<string, string>>({ userId: "", firstName: "", lastName: "", employmentStatus: "active", departmentId: "", designationId: "", employmentTypeId: "", managerUserId: "", joiningDate: "", dateOfBirth: "", workLocation: "", monthlySalary: "", notes: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -128,7 +134,7 @@ function EmployeeModal({ editId, departments, designations, types, employees, on
       fetch(`/api/hr/employees/${editId}`).then(async (r) => {
         if (!r.ok) return;
         const e = (await r.json()).employee;
-        setForm({ userId: e.userId, firstName: e.firstName || "", lastName: e.lastName || "", employmentStatus: e.employmentStatus, departmentId: e.departmentId || "", designationId: e.designationId || "", employmentTypeId: e.employmentTypeId || "", managerUserId: e.managerUserId || "", joiningDate: e.joiningDate || "", dateOfBirth: e.dateOfBirth || "", workLocation: e.workLocation || "", notes: e.notes || "" });
+        setForm({ userId: e.userId, firstName: e.firstName || "", lastName: e.lastName || "", employmentStatus: e.employmentStatus, departmentId: e.departmentId || "", designationId: e.designationId || "", employmentTypeId: e.employmentTypeId || "", managerUserId: e.managerUserId || "", joiningDate: e.joiningDate || "", dateOfBirth: e.dateOfBirth || "", workLocation: e.workLocation || "", monthlySalary: e.monthlySalary || "", notes: e.notes || "" });
       });
     } else {
       fetch("/api/hr/employees?unprofiled=1").then(async (r) => { if (r.ok) setUnprofiled((await r.json()).users || []); });
@@ -200,9 +206,15 @@ function EmployeeModal({ editId, departments, designations, types, employees, on
               <input type="date" value={form.dateOfBirth} onChange={(e) => set("dateOfBirth", e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Work location (placeholder)</label>
-            <input value={form.workLocation} onChange={(e) => set("workLocation", e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Work location (placeholder)</label>
+              <input value={form.workLocation} onChange={(e) => set("workLocation", e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Monthly salary (optional)</label>
+              <input type="number" step="0.01" min="0" value={form.monthlySalary} onChange={(e) => set("monthlySalary", e.target.value)} placeholder="0.00" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            </div>
           </div>
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
@@ -210,6 +222,119 @@ function EmployeeModal({ editId, departments, designations, types, employees, on
           <button onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
           <button onClick={save} disabled={saving || (!editId && !form.userId)} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Assigned System Permissions (Enterprise Workspaces): which modules this
+// employee can open. Loads via the admin-only modules endpoint — a 403
+// simply hides the editor (managers see the profile, admins assign access).
+function ModuleAccessCard({ userId }: { userId: string }) {
+  const [catalog, setCatalog] = useState<ModuleDef[]>([]);
+  const [access, setAccess] = useState<Record<string, boolean>>({});
+  const [targetRole, setTargetRole] = useState("");
+  const [visible, setVisible] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    fetch(`/api/users/${userId}/modules`)
+      .then(async (r) => {
+        if (!r.ok) return; // not an admin — the card simply doesn't render
+        const d = await r.json();
+        setCatalog(d.catalog || []);
+        setAccess(d.effective || {});
+        setTargetRole(d.targetRole || "");
+        setVisible(true);
+      })
+      .catch(() => {});
+  }, [userId]);
+
+  if (!visible) return null;
+  const isAdminTarget = targetRole === "admin";
+
+  async function save() {
+    setSaving(true);
+    setMessage("");
+    const res = await fetch(`/api/users/${userId}/modules`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modules: access }),
+    });
+    setSaving(false);
+    if (!res.ok) {
+      setMessage((await res.json().catch(() => ({}))).error || "Could not save module access.");
+      return;
+    }
+    const d = await res.json();
+    setAccess(d.effective || access);
+    setMessage("Saved — access applies within a few seconds.");
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-slate-100">
+      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-2">Assigned System Permissions</h3>
+      {isAdminTarget ? (
+        <p className="text-xs text-slate-400">Admins always have every module.</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-1.5">
+            {catalog.map((m) => (
+              <label key={m.key} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={access[m.key] === true}
+                  onChange={(e) => setAccess((a) => ({ ...a, [m.key]: e.target.checked }))}
+                  className="rounded border-slate-300"
+                />
+                {m.label}
+              </label>
+            ))}
+          </div>
+          {message && <p className={`text-xs mt-2 ${message.startsWith("Saved") ? "text-emerald-600" : "text-red-600"}`}>{message}</p>}
+          <button onClick={save} disabled={saving} className="mt-2 bg-slate-900 text-white text-xs font-medium px-3 py-1.5 rounded-md disabled:opacity-50">
+            {saving ? "Saving…" : "Save permissions"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Audit History (Enterprise Workspaces): the employee's change log straight
+// from the shared audit infrastructure — who, when, previous and new values.
+function AuditHistoryCard({ employeeId }: { employeeId: string }) {
+  const [entries, setEntries] = useState<AuditEntry[] | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/hr/employees/${employeeId}/audit`)
+      .then(async (r) => {
+        if (r.ok) setEntries((await r.json()).entries || []);
+      })
+      .catch(() => {});
+  }, [employeeId]);
+
+  if (!entries) return null;
+
+  const compact = (v: Record<string, unknown> | null) =>
+    v ? Object.entries(v).map(([k, val]) => `${k}: ${val === null ? "—" : String(val)}`).join(", ") : "";
+
+  return (
+    <div className="mt-4 pt-4 border-t border-slate-100">
+      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-2">Audit History</h3>
+      <div className="space-y-2 max-h-48 overflow-y-auto">
+        {entries.map((e) => (
+          <div key={e.id} className="text-xs border-b border-slate-50 pb-1.5 last:border-0">
+            <div className="text-slate-800 font-medium">
+              {e.action.replace("hr.employee_", "").replace(/_/g, " ")}
+              <span className="font-normal text-slate-400"> · {e.actorName || "System"} · {new Date(e.createdAt).toLocaleString()}</span>
+            </div>
+            {e.before && <div className="text-slate-400 truncate" title={compact(e.before)}>Before: {compact(e.before)}</div>}
+            {e.after && <div className="text-slate-500 truncate" title={compact(e.after)}>After: {compact(e.after)}</div>}
+          </div>
+        ))}
+        {entries.length === 0 && <p className="text-xs text-slate-400">No recorded changes yet.</p>}
       </div>
     </div>
   );

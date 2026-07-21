@@ -10,6 +10,7 @@ import ForcePasswordChange from "@/components/auth/ForcePasswordChange";
 import CallbackReminders from "@/components/callbacks/CallbackReminders";
 import { billingBlockReason, daysRemaining, isBillingBlocked } from "@/lib/billing";
 import { getEnabledFeatures, type FeatureMap } from "@/lib/features";
+import { getEffectiveModuleAccess, type ModuleAccessMap } from "@/lib/module-access";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
@@ -21,7 +22,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // three of them back-to-back on each navigation. Fired concurrently, the
   // render waits for the slowest one instead of the sum (Phase 5 baseline:
   // ~815ms of layout latency per page → ~420ms after).
-  const [[me], company, features] = await Promise.all([
+  const [[me], company, features, access] = await Promise.all([
     db.select({ mustChange: users.mustChangePassword }).from(users).where(eq(users.id, session.userId)).limit(1),
     session.companyId
       ? db.select().from(companies).where(eq(companies.id, session.companyId)).limit(1).then((r) => r[0] ?? null)
@@ -29,7 +30,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // Phase 18: entitled modules via the cached featureService. Null for
     // super_admin (no company; they manage features instead).
     session.companyId ? getEnabledFeatures(session.companyId) : Promise.resolve<FeatureMap | null>(null),
+    // Enterprise Workspaces: this user's effective module access (cached).
+    session.companyId ? getEffectiveModuleAccess(session.userId, session.role) : Promise.resolve<ModuleAccessMap | null>(null),
   ]);
+
+  // What the sidebar may show = company entitlement ∧ per-user assignment.
+  const modules =
+    features && access
+      ? {
+          crm: access.crm,
+          hr: features.hr === true && access.hr,
+          finance: features.finance === true && access.finance,
+          attendance: features.attendance === true && access.attendance,
+          payroll: features.payroll === true && access.payroll,
+          workflow: features.workflow === true && access.workflow,
+        }
+      : null;
 
   // Phase 13: an invited user with a temporary password must create their own
   // before doing anything else — a hard gate that blocks the whole app.
@@ -59,7 +75,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       {/* Presence heartbeat is rendered inside Sidebar (role-gated there) —
           only company members take leads and need presence tracked;
           super_admin has no companyId and doesn't participate in routing. */}
-      <Sidebar companyName={companyName} role={session.role} features={features} />
+      <Sidebar companyName={companyName} role={session.role} features={features} modules={modules} />
       {/* pt-14 clears the fixed mobile top bar that Sidebar renders below `lg`;
           on `lg` the sidebar is back in flow and there is no bar to clear. */}
       <div className="flex-1 min-w-0 flex flex-col pt-14 lg:pt-0">

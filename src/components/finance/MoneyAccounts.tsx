@@ -4,9 +4,10 @@
 // pages (identical mechanics, different subtype): balance cards from the
 // ledger, create-account, and set-opening-balance while unlocked.
 import { useEffect, useState } from "react";
-import { money, PageHeader, todayInput, useAccounts, type UiAccount } from "@/components/finance/shared";
+import { money, PageHeader, todayInput, useAccounts, useFinanceCurrency, type UiAccount } from "@/components/finance/shared";
 
 export default function MoneyAccounts({ subtype }: { subtype: "cash" | "bank" }) {
+  useFinanceCurrency();
   const { accounts, loaded, reload } = useAccounts();
   const [opening, setOpening] = useState<{ locked: boolean; openedAccountIds: string[] } | null>(null);
   const [modal, setModal] = useState<null | { kind: "create" } | { kind: "opening"; account: UiAccount }>(null);

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useLoadedData, LoadingPane, LoadErrorPane } from "@/components/LoadState";
-import { money, moneyNum, PageHeader, StatusBadge } from "@/components/finance/shared";
+import { money, moneyNum, useFinanceCurrency, PageHeader, StatusBadge } from "@/components/finance/shared";
 
 type Dashboard = {
   cashCents: number;
@@ -10,35 +10,64 @@ type Dashboard = {
   incomeMtdCents: number;
   expenseMtdCents: number;
   netMtdCents: number;
+  investmentsCents: number;
+  totalAssetsCents: number;
+  currency: string;
   integrity: { balanced: boolean; debitCents: number; creditCents: number };
   recent: { id: string; entryNumber: number | null; entryDate: string; memo: string | null; status: string; sourceType: string; total: string }[];
   reports: { key: string; label: string; implemented: boolean }[];
 };
 
+// Quick transaction actions — every one lands on an EXISTING recording page
+// (expenses / revenue / investments), pre-filled where it helps. One posting
+// engine, several doorways.
+const QUICK_ACTIONS = [
+  { href: "/finance/expenses?category=Customer%20Payout", label: "Customer Payout" },
+  { href: "/finance/expenses?category=Salary", label: "Salary Payment" },
+  { href: "/finance/expenses", label: "Business Expense" },
+  { href: "/finance/revenue", label: "Other Income" },
+  { href: "/finance/investments", label: "Investment" },
+  { href: "/finance/investments", label: "Withdrawal" },
+];
+
 export default function FinanceDashboardPage() {
+  useFinanceCurrency();
   const { data, loading, error, reload } = useLoadedData<Dashboard>("/api/finance/dashboard", (b) => b as Dashboard);
 
   if (loading) return <LoadingPane />;
   if (error || !data) return <LoadErrorPane message={error || "No data was returned."} onRetry={reload} />;
 
   const cards = [
-    { label: "Cash in hand", value: money(data.cashCents) },
-    { label: "Bank balance", value: money(data.bankCents) },
+    { label: "Cash balance", value: money(data.cashCents + data.bankCents) },
+    { label: "Company investments", value: money(data.investmentsCents) },
+    { label: "Total assets", value: money(data.totalAssetsCents) },
     { label: "Income this month", value: money(data.incomeMtdCents) },
     { label: "Expenses this month", value: money(data.expenseMtdCents) },
-    { label: "Net this month", value: money(data.netMtdCents), tone: data.netMtdCents >= 0 ? "text-emerald-700" : "text-red-600" },
+    { label: "Profit / Loss", value: money(data.netMtdCents), tone: data.netMtdCents >= 0 ? "text-emerald-700" : "text-red-600" },
   ];
 
   return (
     <div className="p-6 max-w-5xl">
       <PageHeader title="Finance" subtitle="Your books at a glance. Every figure comes from the posted general ledger." />
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {cards.map((c) => (
           <div key={c.label} className="bg-white border border-slate-200 rounded-lg p-4">
             <div className="text-[11px] uppercase tracking-wide text-slate-400">{c.label}</div>
             <div className={`text-lg font-semibold mt-1 ${c.tone || "text-slate-900"}`}>{c.value}</div>
           </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2 mt-4">
+        {QUICK_ACTIONS.map((a) => (
+          <Link
+            key={a.label}
+            href={a.href}
+            className="text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-md px-3 py-1.5"
+          >
+            + {a.label}
+          </Link>
         ))}
       </div>
 

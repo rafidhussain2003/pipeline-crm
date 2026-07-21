@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { requireFinance } from "@/lib/finance/guard";
-import { ensureFinanceSetup, listAccounts, getAccountBalances, listJournals, ledgerIntegrity, FINANCE_REPORTS } from "@/lib/finance";
+import { ensureFinanceSetup, listAccounts, getAccountBalances, listJournals, ledgerIntegrity, toCents, FINANCE_REPORTS } from "@/lib/finance";
 import { db } from "@/db";
-import { financeJournalLines, financeAccounts } from "@/db/schema";
+import { financeJournalLines, financeAccounts, financeInvestments, financeSettings } from "@/db/schema";
 import { and, eq, gte, sql } from "drizzle-orm";
 
 // Finance dashboard: cash/bank totals, month-to-date income & expenses, the
@@ -13,18 +13,26 @@ export async function GET() {
   const companyId = auth.session.companyId;
   await ensureFinanceSetup(companyId);
 
-  const [accounts, balances, recent, integrity] = await Promise.all([
+  const [accounts, balances, recent, integrity, activeInvestments, [settings]] = await Promise.all([
     listAccounts(companyId),
     getAccountBalances(companyId),
     listJournals(companyId, { limit: 8 }),
     ledgerIntegrity(companyId),
+    // Enterprise Workspace tiles: current value of live investments.
+    db
+      .select({ currentValue: financeInvestments.currentValue })
+      .from(financeInvestments)
+      .where(and(eq(financeInvestments.companyId, companyId), eq(financeInvestments.status, "active"))),
+    db.select({ defaultCurrency: financeSettings.defaultCurrency }).from(financeSettings).where(eq(financeSettings.companyId, companyId)).limit(1),
   ]);
 
-  let cashCents = 0, bankCents = 0;
+  let cashCents = 0, bankCents = 0, totalAssetsCents = 0;
   for (const a of accounts) {
     if (a.subtype === "cash") cashCents += balances.get(a.id) ?? 0;
     if (a.subtype === "bank") bankCents += balances.get(a.id) ?? 0;
+    if (a.type === "asset") totalAssetsCents += balances.get(a.id) ?? 0;
   }
+  const investmentsCents = activeInvestments.reduce((sum, r) => sum + toCents(Number(r.currentValue)), 0);
 
   // Month-to-date income/expense movement from the ledger, one grouped scan.
   const now = new Date();
@@ -54,6 +62,10 @@ export async function GET() {
     incomeMtdCents,
     expenseMtdCents,
     netMtdCents: incomeMtdCents - expenseMtdCents,
+    // Enterprise Workspace tiles.
+    investmentsCents,
+    totalAssetsCents,
+    currency: settings?.defaultCurrency ?? "USD",
     integrity,
     recent,
     reports: FINANCE_REPORTS, // placeholders — none implemented in Phase 19

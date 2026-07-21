@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AccountSelect, moneyNum, PageHeader, StatusBadge, todayInput, useAccounts } from "@/components/finance/shared";
+import { useSearchParams } from "next/navigation";
+import { AccountSelect, moneyNum, PageHeader, StatusBadge, todayInput, useAccounts, useFinanceCurrency } from "@/components/finance/shared";
 
 type Expense = {
   id: string; docNumber: number; entryDate: string; vendorName: string; category: string | null;
@@ -9,10 +10,18 @@ type Expense = {
 };
 
 export default function ExpensesPage() {
+  useFinanceCurrency();
   const { accounts } = useAccounts();
   const [rows, setRows] = useState<Expense[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
+  // Workspace quick actions land here with ?category=Customer%20Payout /
+  // Salary — open the form pre-filled so a payout/salary is one click away.
+  const searchParams = useSearchParams();
+  const presetCategory = searchParams.get("category") || "";
+  useEffect(() => {
+    if (presetCategory) setShowForm(true);
+  }, [presetCategory]);
 
   const load = async () => {
     const res = await fetch("/api/finance/expenses");
@@ -48,6 +57,12 @@ export default function ExpensesPage() {
             </div>
             <StatusBadge status={r.status} />
             <span className="text-sm font-semibold text-slate-900 w-24 text-right">{moneyNum(r.amount)}</span>
+            <a
+              href={`/api/finance/expenses/${r.id}/receipt`}
+              className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1"
+            >
+              Receipt
+            </a>
             {r.status === "posted" && (
               <button onClick={() => voidDoc(r.id)} className="text-[11px] font-medium text-red-600 bg-red-50 rounded px-2 py-1">Void</button>
             )}
@@ -56,15 +71,15 @@ export default function ExpensesPage() {
         {rows.length === 0 && <p className="text-sm text-slate-400 px-4 py-8 text-center">No expenses recorded yet.</p>}
       </div>
 
-      {showForm && <ExpenseModal accounts={accounts} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />}
+      {showForm && <ExpenseModal accounts={accounts} presetCategory={presetCategory} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />}
     </div>
   );
 }
 
-function ExpenseModal({ accounts, onClose, onSaved }: { accounts: ReturnType<typeof useAccounts>["accounts"]; onClose: () => void; onSaved: () => void }) {
+function ExpenseModal({ accounts, presetCategory, onClose, onSaved }: { accounts: ReturnType<typeof useAccounts>["accounts"]; presetCategory?: string; onClose: () => void; onSaved: () => void }) {
   const [entryDate, setEntryDate] = useState(todayInput());
   const [vendorName, setVendorName] = useState("");
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(presetCategory || "");
   const [paymentMethod, setPaymentMethod] = useState("cash");
   const [receiptRef, setReceiptRef] = useState("");
   const [amount, setAmount] = useState("");

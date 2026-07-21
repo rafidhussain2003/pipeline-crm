@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
       employmentTypeId: b?.employmentTypeId || null,
       managerUserId: b?.managerUserId || null,
       workLocation: b?.workLocation || null,
+      monthlySalary: b?.monthlySalary !== undefined ? b.monthlySalary : null,
       notes: b?.notes || null,
     });
     return NextResponse.json({ employee }, { status: 201 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AccountSelect, moneyNum, PageHeader, StatusBadge, todayInput, useAccounts } from "@/components/finance/shared";
+import { AccountSelect, moneyNum, PageHeader, StatusBadge, todayInput, useAccounts, useFinanceCurrency } from "@/components/finance/shared";
 
 type Revenue = {
   id: string; docNumber: number; entryDate: string; customerName: string; invoiceRef: string | null;
@@ -9,6 +9,7 @@ type Revenue = {
 };
 
 export default function RevenuePage() {
+  useFinanceCurrency();
   const { accounts } = useAccounts();
   const [rows, setRows] = useState<Revenue[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -46,6 +47,12 @@ export default function RevenuePage() {
             </div>
             <StatusBadge status={r.status} />
             <span className="text-sm font-semibold text-slate-900 w-24 text-right">{moneyNum(r.amount)}</span>
+            <a
+              href={`/api/finance/revenues/${r.id}/receipt`}
+              className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1"
+            >
+              Receipt
+            </a>
             {r.status === "posted" && (
               <button onClick={() => voidDoc(r.id)} className="text-[11px] font-medium text-red-600 bg-red-50 rounded px-2 py-1">Void</button>
             )}

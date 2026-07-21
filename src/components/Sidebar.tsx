@@ -73,6 +73,7 @@ const FINANCE_ITEMS: { href: string; label: string }[] = [
   { href: "/finance/accounts", label: "Chart of Accounts" },
   { href: "/finance/revenue", label: "Revenue" },
   { href: "/finance/expenses", label: "Expenses" },
+  { href: "/finance/investments", label: "Investments" },
   { href: "/finance/journal", label: "Journal Entries" },
   { href: "/finance/ledger", label: "General Ledger" },
   { href: "/finance/cash", label: "Cash Accounts" },
@@ -134,40 +135,43 @@ export default function Sidebar({
   companyName,
   role,
   features,
+  modules,
 }: {
   companyName: string;
   role: string;
   // Enabled-module map from the server layout; null = no company context
   // (super_admin), which shows everything — the owner is never feature-gated.
   features?: Record<string, boolean> | null;
+  // Enterprise Workspaces: the viewer's effective module access (company
+  // entitlement ∧ admin's per-user assignment), resolved server-side in the
+  // layout. Null = no company context.
+  modules?: Record<string, boolean> | null;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const has = (feature?: string) => !feature || !features || features[feature] === true;
-  const inFinance = pathname === "/finance" || pathname.startsWith("/finance/");
-  const [financeOpen, setFinanceOpen] = useState(inFinance);
+  // Enterprise Workspaces: inside /hr or /finance the sidebar becomes that
+  // workspace's own navigation (with a Back-to-CRM link) instead of the CRM
+  // nav — HR and Finance open as independent workspaces.
+  const workspace: "hr" | "finance" | null =
+    pathname === "/hr" || pathname.startsWith("/hr/")
+      ? "hr"
+      : pathname === "/finance" || pathname.startsWith("/finance/")
+        ? "finance"
+        : null;
   const inAttendance = pathname === "/attendance" || pathname.startsWith("/attendance/");
   const [attendanceOpen, setAttendanceOpen] = useState(inAttendance);
-  // Attendance is for the whole company (agents check in too) — feature-gated
-  // only; the item list narrows by role below.
-  const showAttendance = !!features && features.attendance === true;
+  // Workspace visibility now comes from the effective module map (feature ∧
+  // per-user assignment); item lists still narrow by role inside a module.
+  const showAttendance = !!modules?.attendance;
   const attendanceManager = role === "admin" || role === "manager";
   const inPayroll = pathname === "/payroll" || pathname.startsWith("/payroll/");
   const [payrollOpen, setPayrollOpen] = useState(inPayroll);
-  // Payroll is company-wide too (every employee sees their payslips); the item
-  // list narrows to Payslips-only for agents.
-  const showPayroll = !!features && features.payroll === true;
+  const showPayroll = !!modules?.payroll;
   const payrollManager = role === "admin" || role === "manager";
-  const inHr = pathname === "/hr" || pathname.startsWith("/hr/");
-  const [hrOpen, setHrOpen] = useState(inHr);
-  // HR is company-wide (every employee sees their own profile); the item list
-  // narrows to My Profile only for agents.
-  const showHr = !!features && features.hr === true;
   const hrManager = role === "admin" || role === "manager";
-  // Finance is visible to roles with finance:view (admin + manager today) —
-  // agents never see the module. super_admin (features = null) has no company
-  // books, so the group requires an actual feature grant.
-  const showFinance = (role === "admin" || role === "manager") && !!features && features.finance === true;
+  const showHr = !!modules?.hr;
+  const showFinance = !!modules?.finance;
 
   // Mobile navigation. The sidebar is a fixed 240px column, which on a 375px
   // screen left ~135px for the entire app and pushed the content off-screen
@@ -209,9 +213,9 @@ export default function Sidebar({
   }, [mobileOpen]);
   const inAutomation = pathname === "/automation" || pathname.startsWith("/automation/");
   const [automationOpen, setAutomationOpen] = useState(inAutomation);
-  // Workflow Automation is an admin/manager tool (agents hold no workflow
-  // permission), gated on role + the feature grant like Finance.
-  const showAutomation = (role === "admin" || role === "manager") && !!features && features.workflow === true;
+  // Workflow Automation visibility from the effective module map (its role
+  // defaults — admin/manager — live in lib/module-access.ts).
+  const showAutomation = !!modules?.workflow;
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -269,6 +273,58 @@ export default function Sidebar({
         </button>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1">
+        {/* Enterprise Workspaces: inside /hr or /finance the sidebar IS that
+            workspace's navigation. The CRM nav below renders only outside. */}
+        {workspace === "hr" && (
+          <>
+            {modules?.crm && (
+              <Link href="/leads" className="block px-3 py-2 mb-2 rounded-md text-sm font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-900">
+                ← Back to CRM
+              </Link>
+            )}
+            <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-rose-700">HR Workspace</div>
+            {HR_ITEMS.filter((item) => hrManager || !item.managerOnly).map((item) => {
+              const active = pathname === item.href;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                    active ? "bg-rose-50 text-rose-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </>
+        )}
+        {workspace === "finance" && (
+          <>
+            {modules?.crm && (
+              <Link href="/leads" className="block px-3 py-2 mb-2 rounded-md text-sm font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-900">
+                ← Back to CRM
+              </Link>
+            )}
+            <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Finance Workspace</div>
+            {FINANCE_ITEMS.map((item) => {
+              const active = pathname === item.href;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                    active ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </>
+        )}
+        {!workspace && (
+          <>
         {navItems
           .filter((item) => has(item.feature) && (!item.roles || item.roles.includes(role)))
           .map((item) => {
@@ -347,37 +403,15 @@ export default function Sidebar({
             )}
           </div>
         )}
+        {/* Enterprise Workspaces: HR opens its own workspace, not a nested
+            CRM group — one link, the workspace nav takes over inside. */}
         {showHr && (
-          <div className="pt-1">
-            <button
-              onClick={() => setHrOpen((v) => !v)}
-              aria-expanded={hrOpen}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                inHr ? "text-rose-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-              }`}
-            >
-              <span>HR</span>
-              <span className="text-[10px] text-slate-400">{hrOpen ? "▾" : "▸"}</span>
-            </button>
-            {hrOpen && (
-              <div className="mt-0.5 space-y-0.5">
-                {HR_ITEMS.filter((item) => hrManager || !item.managerOnly).map((item) => {
-                  const active = pathname === item.href;
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
-                        active ? "bg-rose-50 text-rose-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
-                      }`}
-                    >
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <Link
+            href="/hr"
+            className="block px-3 py-2 rounded-md text-sm font-medium text-rose-700 hover:bg-rose-50 transition-colors"
+          >
+            HR Workspace →
+          </Link>
         )}
         {showPayroll && (
           <div className="pt-1">
@@ -411,37 +445,14 @@ export default function Sidebar({
             )}
           </div>
         )}
+        {/* Enterprise Workspaces: Finance opens its own workspace too. */}
         {showFinance && (
-          <div className="pt-1">
-            <button
-              onClick={() => setFinanceOpen((v) => !v)}
-              aria-expanded={financeOpen}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                inFinance ? "text-emerald-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-              }`}
-            >
-              <span>Finance</span>
-              <span className="text-[10px] text-slate-400">{financeOpen ? "▾" : "▸"}</span>
-            </button>
-            {financeOpen && (
-              <div className="mt-0.5 space-y-0.5">
-                {FINANCE_ITEMS.map((item) => {
-                  const active = pathname === item.href;
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={`block pl-6 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors ${
-                        active ? "bg-emerald-50 text-emerald-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
-                      }`}
-                    >
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+          <Link
+            href="/finance"
+            className="block px-3 py-2 rounded-md text-sm font-medium text-emerald-700 hover:bg-emerald-50 transition-colors"
+          >
+            Finance Workspace →
+          </Link>
         )}
         {showAutomation && (
           <div className="pt-1">
@@ -517,6 +528,8 @@ export default function Sidebar({
             >
               Diagnostics
             </Link>
+          </>
+        )}
           </>
         )}
       </nav>

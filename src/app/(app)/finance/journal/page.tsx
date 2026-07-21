@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AccountSelect, money, moneyNum, PageHeader, StatusBadge, todayInput, useAccounts } from "@/components/finance/shared";
+import { AccountSelect, money, moneyNum, PageHeader, StatusBadge, todayInput, useAccounts, useFinanceCurrency } from "@/components/finance/shared";
 
 type JournalRow = { id: string; entryNumber: number | null; entryDate: string; memo: string | null; status: "draft" | "posted" | "voided"; sourceType: string; total: string };
 type JournalDetail = JournalRow & { lines: { id: string; accountCode: string; accountName: string; debit: string; credit: string; description: string | null }[]; voidReason: string | null };
 type EditorLine = { accountId: string; side: "debit" | "credit"; amount: string; description: string };
 
 export default function JournalPage() {
+  useFinanceCurrency();
   const { accounts } = useAccounts();
   const [rows, setRows] = useState<JournalRow[]>([]);
   const [filter, setFilter] = useState("");

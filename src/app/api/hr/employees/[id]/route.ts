@@ -43,6 +43,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       employmentTypeId: b?.employmentTypeId !== undefined ? b.employmentTypeId || null : undefined,
       managerUserId: b?.managerUserId !== undefined ? b.managerUserId || null : undefined,
       workLocation: b?.workLocation !== undefined ? b.workLocation : undefined,
+      monthlySalary: b?.monthlySalary !== undefined ? b.monthlySalary : undefined,
       emergencyContact: b?.emergencyContact !== undefined ? b.emergencyContact : undefined,
       profilePhotoUrl: b?.profilePhotoUrl !== undefined ? b.profilePhotoUrl : undefined,
       notes: b?.notes !== undefined ? b.notes : undefined,

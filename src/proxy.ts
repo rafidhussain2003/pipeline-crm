@@ -3,6 +3,7 @@ import { verifySession } from "@/lib/auth";
 import { getBillingSnapshot, isBillingBlocked } from "@/lib/billing";
 import { getPublicAppUrl } from "@/lib/url";
 import { featureService, FEATURE_DISABLED_MESSAGE } from "@/lib/features";
+import { getEffectiveModuleAccess, type ModuleKey } from "@/lib/module-access";
 
 const COOKIE_NAME = "crm_session";
 
@@ -184,6 +185,35 @@ export async function proxy(req: NextRequest) {
       // A page of a module the company doesn't have: send them home as if
       // the page never existed.
       return NextResponse.redirect(new URL("/leads", getPublicAppUrl()));
+    }
+  }
+
+  // Enterprise Workspaces gate — the admin's per-user module assignment,
+  // enforced on the PAGE surface here (each module's API routes enforce it
+  // again in their own guards). Admins are never overridden; a denied
+  // workspace redirects as if the page never existed. Resolution is the
+  // same cached read the guards use (~one SELECT per user per 30s).
+  if (session?.companyId && session.role !== "admin" && !isApiRoute) {
+    const workspaceRule: { key: ModuleKey; match: boolean }[] = [
+      { key: "hr", match: pathname === "/hr" || pathname.startsWith("/hr/") },
+      { key: "finance", match: pathname === "/finance" || pathname.startsWith("/finance/") },
+      { key: "attendance", match: pathname === "/attendance" || pathname.startsWith("/attendance/") },
+      { key: "payroll", match: pathname === "/payroll" || pathname.startsWith("/payroll/") },
+      { key: "workflow", match: pathname === "/automation" || pathname.startsWith("/automation/") },
+    ];
+    const matched = workspaceRule.find((r) => r.match);
+    const isCrmPage =
+      pathname.startsWith("/leads") || pathname.startsWith("/tasks") || pathname.startsWith("/callbacks");
+    if (matched || isCrmPage) {
+      const access = await getEffectiveModuleAccess(session.userId, session.role);
+      if (matched && !access[matched.key]) {
+        return NextResponse.redirect(new URL(access.crm ? "/leads" : "/profile", getPublicAppUrl()));
+      }
+      if (isCrmPage && !access.crm) {
+        // CRM denied: land them on their first allowed workspace instead.
+        const home = access.hr ? "/hr" : access.finance ? "/finance" : access.attendance ? "/attendance" : access.payroll ? "/payroll" : "/profile";
+        return NextResponse.redirect(new URL(home, getPublicAppUrl()));
+      }
     }
   }
 

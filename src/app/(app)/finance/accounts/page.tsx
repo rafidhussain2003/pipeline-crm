@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { money, PageHeader, useAccounts, type UiAccount } from "@/components/finance/shared";
+import { money, PageHeader, useAccounts, useFinanceCurrency, type UiAccount } from "@/components/finance/shared";
 
 const TYPE_LABELS: Record<string, string> = { asset: "Assets", liability: "Liabilities", equity: "Equity", income: "Income", expense: "Expenses" };
 const TYPES = ["asset", "liability", "equity", "income", "expense"] as const;
 
 export default function ChartOfAccountsPage() {
+  useFinanceCurrency();
   const { accounts, loaded, reload } = useAccounts();
   const [modal, setModal] = useState<null | { edit?: UiAccount }>(null);
   const [error, setError] = useState("");

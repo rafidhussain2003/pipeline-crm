@@ -17,9 +17,43 @@ export type UiAccount = {
   balanceCents: number;
 };
 
+// Base-currency display (Enterprise Finance Workspace). The company's
+// defaultCurrency (finance_settings) is loaded once per page via
+// useFinanceCurrency(); money() then renders every amount in it. Falls back
+// to USD until loaded — the same figures, re-symbolized on arrival.
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: "$", EUR: "€", GBP: "£", INR: "₹", PKR: "₨", AED: "AED ", SAR: "SAR ",
+  CAD: "CA$", AUD: "A$", JPY: "¥", CNY: "¥", BDT: "৳", NGN: "₦", ZAR: "R",
+};
+
+let activeCurrency = "USD";
+export function setFinanceCurrency(code: string) {
+  if (/^[A-Z]{3}$/.test(code)) activeCurrency = code;
+}
+
+// Fetches the company's base currency once and re-renders the calling page
+// when it arrives. Mount at the top of every finance page.
+export function useFinanceCurrency(): string {
+  const [currency, setCurrency] = useState(activeCurrency);
+  useEffect(() => {
+    fetch("/api/finance/settings")
+      .then(async (r) => {
+        if (!r.ok) return;
+        const code = (await r.json())?.settings?.defaultCurrency;
+        if (typeof code === "string" && /^[A-Z]{3}$/.test(code)) {
+          setFinanceCurrency(code);
+          setCurrency(code);
+        }
+      })
+      .catch(() => {});
+  }, []);
+  return currency;
+}
+
 export function money(cents: number): string {
   const sign = cents < 0 ? "-" : "";
-  return `${sign}$${(Math.abs(cents) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const symbol = CURRENCY_SYMBOLS[activeCurrency] ?? `${activeCurrency} `;
+  return `${sign}${symbol}${(Math.abs(cents) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function moneyNum(v: string | number): string {
@@ -45,7 +79,6 @@ export function useAccounts() {
   };
   useEffect(() => {
     reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return { accounts, loaded, reload };
 }

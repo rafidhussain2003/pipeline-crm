@@ -19,6 +19,9 @@ export type { LedgerQuery, FinanceReportDef } from "./ledger";
 export { createRevenue, voidRevenue, listRevenues, createExpense, voidExpense, listExpenses } from "./documents";
 export type { CreateRevenueInput, CreateExpenseInput } from "./documents";
 
+export { listInvestments, createInvestment, updateInvestment, withdrawInvestment, ensureInvestmentsAccount } from "./investments";
+export type { CreateInvestmentInput } from "./investments";
+
 export { listYears, createYear, setYearStatus, assertDatePostable } from "./years";
 export { getOpeningState, setOpeningBalance, confirmOpeningBalances, guardOpeningVoid } from "./opening";
 export { hasFinancePermission } from "./permissions";

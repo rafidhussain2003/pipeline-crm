@@ -3,8 +3,13 @@
 import { NextResponse } from "next/server";
 import { requireCompanySession, type CompanySession } from "@/lib/auth";
 import { featureService, FEATURE_DISABLED_MESSAGE } from "@/lib/features";
+import { resolveModuleOverride } from "@/lib/module-access";
 import { hasPayrollPermission, type PayrollPermission } from "./permissions";
 import { PayrollError } from "./types";
+
+// Member-level capabilities an explicit module GRANT opens — never
+// payroll:manage / payroll:approve / payroll:admin.
+const GRANTABLE: readonly PayrollPermission[] = ["payroll:view_own", "payroll:view"];
 
 export async function requirePayroll(
   permission: PayrollPermission,
@@ -14,8 +19,15 @@ export async function requirePayroll(
   if (!(await featureService.isEnabled(auth.session.companyId, "payroll"))) {
     return { ok: false, response: NextResponse.json({ error: FEATURE_DISABLED_MESSAGE }, { status: 403 }) };
   }
-  if (!hasPayrollPermission(auth.session.role, permission)) {
+  // Enterprise Workspaces: per-user assignment — see lib/module-access.ts.
+  const override = await resolveModuleOverride(auth.session.userId, auth.session.role, "payroll");
+  if (override === "denied") {
     return { ok: false, response: NextResponse.json({ error: "You do not have access to Payroll" }, { status: 403 }) };
+  }
+  if (!hasPayrollPermission(auth.session.role, permission)) {
+    if (!(override === "granted" && GRANTABLE.includes(permission))) {
+      return { ok: false, response: NextResponse.json({ error: "You do not have access to Payroll" }, { status: 403 }) };
+    }
   }
   return auth;
 }
