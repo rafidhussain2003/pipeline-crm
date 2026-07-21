@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leads, assignmentLog } from "@/db/schema";
+import { leads, assignmentLog, dispositionOptions } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { isUuid } from "@/lib/url";
 import { hasPermission } from "@/lib/permissions";
@@ -48,6 +48,29 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const allowed: Record<string, unknown> = {};
   for (const key of ["disposition", "ownerId", "followUpAt", "name", "phone", "email", "state", "priority", "isBlacklisted"]) {
     if (key in body) allowed[key] = body[key];
+  }
+
+  // Disposition validation — ONE source of truth: the company's own
+  // disposition_options, the exact rows every dropdown renders. There is no
+  // hardcoded whitelist to drift out of date, a dropdown-originated save can
+  // never be rejected (its options ARE these rows), and an invalid value
+  // from a raw API call gets an explicit 400 naming it — never a silent
+  // failure. One indexed lookup on the (company_id, label) unique index.
+  if ("disposition" in body) {
+    if (typeof body.disposition !== "string" || !body.disposition.trim()) {
+      return NextResponse.json({ error: "disposition must be a non-empty string" }, { status: 400 });
+    }
+    const [known] = await db
+      .select({ id: dispositionOptions.id })
+      .from(dispositionOptions)
+      .where(and(eq(dispositionOptions.companyId, session.companyId), eq(dispositionOptions.label, body.disposition)))
+      .limit(1);
+    if (!known) {
+      return NextResponse.json(
+        { error: `"${body.disposition}" is not one of this company's dispositions` },
+        { status: 400 }
+      );
+    }
   }
 
   // Follow-up & Pipeline: "Duplicate Lead" can link to the original lead.
