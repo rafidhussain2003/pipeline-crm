@@ -401,15 +401,46 @@ export default function LeadsPage() {
   // "Omar" = 4 extra identical requests). Fetched once per page mount.
   useEffect(() => {
     fetch("/api/dispositions")
-      .then(async (r) => { if (r.ok) setDispositions((await r.json()).dispositions || []); })
-      .catch(() => {});
+      .then(async (r) => {
+        if (!r.ok) {
+          console.error("[disposition-debug] options fetch FAILED", r.status, await r.text().catch(() => ""));
+          return;
+        }
+        const list = (await r.json()).dispositions || [];
+        // TEMP DIAGNOSTICS — options received, value/label per option, and a
+        // duplicate-value check. Remove once the dropdown issue is confirmed.
+        console.log(`[disposition-debug] options received: ${list.length}`);
+        console.table(list.map((d: Disposition) => ({ value: d.label, label: d.label, category: d.category || "(none)", id: d.id })));
+        const seen = new Map<string, number>();
+        for (const d of list as Disposition[]) seen.set(d.label, (seen.get(d.label) || 0) + 1);
+        const dupes = [...seen.entries()].filter(([, n]) => n > 1);
+        if (dupes.length > 0) console.error("[disposition-debug] DUPLICATE option values:", dupes);
+        setDispositions(list);
+      })
+      .catch((err) => console.error("[disposition-debug] options fetch threw", err));
   }, []);
+
+  // TEMP DIAGNOSTICS — leads whose SAVED disposition has no matching option
+  // (such a row's select shows no selection, though other options stay
+  // clickable). Remove with the rest of the disposition-debug logging.
+  useEffect(() => {
+    if (dispositions.length === 0 || leads.length === 0) return;
+    const values = new Set(dispositions.map((d) => d.label));
+    const unmatched = leads.filter((l) => !values.has(l.disposition));
+    if (unmatched.length > 0) {
+      console.warn(
+        "[disposition-debug] leads whose selected value matches NO option:",
+        unmatched.map((l) => ({ leadId: l.id, selectedValue: JSON.stringify(l.disposition) }))
+      );
+    }
+  }, [dispositions, leads]);
 
   async function updateDisposition(leadId: string, disposition: string) {
     // Optimistic, but it must be REVERSIBLE. Before this, a failed PATCH left
     // the new disposition on screen while the database still held the old one
     // — the agent believed the change saved and it silently had not.
     const previous = leads.find((l) => l.id === leadId)?.disposition;
+    console.log("[disposition-debug] onValueChange fired", { leadId, selectedValue: previous, onValueChangeValue: disposition });
     setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, disposition } : l)));
     try {
       const res = await fetch(`/api/leads/${leadId}`, {
@@ -417,11 +448,20 @@ export default function LeadsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ disposition }),
       });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not save");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        console.error("[disposition-debug] PATCH FAILED — this is why the value snaps back", { leadId, status: res.status, serverError: body.error });
+        throw new Error(body.error || `Could not save (HTTP ${res.status})`);
+      }
+      console.log("[disposition-debug] PATCH saved OK", { leadId, saved: disposition });
       setLoadError("");
     } catch (err) {
+      console.error("[disposition-debug] reverting to previous value", { leadId, revertingTo: previous });
       if (previous !== undefined) setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, disposition: previous } : l)));
       setLoadError(err instanceof Error ? err.message : "Could not update that lead");
+      // A silent revert looks exactly like a dead dropdown — make sure the
+      // error banner is actually on screen.
+      window.scrollTo({ top: 0, behavior: "smooth" });
     }
   }
 
