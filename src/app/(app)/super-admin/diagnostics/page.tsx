@@ -41,6 +41,15 @@ export default function DiagnosticsPage() {
   // (success or the real failure reason) instead of hiding it in boot logs.
   const [migrating, setMigrating] = useState(false);
   const [migrationResult, setMigrationResult] = useState<{ ok: boolean; detail: string } | null>(null);
+  const [liveCommit, setLiveCommit] = useState<string>("");
+
+  useEffect(() => {
+    fetch("/api/super-admin/run-migrations")
+      .then(async (r) => {
+        if (r.ok) setLiveCommit((await r.json()).commit || "");
+      })
+      .catch(() => {});
+  }, []);
 
   async function runMigrations() {
     setMigrating(true);
@@ -66,7 +75,14 @@ export default function DiagnosticsPage() {
 
       <div className="bg-white border border-slate-200 rounded-lg p-4 mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-slate-800">Database migrations</div>
+          <div className="text-sm font-semibold text-slate-800">
+            Database migrations
+            {liveCommit && (
+              <span className="ml-2 text-[10px] font-mono font-normal text-slate-400 bg-slate-100 rounded px-1.5 py-0.5" title="Git commit this server is running">
+                build {liveCommit}
+              </span>
+            )}
+          </div>
           <div className="text-xs text-slate-500 mt-0.5">
             Apply any pending schema/data migrations now and see the result immediately.
           </div>

@@ -13,3 +13,13 @@ export async function POST() {
   const result = await runBootMigrations();
   return NextResponse.json(result, { status: result.ok ? 200 : 500 });
 }
+
+// Which build is actually LIVE — Render injects the deployed commit as
+// RENDER_GIT_COMMIT. Shown in Diagnostics so "is my fix even deployed?"
+// stops being guesswork.
+export async function GET() {
+  const auth = await requireSuperAdmin();
+  if (!auth.ok) return auth.response;
+  const commit = process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || "";
+  return NextResponse.json({ commit: commit ? commit.slice(0, 7) : "unknown" });
+}
