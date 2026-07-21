@@ -61,7 +61,7 @@ export async function forceAssignLead(
   if (!agent) return { ok: false, error: "Agent not found in this company." };
 
   const [before] = await db
-    .select({ ownerId: leads.ownerId })
+    .select({ ownerId: leads.ownerId, lifecycleStage: leads.lifecycleStage })
     .from(leads)
     .where(and(eq(leads.id, leadId), eq(leads.companyId, companyId)))
     .limit(1);
@@ -69,7 +69,17 @@ export async function forceAssignLead(
 
   const [updated] = await db
     .update(leads)
-    .set({ ownerId: agentId, updatedAt: new Date() })
+    // Stamp the SAME lifecycle state the automatic claim writes: without it
+    // a manually assigned lead sat in stage "new"/"queued" with no
+    // assignedAt, which the recycle engine read as an unworked lead on an
+    // offline agent and quietly un-assigned. Progressed stages are never
+    // regressed — reassigning a contacted lead only changes hands.
+    .set({
+      ownerId: agentId,
+      updatedAt: new Date(),
+      assignedAt: sql`CASE WHEN ${leads.lifecycleStage} IN ('new','queued','assigned') THEN now() ELSE ${leads.assignedAt} END`,
+      lifecycleStage: sql`CASE WHEN ${leads.lifecycleStage} IN ('new','queued') THEN 'assigned'::lifecycle_stage ELSE ${leads.lifecycleStage} END`,
+    })
     .where(and(eq(leads.id, leadId), eq(leads.companyId, companyId)))
     .returning({ id: leads.id });
   if (!updated) return { ok: false, error: "Lead not found." };
@@ -128,7 +138,15 @@ export async function bulkAssignLeads(
   const foundIds = before.map((l) => l.id);
   await db
     .update(leads)
-    .set({ ownerId: agentId, updatedAt: new Date() })
+    // Same lifecycle stamping as the automatic claim (see forceAssignLead
+    // above for why): fresh leads move to "assigned" with assignedAt set;
+    // progressed stages are never regressed.
+    .set({
+      ownerId: agentId,
+      updatedAt: new Date(),
+      assignedAt: sql`CASE WHEN ${leads.lifecycleStage} IN ('new','queued','assigned') THEN now() ELSE ${leads.assignedAt} END`,
+      lifecycleStage: sql`CASE WHEN ${leads.lifecycleStage} IN ('new','queued') THEN 'assigned'::lifecycle_stage ELSE ${leads.lifecycleStage} END`,
+    })
     .where(and(inArray(leads.id, foundIds), eq(leads.companyId, companyId)));
 
   // Every ownerId change must land in assignment_log (round-robin cursor and

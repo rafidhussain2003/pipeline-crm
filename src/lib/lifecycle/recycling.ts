@@ -16,6 +16,7 @@ import { leads, users } from "@/db/schema";
 import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
 import { assignmentEngine } from "@/lib/assignment/engine";
 import { TERMINAL_DISPOSITIONS } from "@/lib/assignment/constants";
+import { manuallyAssignedLeadIds } from "@/lib/assignment/manual";
 import { ELIGIBLE_PRESENCE_STATUSES } from "@/lib/presence/status";
 import { eventBus } from "@/lib/events/bus";
 import { recordAudit } from "@/lib/audit";
@@ -70,12 +71,15 @@ export async function recycleCompany(companyId: string): Promise<{ recycled: num
     )
     .limit(SCAN_LIMIT);
 
-  const toRecycle: { id: string; ownerId: string; requiredSkillId: string | null; stage: LifecycleStage; reason: string }[] = [];
+  const toRecycle: { id: string; ownerId: string; requiredSkillId: string | null; stage: LifecycleStage; reason: string; ownerGoneHard: boolean }[] = [];
   for (const lead of rows) {
     if (!lead.ownerId) continue;
     const stage = lead.lifecycleStage as LifecycleStage;
     const active = isActiveStage(stage);
     const ownerGone = lead.ownerDeletedAt != null || lead.ownerActive === false || lead.ownerLocked === true;
+    // "Hard" gone = the account no longer exists as a working identity
+    // (deleted/deactivated) — as opposed to a temporary lock.
+    const ownerGoneHard = lead.ownerDeletedAt != null || lead.ownerActive === false;
 
     let reason: string | null = null;
     if (ownerGone) {
@@ -89,11 +93,24 @@ export async function recycleCompany(companyId: string): Promise<{ recycled: num
         reason = "untouched";
       }
     }
-    if (reason) toRecycle.push({ id: lead.id, ownerId: lead.ownerId, requiredSkillId: lead.requiredSkillId, stage, reason });
+    if (reason) toRecycle.push({ id: lead.id, ownerId: lead.ownerId, requiredSkillId: lead.requiredSkillId, stage, reason, ownerGoneHard });
   }
+
+  // A MANUAL assignment is an explicit human decision — the engine never
+  // second-guesses it. Manually assigned leads (latest assignment_log entry
+  // is a manual:* rule) stay with their agent through offline/SLA/untouched
+  // windows; the ONLY thing that releases them automatically is the owner
+  // account itself being deleted or deactivated. Engine-assigned leads keep
+  // the exact recycle rules they always had.
+  const manualIds = await manuallyAssignedLeadIds(toRecycle.map((i) => i.id));
+  let manualSkipped = 0;
 
   let recycled = 0;
   for (const item of toRecycle) {
+    if (manualIds.has(item.id) && !item.ownerGoneHard) {
+      manualSkipped++;
+      continue;
+    }
     // Atomic release: only if STILL owned by the same agent and NOT already
     // moved to a terminal/active stage since we scanned — prevents recycling a
     // lead the agent just acted on (never steal a live conversation).
@@ -113,9 +130,9 @@ export async function recycleCompany(companyId: string): Promise<{ recycled: num
     recycled++;
   }
 
-  if (recycled > 0) {
+  if (recycled > 0 || manualSkipped > 0) {
     metrics.increment("assignment.recycled", recycled);
-    logger.info("recycled", { companyId, recycled, scanned: rows.length });
+    logger.info("recycled", { companyId, recycled, manualSkipped, scanned: rows.length });
   }
   return { recycled, scanned: rows.length };
 }

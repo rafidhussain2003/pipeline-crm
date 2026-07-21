@@ -74,6 +74,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
   }
 
+  // Assigning an owner here must stamp the same lifecycle state the
+  // automatic engine writes (stage "assigned" + assignedAt) — without it the
+  // recycle engine treated a hand-assigned lead as unworked queue stock and
+  // quietly un-assigned it. Progressed stages are never regressed.
+  if (body.ownerId && before.ownerId !== body.ownerId) {
+    if (before.lifecycleStage === "new" || before.lifecycleStage === "queued") {
+      allowed.lifecycleStage = "assigned";
+      allowed.assignedAt = new Date();
+    } else if (before.lifecycleStage === "assigned") {
+      allowed.assignedAt = new Date();
+    }
+  }
+
   allowed.updatedAt = new Date();
 
   const [updated] = await db

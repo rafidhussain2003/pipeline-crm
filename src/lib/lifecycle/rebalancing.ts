@@ -12,6 +12,7 @@ import { automationSettings, leads, users } from "@/db/schema";
 import { and, desc, eq, inArray, isNull, notInArray, sql } from "drizzle-orm";
 import { presenceService } from "@/lib/presence/service";
 import { TERMINAL_DISPOSITIONS } from "@/lib/assignment/constants";
+import { manuallyAssignedLeadIds } from "@/lib/assignment/manual";
 import { eventBus } from "@/lib/events/bus";
 import { recordAudit } from "@/lib/audit";
 import { metrics } from "@/lib/infra/metrics";
@@ -55,13 +56,18 @@ export async function rebalanceCompany(companyId: string): Promise<{ moved: numb
     if (maxId === minId || maxN - minN < rb.minImbalance) break;
 
     // One movable (non-active, "assigned") lead from the overloaded agent.
-    const [movable] = await db
+    // A small candidate batch is filtered against manual assignments — a
+    // lead a HUMAN placed with this agent is never levelled away by the
+    // engine (same rule the recycle engine honors).
+    const candidatesBatch = await db
       .select({ id: leads.id })
       .from(leads)
       .where(and(eq(leads.companyId, companyId), eq(leads.ownerId, maxId), eq(leads.lifecycleStage, "assigned"), isNull(leads.deletedAt)))
       .orderBy(desc(leads.createdAt))
-      .limit(1);
-    if (!movable) break; // overloaded agent's leads are all active — can't rebalance further
+      .limit(10);
+    const manualIds = await manuallyAssignedLeadIds(candidatesBatch.map((c) => c.id));
+    const movable = candidatesBatch.find((c) => !manualIds.has(c.id));
+    if (!movable) break; // overloaded agent's leads are all active or manually placed — can't rebalance further
 
     // Atomic hand-off: only if still owned by the overloaded agent AND still
     // "assigned" (not contacted since) — never steals a now-active lead.
