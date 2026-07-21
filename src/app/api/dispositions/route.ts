@@ -74,7 +74,29 @@ export async function POST(req: NextRequest) {
     if (isUniqueViolation(err, "disposition_options_company_label_uniq")) {
       return NextResponse.json({ error: `A disposition named "${trimmed}" already exists` }, { status: 409 });
     }
-    throw err;
+    // Migration lag (category ships in 0037): creating a disposition must
+    // not be held hostage by a pending migration — retry the pre-0037 shape
+    // (no category column; it groups under OTHER until the schema lands,
+    // exactly like the GET fallback serves it). Loud log either way.
+    if (!isUndefinedColumn(err)) throw err;
+    console.error("[dispositions] category column missing — migration 0037 not applied yet; creating without category");
+    try {
+      [created] = await db
+        .insert(dispositionOptions)
+        .values({ companyId: session.companyId, label: trimmed, color: color || "#2563eb", sortOrder: 999 })
+        .returning({
+          id: dispositionOptions.id,
+          companyId: dispositionOptions.companyId,
+          label: dispositionOptions.label,
+          color: dispositionOptions.color,
+          sortOrder: dispositionOptions.sortOrder,
+        });
+    } catch (retryErr) {
+      if (isUniqueViolation(retryErr, "disposition_options_company_label_uniq")) {
+        return NextResponse.json({ error: `A disposition named "${trimmed}" already exists` }, { status: 409 });
+      }
+      throw retryErr;
+    }
   }
 
   await recordAudit({

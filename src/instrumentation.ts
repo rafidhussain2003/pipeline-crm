@@ -24,12 +24,10 @@ export async function register() {
   if (!process.env.DATABASE_URL) return;
 
   try {
-    // Dynamic imports keep pg/drizzle out of every non-node bundle graph.
-    const { migrate } = await import("drizzle-orm/node-postgres/migrator");
-    const { db } = await import("@/db");
-    const started = Date.now();
-    await migrate(db, { migrationsFolder: "./drizzle" });
-    console.log(`[migrations] up to date (checked in ${Date.now() - started}ms)`);
+    // Dynamic import keeps every Node API (pg, fs, process.cwd) out of the
+    // Edge compile of this file — see lib/boot-migrations.ts.
+    const { runBootMigrations } = await import("@/lib/boot-migrations");
+    await runBootMigrations();
   } catch (err) {
     console.error(
       "[migrations] FAILED to apply pending migrations at boot — the app is running against a possibly stale schema:",

@@ -18,6 +18,14 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // The boot migrator (src/instrumentation.ts) reads ./drizzle at runtime.
+  // Standalone output only bundles traced imports, so without this the
+  // deployed server had NO migrations folder — the migrator failed on every
+  // boot and the database silently fell behind the code (the root cause of
+  // the "blank dispositions" / "finance 500" incidents).
+  outputFileTracingIncludes: {
+    "/**": ["./drizzle/**/*"],
+  },
   async headers() {
     return [
       {
