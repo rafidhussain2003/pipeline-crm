@@ -3,9 +3,18 @@
 import { useEffect, useState } from "react";
 
 type Rule = { id: string; tier: string; weight: number; active: boolean };
-type Disposition = { id: string; label: string; color: string };
+type Disposition = { id: string; label: string; color: string; category?: string };
 type Tag = { id: string; label: string; color: string };
 type Skill = { id: string; label: string };
+
+// Mirrors DISPOSITION_CATEGORIES in src/lib/dispositions/taxonomy.ts (not
+// imported: that module sits beside server-only code). The category decides
+// which group the new disposition appears under in every agent's dropdown.
+const CATEGORY_ORDER = ["NEW", "CONTACT ATTEMPT", "INTERESTED", "SALES", "LOST", "OTHER"];
+
+// A small, readable palette for custom dispositions — same colors the
+// seeded taxonomy uses per category, so custom entries fit right in.
+const DISPOSITION_COLORS = ["#2563eb", "#d97706", "#0891b2", "#16a34a", "#dc2626", "#64748b", "#7c3aed", "#db2777"];
 
 export default function PipelinePage() {
   const [rules, setRules] = useState<Rule[]>([]);
@@ -13,6 +22,9 @@ export default function PipelinePage() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [newLabel, setNewLabel] = useState("");
+  const [newCategory, setNewCategory] = useState("OTHER");
+  const [newColor, setNewColor] = useState(DISPOSITION_COLORS[0]);
+  const [dispositionError, setDispositionError] = useState("");
   const [newTag, setNewTag] = useState("");
   const [newSkill, setNewSkill] = useState("");
 
@@ -43,12 +55,25 @@ export default function PipelinePage() {
   }
 
   async function addDisposition() {
-    if (!newLabel) return;
-    await fetch("/api/dispositions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label: newLabel }),
-    });
+    if (!newLabel.trim()) return;
+    setDispositionError("");
+    // Errors must be visible — previously a duplicate label's 409 was
+    // silently swallowed and the admin believed the disposition was created.
+    let res: Response;
+    try {
+      res = await fetch("/api/dispositions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: newLabel.trim(), category: newCategory, color: newColor }),
+      });
+    } catch {
+      setDispositionError("Could not save — network error. Try again.");
+      return;
+    }
+    if (!res.ok) {
+      setDispositionError((await res.json().catch(() => ({}))).error || "Could not create the disposition.");
+      return;
+    }
     setNewLabel("");
     load();
   }
@@ -110,25 +135,78 @@ export default function PipelinePage() {
 
       <div>
         <h2 className="text-sm font-semibold text-slate-700 mb-3">Disposition options</h2>
-        <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-100 mb-3">
-          {dispositions.map((d) => (
-            <div key={d.id} className="p-3 flex items-center gap-2">
-              <span className="w-3 h-3 rounded-full" style={{ backgroundColor: d.color }} />
-              <span className="text-sm text-slate-800">{d.label}</span>
-            </div>
-          ))}
+        <p className="text-xs text-slate-400 mb-3">
+          Grouped exactly as agents see them in every disposition dropdown. Custom dispositions become available to
+          agents immediately.
+        </p>
+        <div className="bg-white border border-slate-200 rounded-lg mb-3 p-3 space-y-3">
+          {(() => {
+            const groups = new Map<string, Disposition[]>();
+            for (const d of dispositions) {
+              const cat = d.category || "OTHER";
+              const list = groups.get(cat);
+              if (list) list.push(d);
+              else groups.set(cat, [d]);
+            }
+            const ordered = [
+              ...CATEGORY_ORDER.filter((c) => groups.has(c)),
+              ...[...groups.keys()].filter((c) => !CATEGORY_ORDER.includes(c)),
+            ];
+            return ordered.map((category) => (
+              <div key={category}>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mb-1.5">{category}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {groups.get(category)!.map((d) => (
+                    <span
+                      key={d.id}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium rounded-full px-2.5 py-1"
+                      style={{ backgroundColor: `${d.color}1a`, color: d.color }}
+                    >
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: d.color }} />
+                      {d.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ));
+          })()}
+          {dispositions.length === 0 && <p className="text-sm text-slate-400">No dispositions yet.</p>}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
           <input
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
             placeholder="New disposition label"
-            className="flex-1 rounded-md border border-slate-200 px-3 py-2 text-sm"
+            className="flex-1 min-w-[180px] rounded-md border border-slate-200 px-3 py-2 text-sm"
           />
+          <select
+            value={newCategory}
+            onChange={(e) => setNewCategory(e.target.value)}
+            aria-label="Category for the new disposition"
+            className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700"
+          >
+            {CATEGORY_ORDER.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center gap-1" role="radiogroup" aria-label="Color for the new disposition">
+            {DISPOSITION_COLORS.map((c) => (
+              <button
+                key={c}
+                onClick={() => setNewColor(c)}
+                aria-label={`Color ${c}`}
+                className={`w-6 h-6 rounded-full border-2 ${newColor === c ? "border-slate-900" : "border-transparent"}`}
+                style={{ backgroundColor: c }}
+              />
+            ))}
+          </div>
           <button onClick={addDisposition} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">
             Add
           </button>
         </div>
+        {dispositionError && <p className="text-xs text-red-600 mt-2">{dispositionError}</p>}
       </div>
 
       <div>
