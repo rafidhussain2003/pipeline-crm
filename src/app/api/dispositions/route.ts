@@ -5,28 +5,22 @@ import { getSession } from "@/lib/auth";
 import { asc, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { isUniqueViolation, isUndefinedColumn } from "@/lib/db-errors";
-import { DISPOSITION_CATEGORIES } from "@/lib/dispositions/taxonomy";
+import { DISPOSITION_CATEGORIES, DEFAULT_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+type DispositionRow = { id: string; companyId: string; label: string; color: string; sortOrder: number; category: string };
 
+// Migration-lag-aware read. The full select includes the `category` column
+// (migration 0037); against a database where that migration hasn't been
+// applied yet, Postgres answers 42703 — fall back to the pre-0037 columns
+// with everything under one bucket until the migrator catches the schema up.
+async function loadDispositions(companyId: string): Promise<DispositionRow[]> {
   try {
-    const rows = await db
+    return await db
       .select()
       .from(dispositionOptions)
-      .where(eq(dispositionOptions.companyId, session.companyId))
+      .where(eq(dispositionOptions.companyId, companyId))
       .orderBy(asc(dispositionOptions.sortOrder));
-    return NextResponse.json({ dispositions: rows });
   } catch (err) {
-    // Migration lag guard. This select includes the `category` column
-    // (migration 0037); against a database where that migration hasn't been
-    // applied yet, Postgres answers 42703 and this route used to 500 — which
-    // blanked every disposition dropdown in the CRM (the page treats a
-    // failed fetch as "no options"). Agents being unable to record call
-    // outcomes is far worse than briefly ungrouped options, so fall back to
-    // the pre-0037 columns with everything under one bucket until the boot
-    // migrator (src/instrumentation.ts) catches the schema up.
     if (!isUndefinedColumn(err)) throw err;
     console.error("[dispositions] category column missing — migration 0037 not applied yet; serving legacy shape");
     const rows = await db
@@ -38,10 +32,50 @@ export async function GET() {
         sortOrder: dispositionOptions.sortOrder,
       })
       .from(dispositionOptions)
-      .where(eq(dispositionOptions.companyId, session.companyId))
+      .where(eq(dispositionOptions.companyId, companyId))
       .orderBy(asc(dispositionOptions.sortOrder));
-    return NextResponse.json({ dispositions: rows.map((r) => ({ ...r, category: "OTHER" })) });
+    return rows.map((r) => ({ ...r, category: "OTHER" }));
   }
+}
+
+export async function GET() {
+  const session = await getSession();
+  if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  let rows = await loadDispositions(session.companyId);
+
+  // Self-healing defaults: the platform taxonomy must exist for every
+  // company even when the data migrations that backfill it haven't run
+  // (their delivery has burned us repeatedly). Costs one Set comparison in
+  // steady state; only when labels are actually missing does it insert them
+  // — idempotent under the (company_id, label) unique index, and schema-lag
+  // aware (no category column needed). Whoever loads the dropdown first
+  // heals their company.
+  const have = new Set(rows.map((r) => r.label));
+  const missing = DEFAULT_DISPOSITIONS.filter((d) => !have.has(d.label));
+  if (missing.length > 0) {
+    try {
+      try {
+        await db
+          .insert(dispositionOptions)
+          .values(missing.map((d) => ({ companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder, category: d.category })))
+          .onConflictDoNothing();
+      } catch (err) {
+        if (!isUndefinedColumn(err)) throw err;
+        await db
+          .insert(dispositionOptions)
+          .values(missing.map((d) => ({ companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder })))
+          .onConflictDoNothing();
+      }
+      console.log(`[dispositions] seeded ${missing.length} missing default dispositions for company ${session.companyId}`);
+      rows = await loadDispositions(session.companyId);
+    } catch (err) {
+      // Serving what exists always beats a dead dropdown.
+      console.error("[dispositions] could not seed missing defaults:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  return NextResponse.json({ dispositions: rows });
 }
 
 export async function POST(req: NextRequest) {

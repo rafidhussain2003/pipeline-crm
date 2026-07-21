@@ -37,6 +37,24 @@ export default function DiagnosticsPage() {
     load();
   }
 
+  // Database migrations, on demand — shows the migrator's exact outcome
+  // (success or the real failure reason) instead of hiding it in boot logs.
+  const [migrating, setMigrating] = useState(false);
+  const [migrationResult, setMigrationResult] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  async function runMigrations() {
+    setMigrating(true);
+    setMigrationResult(null);
+    try {
+      const res = await fetch("/api/super-admin/run-migrations", { method: "POST" });
+      setMigrationResult(await res.json());
+    } catch {
+      setMigrationResult({ ok: false, detail: "Request failed — check your connection and try again." });
+    } finally {
+      setMigrating(false);
+    }
+  }
+
   if (!loaded) return <div className="p-6 text-sm text-slate-400">Loading diagnostics…</div>;
 
   return (
@@ -44,6 +62,28 @@ export default function DiagnosticsPage() {
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold text-slate-900">Platform Diagnostics</h1>
         <button onClick={load} className="text-xs px-3 py-1.5 rounded-md border border-slate-200">Refresh</button>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-lg p-4 mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-slate-800">Database migrations</div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            Apply any pending schema/data migrations now and see the result immediately.
+          </div>
+          {migrationResult && (
+            <div className={`text-xs mt-2 rounded-md border px-2.5 py-1.5 break-all ${migrationResult.ok ? "text-emerald-700 bg-emerald-50 border-emerald-200" : "text-red-700 bg-red-50 border-red-200"}`}>
+              {migrationResult.ok ? "✓ " : "✗ "}
+              {migrationResult.detail}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={runMigrations}
+          disabled={migrating}
+          className="shrink-0 bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50"
+        >
+          {migrating ? "Running…" : "Run migrations"}
+        </button>
       </div>
 
       <div className="flex gap-1 border-b border-slate-200 mb-4">

@@ -7,7 +7,9 @@ import fs from "fs";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { db } from "@/db";
 
-export async function runBootMigrations(): Promise<void> {
+export type MigrationRunResult = { ok: boolean; detail: string };
+
+export async function runBootMigrations(): Promise<MigrationRunResult> {
   // The migrations folder's location depends on HOW the server was started:
   // `next start` runs from the repo root (./drizzle), but the standalone
   // server (`node .next/standalone/server.js`) runs from the standalone dir
@@ -20,11 +22,20 @@ export async function runBootMigrations(): Promise<void> {
   ];
   const migrationsFolder = candidates.find((p) => fs.existsSync(path.join(p, "meta", "_journal.json")));
   if (!migrationsFolder) {
-    console.error(`[migrations] FAILED — no migrations folder found. Searched: ${candidates.join(" | ")} (cwd=${process.cwd()})`);
-    return;
+    const detail = `no migrations folder found. Searched: ${candidates.join(" | ")} (cwd=${process.cwd()})`;
+    console.error(`[migrations] FAILED — ${detail}`);
+    return { ok: false, detail };
   }
 
   const started = Date.now();
-  await migrate(db, { migrationsFolder });
-  console.log(`[migrations] up to date (folder=${migrationsFolder}, checked in ${Date.now() - started}ms)`);
+  try {
+    await migrate(db, { migrationsFolder });
+  } catch (err) {
+    const detail = `folder=${migrationsFolder}: ${err instanceof Error ? err.message : String(err)}`;
+    console.error(`[migrations] FAILED — ${detail}`);
+    return { ok: false, detail };
+  }
+  const detail = `up to date (folder=${migrationsFolder}, checked in ${Date.now() - started}ms)`;
+  console.log(`[migrations] ${detail}`);
+  return { ok: true, detail };
 }
