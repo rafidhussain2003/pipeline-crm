@@ -43,13 +43,17 @@ export function isModuleKey(key: string): key is ModuleKey {
   return (MODULE_KEYS as string[]).includes(key);
 }
 
-// Role defaults — a faithful transcription of the access each role had
-// BEFORE per-user assignment existed (see each module's permissions.ts).
+// Role defaults — what each role gets with NO explicit assignment.
+// Agents deliberately get NO workspaces by default: the HR workspace (even
+// its self-serve My Profile page) is opt-in per agent — an admin grants it
+// from the employee's System Permissions card when wanted. Attendance and
+// Payroll keep their pre-workspace company-wide behavior (agents check in
+// and read their own payslips) unless explicitly denied.
 const ROLE_DEFAULTS: Record<Role, Record<ModuleKey, boolean>> = {
   super_admin: { crm: true, hr: false, finance: false, attendance: false, payroll: false, workflow: false },
   admin: { crm: true, hr: true, finance: true, attendance: true, payroll: true, workflow: true },
   manager: { crm: true, hr: true, finance: true, attendance: true, payroll: true, workflow: true },
-  agent: { crm: true, hr: true, finance: false, attendance: true, payroll: true, workflow: false },
+  agent: { crm: true, hr: false, finance: false, attendance: true, payroll: true, workflow: false },
 };
 
 export type ModuleAccessMap = Record<ModuleKey, boolean>;
