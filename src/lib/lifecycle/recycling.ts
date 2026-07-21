@@ -122,7 +122,27 @@ export async function recycleCompany(companyId: string): Promise<{ recycled: num
 
 // Recycle every company that has recycling enabled (via the existing
 // autoRecycleEnabled flag OR a queue_config override). Bounded per company.
+//
+// Single-flight per process: an overlapping cron tick (previous pass still
+// scanning a large tenant set) skips instead of running the same scans and
+// racing the same atomic releases — every recycle decision stays identical,
+// only the duplicate pass is eliminated. The next tick covers the rest.
+let recyclePassRunning = false;
 export async function recycleAllCompanies(): Promise<{ companies: number; recycled: number }> {
+  if (recyclePassRunning) {
+    metrics.increment("assignment.overlap_skipped");
+    logger.warn("recycle_pass_overlap_skipped", {});
+    return { companies: 0, recycled: 0 };
+  }
+  recyclePassRunning = true;
+  try {
+    return await runRecyclePass();
+  } finally {
+    recyclePassRunning = false;
+  }
+}
+
+async function runRecyclePass(): Promise<{ companies: number; recycled: number }> {
   const rows = await db.execute(sql`
     SELECT company_id FROM automation_settings
     WHERE auto_recycle_enabled = true OR (queue_config #>> '{recycle,enabled}') = 'true'

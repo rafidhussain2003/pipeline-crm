@@ -38,9 +38,33 @@ const MAX_LEADS_PER_COMPANY_PER_SWEEP = 200;
 // agents all coming online at 9am must not stampede N parallel sweeps over
 // the same queue (they'd all serialize on the per-company assignment lock
 // anyway, doing redundant work).
+//
+// Hardening: the guard now lives INSIDE sweepCompanyQueuedLeads, so every
+// caller shares it — previously only kickCompanySweep checked it, which let
+// the cron's sweepAllCompanies run the same company's sweep concurrently
+// with a heartbeat-kicked one (harmless for correctness thanks to the
+// atomic claim, but a pure duplicate-query burst). A kick that arrives
+// mid-sweep is remembered (sweepRekick) and honored once after the current
+// sweep finishes, so a lead arriving mid-sweep keeps event-driven latency
+// instead of silently waiting for the cron backstop.
 const sweepInFlight = new Set<string>();
+const sweepRekick = new Set<string>();
 
 export async function sweepCompanyQueuedLeads(companyId: string): Promise<{ assigned: number; attempted: number }> {
+  if (sweepInFlight.has(companyId)) {
+    metrics.increment("assignment.overlap_skipped");
+    logger.debug("sweep_skipped_inflight", { companyId });
+    return { assigned: 0, attempted: 0 };
+  }
+  sweepInFlight.add(companyId);
+  try {
+    return await runCompanySweep(companyId);
+  } finally {
+    sweepInFlight.delete(companyId);
+  }
+}
+
+async function runCompanySweep(companyId: string): Promise<{ assigned: number; attempted: number }> {
   // Phase 17: when Progressive Lead Release is ON, the backlog is drained by
   // the release engine (paced, tier-batched, reserve-aware) instead of this
   // full drain. Both triggers that reach here (heartbeat kick + cron) flow
@@ -100,21 +124,54 @@ export async function sweepCompanyQueuedLeads(companyId: string): Promise<{ assi
 
 // Fire-and-forget entry point for the heartbeat route. Never awaited by
 // the caller and never throws into it; the in-flight guard makes repeat
-// kicks during a sweep free.
+// kicks during a sweep free, and a kick that lands mid-sweep coalesces into
+// exactly one trailing sweep (missed-wakeup protection, never a loop).
 export function kickCompanySweep(companyId: string): void {
-  if (sweepInFlight.has(companyId)) return;
-  sweepInFlight.add(companyId);
-  sweepCompanyQueuedLeads(companyId)
+  if (sweepInFlight.has(companyId)) {
+    sweepRekick.add(companyId);
+    return;
+  }
+  void runKickedSweep(companyId);
+}
+
+function runKickedSweep(companyId: string): Promise<void> {
+  return sweepCompanyQueuedLeads(companyId)
+    .then(() => undefined)
     .catch((err) => {
       logger.error("queue_sweep_failed", { companyId, error: err instanceof Error ? err.message : String(err) });
     })
-    .finally(() => sweepInFlight.delete(companyId));
+    .finally(() => {
+      // Honor at most ONE coalesced kick that arrived while we were running.
+      if (sweepRekick.delete(companyId) && !sweepInFlight.has(companyId)) {
+        void runKickedSweep(companyId);
+      }
+    });
 }
 
 // Cron backstop: sweep every active company that actually has queued
 // leads. The EXISTS pre-filter keeps this a cheap no-op for the common
 // case (no backlog anywhere) instead of iterating every tenant.
+//
+// Single-flight per process: an overlapping cron tick (previous pass still
+// draining a large backlog) skips instead of doubling every query — the
+// next tick covers whatever remains. Outcomes are unchanged; only the
+// duplicate work is gone.
+let allSweepRunning = false;
 export async function sweepAllCompanies(): Promise<{ companies: number; assigned: number }> {
+  if (allSweepRunning) {
+    metrics.increment("assignment.overlap_skipped");
+    logger.warn("sweep_all_overlap_skipped", {});
+    return { companies: 0, assigned: 0 };
+  }
+  allSweepRunning = true;
+  try {
+    return await runAllCompaniesSweep();
+  } finally {
+    allSweepRunning = false;
+  }
+}
+
+async function runAllCompaniesSweep(): Promise<{ companies: number; assigned: number }> {
   const companiesWithQueue = await db
     .select({ companyId: automationSettings.companyId })
     .from(automationSettings)

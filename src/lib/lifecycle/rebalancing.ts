@@ -88,7 +88,29 @@ export async function rebalanceCompany(companyId: string): Promise<{ moved: numb
 }
 
 // Rebalance every company that has opted in via queue_config.rebalance.enabled.
+//
+// Single-flight per process. This one matters more than the other passes:
+// two overlapping rebalance passes each compute workloads from the SAME
+// snapshot and would each perform up to maxMovesPerRun moves — doubling the
+// intended churn per interval. The per-move atomic guard keeps every
+// individual move safe; this guard keeps the VOLUME exactly what the config
+// promises.
+let rebalancePassRunning = false;
 export async function rebalanceAllCompanies(): Promise<{ companies: number; moved: number }> {
+  if (rebalancePassRunning) {
+    metrics.increment("assignment.overlap_skipped");
+    logger.warn("rebalance_pass_overlap_skipped", {});
+    return { companies: 0, moved: 0 };
+  }
+  rebalancePassRunning = true;
+  try {
+    return await runRebalancePass();
+  } finally {
+    rebalancePassRunning = false;
+  }
+}
+
+async function runRebalancePass(): Promise<{ companies: number; moved: number }> {
   const rows = await db.execute(sql`
     SELECT company_id FROM automation_settings WHERE (queue_config #>> '{rebalance,enabled}') = 'true'
   `);

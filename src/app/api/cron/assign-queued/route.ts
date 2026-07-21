@@ -17,12 +17,31 @@ import { escalateOverdueSla } from "@/lib/lifecycle/sla";
 // It is a cheap no-op when there is no backlog (the sweep pre-filters to
 // only companies that actually have an unassigned lead), so a tight
 // schedule is fine and keeps worst-case queue latency low.
+// Hardening: entry-point single-flight. If the scheduler fires again while
+// the previous pass is still draining a large backlog, the new invocation
+// acknowledges and exits instead of doubling every recovery/sweep/queue
+// query — the classic cron-overlap retry storm. The inner passes carry their
+// own guards too (defense in depth for the heartbeat-kicked paths).
+let cronPassRunning = false;
+
 export async function POST(req: NextRequest) {
   const providedSecret = req.headers.get("x-cron-secret");
   if (!process.env.CRON_SECRET || providedSecret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (cronPassRunning) {
+    return NextResponse.json({ ok: true, skipped: "previous assign-queued pass still running" });
+  }
+  cronPassRunning = true;
+  try {
+    return await runPass();
+  } finally {
+    cronPassRunning = false;
+  }
+}
+
+async function runPass() {
   // Two backstops run here, both idempotent and convergent on the same
   // race-free atomic claim (so they can never double-assign):
   //  1. sweepAllCompanies() — the reactive owner-NULL sweep (unchanged): the

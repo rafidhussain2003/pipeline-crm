@@ -234,6 +234,14 @@ export async function processDueJobs(limit = 50): Promise<{ processed: number; a
   const jobs = await assignmentQueue.reserveDue(limit);
   let assigned = 0;
   for (const job of jobs) {
+    // Decide the job's fate first, then bookkeep it in its own guarded step:
+    // previously a transient DB failure inside complete()/retryOrDeadLetter()
+    // aborted the WHOLE reserved batch, stranding every remaining job in
+    // "processing" until the stale-reservation reclaim. Now one job's failed
+    // bookkeeping is logged and the loop keeps draining — that single job is
+    // exactly what the reclaim path exists to recover. Fates are unchanged.
+    let fate: "complete" | "retry" = "retry";
+    let retryReason = "";
     try {
       const res = await runPipeline({
         leadId: job.leadId,
@@ -244,15 +252,28 @@ export async function processDueJobs(limit = 50): Promise<{ processed: number; a
         attempt: job.attempts + 1,
       });
       if (res.outcome === "assigned") {
-        await assignmentQueue.complete(job.id);
+        fate = "complete";
         assigned++;
       } else if (res.outcome === "claim_lost" || res.outcome === "skipped") {
-        await assignmentQueue.complete(job.id);
+        fate = "complete";
       } else {
-        await assignmentQueue.retryOrDeadLetter(job, res.reason);
+        retryReason = res.reason;
       }
     } catch (err) {
-      await assignmentQueue.retryOrDeadLetter(job, err instanceof Error ? err.message : String(err));
+      retryReason = err instanceof Error ? err.message : String(err);
+    }
+    try {
+      if (fate === "complete") await assignmentQueue.complete(job.id);
+      else await assignmentQueue.retryOrDeadLetter(job, retryReason);
+    } catch (err) {
+      logger.error("job_bookkeeping_failed", {
+        jobId: job.id,
+        leadId: job.leadId,
+        fate,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // The row stays "processing"; reclaimStaleJobs() returns it to pending
+      // after the reservation timeout. Nothing is lost.
     }
   }
   return { processed: jobs.length, assigned };
@@ -262,8 +283,17 @@ export async function processDueJobs(limit = 50): Promise<{ processed: number; a
 // kickImport/kickCompanySweep already in this codebase. Drains until the
 // queue is empty of DUE work, then stops. Event-driven, never a polling loop.
 let workerRunning = false;
+// Missed-wakeup protection: a kick that lands while the worker is mid-drain
+// used to be dropped entirely — if the enqueue happened after the worker's
+// final (empty) reserve but before it flipped workerRunning off, that job
+// waited for the cron backstop. A dropped kick now coalesces into exactly
+// one trailing drain (a flag, never a queue — bursts still cost one run).
+let workerRekick = false;
 export function kickJobWorker(): void {
-  if (workerRunning) return;
+  if (workerRunning) {
+    workerRekick = true;
+    return;
+  }
   workerRunning = true;
   (async () => {
     try {
@@ -280,6 +310,10 @@ export function kickJobWorker(): void {
       logger.error("job_worker_crashed", { error: err instanceof Error ? err.message : String(err) });
     } finally {
       workerRunning = false;
+      if (workerRekick) {
+        workerRekick = false;
+        kickJobWorker();
+      }
     }
   })();
 }

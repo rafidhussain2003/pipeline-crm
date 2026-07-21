@@ -387,6 +387,13 @@ export async function runPipeline(request: AssignmentRequest): Promise<Assignmen
 
   // Phase 10 observability: assignment decision latency (p50/p95/max).
   metrics.recordTiming("assignment.decision_ms", decision.processingTimeMs);
+  // Hardening watchdog: a decision this slow means DB contention, lock
+  // queuing or an AI-strategy stall — surfaced loudly (with no lead PII)
+  // so it's visible before it becomes a queue backlog.
+  if (decision.processingTimeMs > 5_000) {
+    metrics.increment("assignment.slow_decision");
+    logger.warn("assignment_slow", { processingTimeMs: decision.processingTimeMs, outcome: decision.outcome, source, attempt });
+  }
 
   // STEP 7: lifecycle events + outcome metrics.
   const isRetryContext = source === "sweep" || source === "queue" || source === "recycle";

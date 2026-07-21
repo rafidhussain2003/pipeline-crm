@@ -57,6 +57,11 @@ export type MetricName =
   | "assignment.sla_escalated"
   | "assignment.skill_fallback"
   | "assignment.schedule_skipped"
+  // Hardening: duplicate/overlapping passes skipped by single-flight guards
+  // (cron overlap, concurrent per-company sweeps) and decisions that took
+  // abnormally long — both watchdogs for engine health, not behavior.
+  | "assignment.overlap_skipped"
+  | "assignment.slow_decision"
   | "supervisor.force_assigned"
   | "supervisor.force_recycled"
   | "supervisor.manual_assigned";
@@ -129,6 +134,8 @@ const ALL_METRIC_NAMES: MetricName[] = [
   "assignment.job_retried",
   "assignment.job_dead_lettered",
   "assignment.recovered",
+  "assignment.overlap_skipped",
+  "assignment.slow_decision",
   "assignment.recycled",
   "assignment.rebalanced",
   "assignment.dead_letter_retried",
