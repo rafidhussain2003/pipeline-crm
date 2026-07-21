@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { financeAccounts, financeJournalLines, financeSettings } from "@/db/schema";
 import { and, asc, count, eq, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { isUuid } from "@/lib/url";
 import { FinanceError, ACCOUNT_TYPES, type AccountType } from "./types";
 
 // The default chart every company starts from. System accounts (isSystem) can
@@ -56,6 +57,12 @@ function validateCode(code: string) {
 }
 
 export async function getAccount(companyId: string, accountId: string) {
+  // A non-uuid id (an empty account <select>, a tampered request) must be
+  // "not found" — previously it reached the uuid column, Postgres threw a
+  // 22P02 cast error, and the user saw a bare 500 instead of the service's
+  // clean "choose an account" message. Every finance flow that validates
+  // accounts goes through here, so this closes the whole class.
+  if (!accountId || !isUuid(accountId)) return null;
   const [row] = await db.select().from(financeAccounts).where(and(eq(financeAccounts.id, accountId), eq(financeAccounts.companyId, companyId))).limit(1);
   return row ?? null;
 }

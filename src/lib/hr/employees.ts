@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { hrDepartments, hrDesignations, hrEmployees, hrEmploymentTypes, users } from "@/db/schema";
 import { and, asc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { isSchemaLagError } from "@/lib/db-errors";
 import { hashPassword } from "@/lib/auth";
 import { checkAgentQuota } from "@/lib/tenant/limits";
 import { EMPLOYMENT_STATUSES, HRError, isValidDateStr, type EmploymentStatus } from "./types";
@@ -68,16 +69,30 @@ async function resolveEmployeeUser(
 }
 
 export async function getEmployee(companyId: string, id: string) {
-  const rows = await employeeQuery(companyId, eq(hrEmployees.id, id));
+  const rows = await runEmployeeQuery(companyId, eq(hrEmployees.id, id));
   return rows[0] ?? null;
 }
 export async function getEmployeeByUser(companyId: string, userId: string) {
-  const rows = await employeeQuery(companyId, eq(hrEmployees.userId, userId));
+  const rows = await runEmployeeQuery(companyId, eq(hrEmployees.userId, userId));
   return rows[0] ?? null;
 }
 
+// Migration-lag guard: monthly_salary ships in 0040. Until it lands, the
+// profile reads retry without the column (surfacing null) instead of
+// 500ing the HR directory. Loud log; self-heals when the migrator catches up.
+async function runEmployeeQuery(companyId: string, extra?: SQL) {
+  try {
+    return await employeeQuery(companyId, extra);
+  } catch (err) {
+    if (!isSchemaLagError(err)) throw err;
+    console.error("[hr-employees] monthly_salary column missing — migration 0040 not applied yet");
+    return employeeQuery(companyId, extra, { includeSalary: false });
+  }
+}
+
 // One shared select so every read returns the same enriched shape.
-function employeeQuery(companyId: string, extra?: SQL) {
+function employeeQuery(companyId: string, extra?: SQL, opts: { includeSalary?: boolean } = {}) {
+  const includeSalary = opts.includeSalary !== false;
   return db
     .select({
       id: hrEmployees.id,
@@ -105,7 +120,7 @@ function employeeQuery(companyId: string, extra?: SQL) {
       managerUserId: hrEmployees.managerUserId,
       managerName: sql<string | null>`(select u.name from users u where u.id = ${hrEmployees.managerUserId})`,
       workLocation: hrEmployees.workLocation,
-      monthlySalary: hrEmployees.monthlySalary,
+      monthlySalary: includeSalary ? hrEmployees.monthlySalary : sql<string | null>`null`,
       emergencyContact: hrEmployees.emergencyContact,
       profilePhotoUrl: hrEmployees.profilePhotoUrl,
       notes: hrEmployees.notes,

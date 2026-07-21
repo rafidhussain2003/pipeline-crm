@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
-import { requireFinance } from "@/lib/finance/guard";
+import { requireFinance, financeErrorResponse } from "@/lib/finance/guard";
 import { ensureFinanceSetup, listAccounts, getAccountBalances, listJournals, ledgerIntegrity, toCents, FINANCE_REPORTS } from "@/lib/finance";
+import { FinanceError } from "@/lib/finance/types";
 import { db } from "@/db";
 import { financeJournalLines, financeAccounts, financeInvestments, financeSettings } from "@/db/schema";
 import { and, eq, gte, sql } from "drizzle-orm";
+import { isSchemaLagError } from "@/lib/db-errors";
+import { createLogger } from "@/lib/logger";
+
+const logger = createLogger({ component: "finance-dashboard" });
 
 // Finance dashboard: cash/bank totals, month-to-date income & expenses, the
 // ledger integrity check, recent entries, and the report placeholders.
@@ -11,6 +16,18 @@ export async function GET() {
   const auth = await requireFinance("finance:view");
   if (!auth.ok) return auth.response;
   const companyId = auth.session.companyId;
+  try {
+    return await buildDashboard(companyId);
+  } catch (err) {
+    if (err instanceof FinanceError) return financeErrorResponse(err);
+    // The real error goes to the server log with the tenant — previously it
+    // vanished into a bare 500 and the page could only say "couldn't load".
+    logger.error("finance_dashboard_failed", { companyId, error: err instanceof Error ? err.message : String(err) });
+    return NextResponse.json({ error: "The finance dashboard could not load. The error has been logged — try again shortly." }, { status: 500 });
+  }
+}
+
+async function buildDashboard(companyId: string) {
   await ensureFinanceSetup(companyId);
 
   const [accounts, balances, recent, integrity, activeInvestments, [settings]] = await Promise.all([
@@ -19,10 +36,17 @@ export async function GET() {
     listJournals(companyId, { limit: 8 }),
     ledgerIntegrity(companyId),
     // Enterprise Workspace tiles: current value of live investments.
+    // Migration-lag guard: finance_investments ships in 0040 — until it
+    // lands, the tile reads zero instead of 500ing the entire dashboard.
     db
       .select({ currentValue: financeInvestments.currentValue })
       .from(financeInvestments)
-      .where(and(eq(financeInvestments.companyId, companyId), eq(financeInvestments.status, "active"))),
+      .where(and(eq(financeInvestments.companyId, companyId), eq(financeInvestments.status, "active")))
+      .catch((err) => {
+        if (!isSchemaLagError(err)) throw err;
+        logger.error("finance_investments_schema_lag", { companyId, detail: "migration 0040 not applied yet" });
+        return [] as { currentValue: string }[];
+      }),
     db.select({ defaultCurrency: financeSettings.defaultCurrency }).from(financeSettings).where(eq(financeSettings.companyId, companyId)).limit(1),
   ]);
 

@@ -22,6 +22,7 @@ import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { cache } from "@/lib/infra/cache";
 import { recordAudit } from "@/lib/audit";
+import { isSchemaLagError } from "@/lib/db-errors";
 import type { Role } from "@/lib/permissions";
 
 // The assignable modules. Future modules (Recruitment, Reports, …) = one row
@@ -58,16 +59,26 @@ const cacheKey = (userId: string) => `module-access:${userId}`;
 
 // The stored assignment (or null when the user has never been assigned).
 async function storedAccess(userId: string): Promise<Record<string, boolean> | null> {
-  return cache.getOrSet(cacheKey(userId), TTL, async () => {
-    const [row] = await db.select({ m: users.moduleAccess }).from(users).where(eq(users.id, userId)).limit(1);
-    const raw = row?.m;
-    if (!raw || typeof raw !== "object") return null;
-    const out: Record<string, boolean> = {};
-    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-      if (typeof v === "boolean" && isModuleKey(k)) out[k] = v;
-    }
-    return Object.keys(out).length > 0 ? out : null;
-  });
+  try {
+    return await cache.getOrSet(cacheKey(userId), TTL, async () => {
+      const [row] = await db.select({ m: users.moduleAccess }).from(users).where(eq(users.id, userId)).limit(1);
+      const raw = row?.m;
+      if (!raw || typeof raw !== "object") return null;
+      const out: Record<string, boolean> = {};
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof v === "boolean" && isModuleKey(k)) out[k] = v;
+      }
+      return Object.keys(out).length > 0 ? out : null;
+    });
+  } catch (err) {
+    // Migration lag (users.module_access ships in 0040): a missing column
+    // must behave exactly like "no assignment yet" — role defaults — not
+    // 500 every guarded page for every non-admin. Loud log, self-heals the
+    // moment the boot migrator lands the column.
+    if (!isSchemaLagError(err)) throw err;
+    console.error("[module-access] module_access column missing — migration 0040 not applied yet; using role defaults");
+    return null;
+  }
 }
 
 // The user's effective access map (assignment overlaid on role defaults).

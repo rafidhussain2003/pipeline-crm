@@ -280,7 +280,11 @@ export default function Sidebar({
           <span aria-hidden="true" className="block text-lg leading-none">×</span>
         </button>
       </div>
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      {/* min-h-0 + overflow-y-auto: without them a long nav (CRM + workspace
+          links + module groups) overflowed invisibly and the lower items were
+          simply unreachable — flex children don't shrink below content height
+          by default, so the list must be its own scroll container. */}
+      <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-1">
         {/* Enterprise Workspaces: inside /hr or /finance the sidebar IS that
             workspace's navigation. The CRM nav below renders only outside. */}
         {workspace === "hr" && (

@@ -4,6 +4,7 @@
 import { db } from "@/db";
 import { financeAccounts, financeJournalLines, financeJournals } from "@/db/schema";
 import { and, asc, eq, gte, lte, sql } from "drizzle-orm";
+import { isUuid } from "@/lib/url";
 import { FinanceError, isValidDateString } from "./types";
 
 export interface LedgerQuery {
@@ -18,6 +19,9 @@ export interface LedgerQuery {
 // opening figure is the SUM of everything before `from` (one indexed
 // aggregate), so pagination and date-windowing stay exact.
 export async function getAccountLedger(companyId: string, q: LedgerQuery) {
+  // Same discipline as getAccount(): a malformed id is "not found", never a
+  // Postgres uuid-cast 500.
+  if (!q.accountId || !isUuid(q.accountId)) throw new FinanceError("Account not found", 404);
   const [account] = await db
     .select({ id: financeAccounts.id, code: financeAccounts.code, name: financeAccounts.name, type: financeAccounts.type })
     .from(financeAccounts)
