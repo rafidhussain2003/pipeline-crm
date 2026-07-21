@@ -1,14 +1,71 @@
 // Phase 22 — EmployeeService: the master employee directory. An HR employee is
 // a 1:1 extension of a company `user` (userId unique); email/phone/login-name
 // are read through from `users` (single source, never duplicated here).
+import crypto from "crypto";
 import { db } from "@/db";
 import { hrDepartments, hrDesignations, hrEmployees, hrEmploymentTypes, users } from "@/db/schema";
 import { and, asc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { hashPassword } from "@/lib/auth";
+import { checkAgentQuota } from "@/lib/tenant/limits";
 import { EMPLOYMENT_STATUSES, HRError, isValidDateStr, type EmploymentStatus } from "./types";
 import { assertCompanyUser, isDup } from "./departments";
 import { ensureHRSetup, getHRSettings, nextEmployeeCode } from "./settings";
 import { assertNoCycle } from "./organization";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Enterprise HR Workspace: "add any employee by email". Resolves the email
+// to a company user — linking the existing member when the address is
+// already theirs, otherwise creating the identity on the spot:
+//   • role "agent", random unusable temp password, mustChangePassword set —
+//     they can't sign in until an admin resets/hands them a password;
+//   • moduleAccess { crm: false } — an HR hire is an employee record first,
+//     NOT a CRM seat member; the admin grants modules explicitly from the
+//     employee's System Permissions card (they keep HR "My Profile" access
+//     via the role default);
+//   • the agent-seat quota still applies — HR is not a side door around
+//     plan limits.
+async function resolveEmployeeUser(
+  companyId: string,
+  email: string,
+  displayName: string,
+): Promise<{ userId: string; createdLogin: boolean }> {
+  const normalized = email.trim().toLowerCase();
+  if (!EMAIL_RE.test(normalized)) throw new HRError("A valid email is required");
+
+  const [existing] = await db
+    .select({ id: users.id, companyId: users.companyId, deletedAt: users.deletedAt })
+    .from(users)
+    .where(eq(users.email, normalized))
+    .limit(1);
+  if (existing) {
+    if (existing.companyId !== companyId || existing.deletedAt) {
+      throw new HRError("That email already belongs to another workspace");
+    }
+    return { userId: existing.id, createdLogin: false };
+  }
+
+  const quota = await checkAgentQuota(companyId);
+  if (!quota.allowed) throw new HRError(quota.warning || "Agent limit reached for this plan.", 402);
+
+  const passwordHash = await hashPassword(crypto.randomBytes(24).toString("hex"));
+  const [created] = await db
+    .insert(users)
+    .values({
+      companyId,
+      name: displayName || normalized,
+      email: normalized,
+      passwordHash,
+      role: "agent",
+      tier: "1",
+      active: true,
+      mustChangePassword: true,
+      moduleAccess: { crm: false },
+    })
+    .returning({ id: users.id });
+  return { userId: created.id, createdLogin: true };
+}
 
 export async function getEmployee(companyId: string, id: string) {
   const rows = await employeeQuery(companyId, eq(hrEmployees.id, id));
@@ -105,7 +162,9 @@ export async function listEmployees(companyId: string, opts: ListEmployeesOpts =
 }
 
 export interface CreateEmployeeInput {
-  userId: string;
+  // Link to an existing member — or omit and provide `email` to add anyone.
+  userId?: string;
+  email?: string;
   employeeCode?: string;
   firstName: string;
   lastName?: string | null;
@@ -146,8 +205,27 @@ async function validateRefs(companyId: string, input: { departmentId?: string | 
 export async function createEmployee(companyId: string, actorUserId: string, input: CreateEmployeeInput) {
   await ensureHRSetup(companyId);
   if (!input.firstName?.trim()) throw new HRError("First name is required");
-  await assertCompanyUser(companyId, input.userId);
-  if (input.managerUserId && input.managerUserId === input.userId) throw new HRError("An employee cannot report to themselves");
+
+  // Two doors, one record: an explicit userId links a known member; an email
+  // links-or-creates (see resolveEmployeeUser). Exactly one is required.
+  let userId: string;
+  let createdLogin = false;
+  if (input.userId) {
+    await assertCompanyUser(companyId, input.userId);
+    userId = input.userId;
+  } else if (input.email?.trim()) {
+    const resolved = await resolveEmployeeUser(
+      companyId,
+      input.email,
+      [input.firstName.trim(), input.lastName?.trim()].filter(Boolean).join(" "),
+    );
+    userId = resolved.userId;
+    createdLogin = resolved.createdLogin;
+  } else {
+    throw new HRError("An email is required");
+  }
+
+  if (input.managerUserId && input.managerUserId === userId) throw new HRError("An employee cannot report to themselves");
   await validateRefs(companyId, input);
 
   const settings = await getHRSettings(companyId);
@@ -158,7 +236,7 @@ export async function createEmployee(companyId: string, actorUserId: string, inp
       .insert(hrEmployees)
       .values({
         companyId,
-        userId: input.userId,
+        userId,
         employeeCode,
         firstName: input.firstName.trim(),
         lastName: input.lastName?.trim() || null,
@@ -176,7 +254,7 @@ export async function createEmployee(companyId: string, actorUserId: string, inp
         notes: input.notes?.trim() || null,
       })
       .returning();
-    await recordAudit({ companyId, userId: actorUserId, action: "hr.employee_created", entityType: "hr_employee", entityId: row.id, after: { employeeCode: row.employeeCode, userId: row.userId, firstName: row.firstName } });
+    await recordAudit({ companyId, userId: actorUserId, action: "hr.employee_created", entityType: "hr_employee", entityId: row.id, after: { employeeCode: row.employeeCode, userId: row.userId, firstName: row.firstName }, metadata: { createdLogin } });
     return getEmployee(companyId, row.id);
   } catch (err) {
     if (isDup(err, "hr_employees_company_user_uniq")) throw new HRError("This user already has an HR profile");

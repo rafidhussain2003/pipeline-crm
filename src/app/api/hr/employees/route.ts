@@ -25,7 +25,8 @@ export async function POST(req: NextRequest) {
   const b = await req.json().catch(() => ({}));
   try {
     const employee = await createEmployee(auth.session.companyId, auth.session.userId, {
-      userId: String(b?.userId ?? ""),
+      userId: typeof b?.userId === "string" && b.userId ? b.userId : undefined,
+      email: typeof b?.email === "string" && b.email ? b.email : undefined,
       employeeCode: typeof b?.employeeCode === "string" ? b.employeeCode : undefined,
       firstName: String(b?.firstName ?? ""),
       lastName: b?.lastName ?? null,

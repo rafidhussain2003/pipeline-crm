@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { users, companies } from "@/db/schema";
-import { getSession, hashPassword } from "@/lib/auth";
+import { hashPassword } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
 import { and, eq, isNull, ilike, or, asc } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
@@ -166,13 +166,21 @@ export async function POST(req: NextRequest) {
   // Phase 13: send the invitation email with the temporary password + notify
   // the inviting admin. Both best-effort — a mail/notify failure never fails
   // the creation (the admin can resend/copy the temp password from the UI).
-  try {
-    const [co] = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, session.companyId)).limit(1);
-    await sendInvitationEmail({ email, name: name.trim(), companyName: co?.name || "your team", tempPassword: password });
-  } catch (err) {
-    console.error("Failed to send invitation email:", err);
-  }
-  await sendNotification({ companyId: session.companyId, userId: session.userId, type: "agent.invited", title: "Agent invited", body: `${name.trim()} (${email}) was invited to the team.`, metadata: { userId: user.id } }).catch(() => {});
+  //
+  // FIRE-AND-FORGET, deliberately not awaited: the Resend call has no
+  // timeout, so a slow/unreachable mail provider used to hold this response
+  // (and the "Adding…" button) hostage for the full network timeout. The
+  // agent is already created at this point — the response returns now and
+  // the email goes out in the background.
+  (async () => {
+    try {
+      const [co] = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, session.companyId)).limit(1);
+      await sendInvitationEmail({ email, name: name.trim(), companyName: co?.name || "your team", tempPassword: password });
+    } catch (err) {
+      console.error("Failed to send invitation email:", err);
+    }
+    await sendNotification({ companyId: session.companyId, userId: session.userId, type: "agent.invited", title: "Agent invited", body: `${name.trim()} (${email}) was invited to the team.`, metadata: { userId: user.id } }).catch(() => {});
+  })();
 
   return NextResponse.json({
     user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, tier: user.tier, active: user.active },

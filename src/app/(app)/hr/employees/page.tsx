@@ -8,7 +8,6 @@ type Detail = Employee & { phone: string | null; loginName: string; preferredNam
 type AuditEntry = { id: string; action: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; createdAt: string; actorName: string | null };
 type ModuleDef = { key: string; label: string; description: string };
 type Ref = { id: string; name?: string; title?: string };
-type UserOpt = { id: string; name: string; email: string };
 
 export default function HREmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -124,8 +123,7 @@ function DetailModal({ detail, onClose, onEdit, onDeleted, onError }: { detail: 
 }
 
 function EmployeeModal({ editId, departments, designations, types, employees, onClose, onSaved, onError }: { editId?: string; departments: Ref[]; designations: Ref[]; types: Ref[]; employees: Employee[]; onClose: () => void; onSaved: () => void; onError: (s: string) => void }) {
-  const [unprofiled, setUnprofiled] = useState<UserOpt[]>([]);
-  const [form, setForm] = useState<Record<string, string>>({ userId: "", firstName: "", lastName: "", employmentStatus: "active", departmentId: "", designationId: "", employmentTypeId: "", managerUserId: "", joiningDate: "", dateOfBirth: "", workLocation: "", monthlySalary: "", notes: "" });
+  const [form, setForm] = useState<Record<string, string>>({ userId: "", email: "", firstName: "", lastName: "", employmentStatus: "active", departmentId: "", designationId: "", employmentTypeId: "", managerUserId: "", joiningDate: "", dateOfBirth: "", workLocation: "", monthlySalary: "", notes: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -134,10 +132,8 @@ function EmployeeModal({ editId, departments, designations, types, employees, on
       fetch(`/api/hr/employees/${editId}`).then(async (r) => {
         if (!r.ok) return;
         const e = (await r.json()).employee;
-        setForm({ userId: e.userId, firstName: e.firstName || "", lastName: e.lastName || "", employmentStatus: e.employmentStatus, departmentId: e.departmentId || "", designationId: e.designationId || "", employmentTypeId: e.employmentTypeId || "", managerUserId: e.managerUserId || "", joiningDate: e.joiningDate || "", dateOfBirth: e.dateOfBirth || "", workLocation: e.workLocation || "", monthlySalary: e.monthlySalary || "", notes: e.notes || "" });
+        setForm({ userId: e.userId, email: "", firstName: e.firstName || "", lastName: e.lastName || "", employmentStatus: e.employmentStatus, departmentId: e.departmentId || "", designationId: e.designationId || "", employmentTypeId: e.employmentTypeId || "", managerUserId: e.managerUserId || "", joiningDate: e.joiningDate || "", dateOfBirth: e.dateOfBirth || "", workLocation: e.workLocation || "", monthlySalary: e.monthlySalary || "", notes: e.notes || "" });
       });
-    } else {
-      fetch("/api/hr/employees?unprofiled=1").then(async (r) => { if (r.ok) setUnprofiled((await r.json()).users || []); });
     }
   }, [editId]);
 
@@ -166,12 +162,18 @@ function EmployeeModal({ editId, departments, designations, types, employees, on
         <div className="space-y-3">
           {!editId && (
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">User (must be a company member without a profile)</label>
-              <select value={form.userId} onChange={(e) => set("userId", e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
-                <option value="" disabled>Select a user…</option>
-                {unprofiled.map((u) => <option key={u.id} value={u.id}>{u.name} — {u.email}</option>)}
-              </select>
-              {unprofiled.length === 0 && <p className="text-[11px] text-slate-400 mt-1">Every company member already has an HR profile.</p>}
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Email</label>
+              <input
+                type="email"
+                value={form.email}
+                onChange={(e) => set("email", e.target.value)}
+                placeholder="employee@company.com"
+                className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                An existing team member&apos;s email links their account; any other email creates the employee directly
+                (no system access until you assign modules and a password).
+              </p>
             </div>
           )}
           <div className="grid grid-cols-2 gap-3">
@@ -220,7 +222,7 @@ function EmployeeModal({ editId, departments, designations, types, employees, on
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
-          <button onClick={save} disabled={saving || (!editId && !form.userId)} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+          <button onClick={save} disabled={saving || (!editId && !form.email.trim())} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
         </div>
       </div>
     </div>
