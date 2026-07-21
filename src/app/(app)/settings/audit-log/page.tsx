@@ -55,20 +55,59 @@ const ACTION_LABELS: Record<string, string> = {
 export default function AuditLogPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [error, setError] = useState("");
+
+  // Loads one page of 50. With a cursor (the oldest visible entry) it
+  // appends the NEXT 50 older entries; without one it loads the first page.
+  async function loadPage(cursor?: { before: string; beforeId: string }) {
+    setError("");
+    const params = new URLSearchParams();
+    if (cursor) {
+      params.set("before", cursor.before);
+      params.set("beforeId", cursor.beforeId);
+    }
+    try {
+      const res = await fetch(`/api/audit-log${params.size ? `?${params}` : ""}`);
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "Could not load the audit log");
+      const d = await res.json();
+      const page: Entry[] = d.entries || [];
+      setEntries((prev) => {
+        if (!cursor) return page;
+        // Belt-and-braces dedupe on append — the cursor already prevents
+        // overlaps, this keeps React keys safe no matter what.
+        const seen = new Set(prev.map((e) => e.id));
+        return [...prev, ...page.filter((e) => !seen.has(e.id))];
+      });
+      setHasMore(!!d.hasMore);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load the audit log");
+    }
+  }
 
   useEffect(() => {
-    fetch("/api/audit-log")
-      .then((r) => r.json())
-      .then((d) => {
-        setEntries(d.entries || []);
-        setLoading(false);
-      });
+    loadPage().finally(() => setLoading(false));
   }, []);
+
+  async function loadMore() {
+    const last = entries[entries.length - 1];
+    if (!last || loadingMore) return;
+    setLoadingMore(true);
+    await loadPage({ before: last.createdAt, beforeId: last.id });
+    setLoadingMore(false);
+  }
 
   return (
     <div className="p-6 max-w-3xl">
       <h1 className="text-xl font-semibold text-slate-900 mb-1">Audit Log</h1>
       <p className="text-sm text-slate-500 mb-6">A record of who did what, for governance and accountability.</p>
+
+      {error && (
+        <div role="alert" className="mb-4 text-sm bg-red-50 border border-red-100 text-red-800 rounded-md px-3 py-2">
+          {error}
+        </div>
+      )}
 
       <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-100">
         {loading && <div className="p-4 text-sm text-slate-400">Loading…</div>}
@@ -83,6 +122,23 @@ export default function AuditLogPage() {
           </div>
         ))}
       </div>
+
+      {/* Next 50 older entries, on demand — the page never loads more than
+          the admin actually asks to see. */}
+      {!loading && hasMore && (
+        <div className="mt-4 text-center">
+          <button
+            onClick={loadMore}
+            disabled={loadingMore}
+            className="text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-md px-5 py-2 disabled:opacity-50"
+          >
+            {loadingMore ? "Loading…" : "Load more logs"}
+          </button>
+        </div>
+      )}
+      {!loading && !hasMore && entries.length > 0 && (
+        <p className="mt-4 text-center text-xs text-slate-400">End of the audit log.</p>
+      )}
     </div>
   );
 }
