@@ -295,6 +295,13 @@
       "when": 1784646032742,
       "tag": "0041_add_callback_inprogress_disconnected_dispositions",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1784649516288,
+      "tag": "0042_ensure_full_disposition_taxonomy",
+      "breakpoints": true
     }
   ]
 }

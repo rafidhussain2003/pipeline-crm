@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { dispositionOptions } from "@/db/schema";
 import { getSession } from "@/lib/auth";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { isUniqueViolation, isUndefinedColumn } from "@/lib/db-errors";
 import { DISPOSITION_CATEGORIES, DEFAULT_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
@@ -13,13 +13,14 @@ type DispositionRow = { id: string; companyId: string; label: string; color: str
 // (migration 0037); against a database where that migration hasn't been
 // applied yet, Postgres answers 42703 — fall back to the pre-0037 columns
 // with everything under one bucket until the migrator catches the schema up.
-async function loadDispositions(companyId: string): Promise<DispositionRow[]> {
+async function loadDispositions(companyId: string): Promise<{ rows: DispositionRow[]; lagged: boolean }> {
   try {
-    return await db
+    const rows = await db
       .select()
       .from(dispositionOptions)
       .where(eq(dispositionOptions.companyId, companyId))
       .orderBy(asc(dispositionOptions.sortOrder));
+    return { rows, lagged: false };
   } catch (err) {
     if (!isUndefinedColumn(err)) throw err;
     console.error("[dispositions] category column missing — migration 0037 not applied yet; serving legacy shape");
@@ -34,7 +35,7 @@ async function loadDispositions(companyId: string): Promise<DispositionRow[]> {
       .from(dispositionOptions)
       .where(eq(dispositionOptions.companyId, companyId))
       .orderBy(asc(dispositionOptions.sortOrder));
-    return rows.map((r) => ({ ...r, category: "OTHER" }));
+    return { rows: rows.map((r) => ({ ...r, category: "OTHER" })), lagged: true };
   }
 }
 
@@ -42,7 +43,9 @@ export async function GET() {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  let rows = await loadDispositions(session.companyId);
+  const loaded = await loadDispositions(session.companyId);
+  let rows = loaded.rows;
+  const lagged = loaded.lagged;
 
   // Self-healing defaults: the platform taxonomy must exist for every
   // company even when the data migrations that backfill it haven't run
@@ -51,27 +54,49 @@ export async function GET() {
   // — idempotent under the (company_id, label) unique index, and schema-lag
   // aware (no category column needed). Whoever loads the dropdown first
   // heals their company.
-  const have = new Set(rows.map((r) => r.label));
-  const missing = DEFAULT_DISPOSITIONS.filter((d) => !have.has(d.label));
-  if (missing.length > 0) {
+  const byLabel = new Map(rows.map((r) => [r.label, r]));
+  const missing = DEFAULT_DISPOSITIONS.filter((d) => !byLabel.has(d.label));
+  // Rows seeded BEFORE the category column existed sit in OTHER with the
+  // right label but the wrong group — normalize taxonomy labels back to
+  // their defined category/sort. Only meaningful when the real category
+  // column is readable (not the lag fallback), and only for taxonomy labels
+  // — admin-created customs are never touched.
+  const misplaced = lagged
+    ? []
+    : DEFAULT_DISPOSITIONS.filter((d) => {
+        const row = byLabel.get(d.label);
+        return row !== undefined && (row.category !== d.category || row.sortOrder !== d.sortOrder);
+      });
+
+  if (missing.length > 0 || misplaced.length > 0) {
     try {
-      try {
-        await db
-          .insert(dispositionOptions)
-          .values(missing.map((d) => ({ companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder, category: d.category })))
-          .onConflictDoNothing();
-      } catch (err) {
-        if (!isUndefinedColumn(err)) throw err;
-        await db
-          .insert(dispositionOptions)
-          .values(missing.map((d) => ({ companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder })))
-          .onConflictDoNothing();
+      if (missing.length > 0) {
+        try {
+          await db
+            .insert(dispositionOptions)
+            .values(missing.map((d) => ({ companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder, category: d.category })))
+            .onConflictDoNothing();
+        } catch (err) {
+          if (!isUndefinedColumn(err)) throw err;
+          await db
+            .insert(dispositionOptions)
+            .values(missing.map((d) => ({ companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder })))
+            .onConflictDoNothing();
+        }
       }
-      console.log(`[dispositions] seeded ${missing.length} missing default dispositions for company ${session.companyId}`);
-      rows = await loadDispositions(session.companyId);
+      for (const d of misplaced) {
+        await db
+          .update(dispositionOptions)
+          .set({ category: d.category, sortOrder: d.sortOrder })
+          .where(and(eq(dispositionOptions.companyId, session.companyId), eq(dispositionOptions.label, d.label)));
+      }
+      console.log(
+        `[dispositions] healed defaults for company ${session.companyId} (seeded ${missing.length}, regrouped ${misplaced.length})`
+      );
+      ({ rows } = await loadDispositions(session.companyId));
     } catch (err) {
       // Serving what exists always beats a dead dropdown.
-      console.error("[dispositions] could not seed missing defaults:", err instanceof Error ? err.message : err);
+      console.error("[dispositions] could not heal defaults:", err instanceof Error ? err.message : err);
     }
   }
 
