@@ -13,7 +13,14 @@ import { cache } from "@/lib/infra/cache";
 import { recordAudit } from "@/lib/audit";
 import { defaultFeatureMap, featureDef, isKnownFeature, type FeatureKey } from "./registry";
 
-const TTL = 60_000;
+// 15s, not 60s: setCompanyFeatures' cache.delete only invalidates THIS
+// module graph's in-memory cache — the app layout, the proxy and the route
+// handlers are separate bundles with separate cache instances, so their
+// copies live out the TTL. At 60s an owner's grant could look "not working"
+// for a full minute on the company side. 15s makes a grant effectively
+// immediate while still amortizing to one PK jsonb read per company per 15s
+// worst case.
+const TTL = 15_000;
 const cacheKey = (companyId: string) => `features:${companyId}`;
 
 export type FeatureMap = Record<string, boolean>;

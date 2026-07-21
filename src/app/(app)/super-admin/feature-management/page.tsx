@@ -30,25 +30,51 @@ export default function FeatureManagementPage() {
     return list.slice(0, 50);
   }, [allCompanies, search]);
 
+  // Plain derivations (React Compiler memoizes) — declared before
+  // openCompany, which guards on `dirty` when switching companies.
+  const dirty = catalog.some((f) => draft[f.key] !== enabled[f.key]);
+  const dirtyCount = catalog.filter((f) => draft[f.key] !== enabled[f.key]).length;
+
   async function openCompany(company: Company) {
+    // A toggle is only a DRAFT until Save is clicked — switching companies
+    // with unsaved changes used to silently discard them while the columns
+    // still LOOKED applied. That is exactly how a "granted" module never
+    // reaches the company. Never lose a draft silently.
+    if (selected && selected.id !== company.id && dirty) {
+      const leave = window.confirm(`You have unsaved module changes for ${selected.name}. Discard them?`);
+      if (!leave) return;
+    }
     setSelected(company);
     setMessage(null);
-    const res = await fetch(`/api/super-admin/companies/${company.id}/features`);
-    if (!res.ok) {
-      setMessage({ kind: "error", text: "Could not load this company's features." });
-      return;
+    try {
+      const res = await fetch(`/api/super-admin/companies/${company.id}/features`);
+      if (!res.ok) {
+        setMessage({ kind: "error", text: "Could not load this company's features." });
+        return;
+      }
+      const data = await res.json();
+      setCatalog(data.catalog || []);
+      setEnabled(data.enabled || {});
+      setDraft(data.enabled || {});
+    } catch {
+      setMessage({ kind: "error", text: "Could not load this company's features. Check your connection and try again." });
     }
-    const data = await res.json();
-    setCatalog(data.catalog || []);
-    setEnabled(data.enabled || {});
-    setDraft(data.enabled || {});
   }
 
   function toggle(key: string) {
     setDraft((d) => ({ ...d, [key]: !d[key] }));
   }
 
-  const dirty = useMemo(() => catalog.some((f) => draft[f.key] !== enabled[f.key]), [catalog, draft, enabled]);
+  // Closing the tab / navigating away with unsaved toggles gets the browser's
+  // "leave site?" prompt — the same protection as the company-switch guard.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
 
   async function save() {
     if (!selected) return;
@@ -58,21 +84,32 @@ export default function FeatureManagementPage() {
     // the owner changed, nothing else.
     const patch: Record<string, boolean> = {};
     for (const f of catalog) if (draft[f.key] !== enabled[f.key]) patch[f.key] = draft[f.key];
-    const res = await fetch(`/api/super-admin/companies/${selected.id}/features`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ features: patch }),
-    });
+    // A thrown fetch (network drop mid-save) used to reject unhandled — the
+    // owner saw NOTHING and the grant silently never happened. Every failure
+    // now lands in the visible error banner, with the draft intact so Save
+    // can simply be clicked again.
+    let res: Response;
+    try {
+      res = await fetch(`/api/super-admin/companies/${selected.id}/features`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ features: patch }),
+      });
+    } catch {
+      setSaving(false);
+      setMessage({ kind: "error", text: "Save failed — network error. Your changes are still here; click Save to retry." });
+      return;
+    }
     setSaving(false);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      setMessage({ kind: "error", text: data.error || "Save failed." });
+      setMessage({ kind: "error", text: `${data.error || "Save failed."} Your changes are still here; fix and click Save again.` });
       return;
     }
     const data = await res.json();
     setEnabled(data.enabled);
     setDraft(data.enabled);
-    setMessage({ kind: "ok", text: "Saved. Changes take effect for the company within a minute." });
+    setMessage({ kind: "ok", text: "Saved. The company has these modules now (allow a few seconds for open sessions)." });
   }
 
   const enabledList = catalog.filter((f) => draft[f.key]);
@@ -121,17 +158,35 @@ export default function FeatureManagementPage() {
                 <h2 className="text-base font-semibold text-slate-900">{selected.name}</h2>
                 <p className="text-xs text-slate-400 capitalize mt-0.5">{selected.plan} plan · {selected.subscriptionStatus}</p>
               </div>
-              <button
-                onClick={save}
-                disabled={!dirty || saving}
-                className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-40"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {dirty && (
+                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
+                    {dirtyCount} unsaved {dirtyCount === 1 ? "change" : "changes"} — not applied yet
+                  </span>
+                )}
+                <button
+                  onClick={save}
+                  disabled={!dirty || saving}
+                  className={`text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-40 ${
+                    dirty ? "bg-amber-600 hover:bg-amber-700" : "bg-slate-900"
+                  }`}
+                >
+                  {saving ? "Saving…" : dirty ? "Save Changes" : "Save"}
+                </button>
+              </div>
             </div>
 
             {message && (
-              <p className={`text-xs mb-3 ${message.kind === "ok" ? "text-emerald-600" : "text-red-600"}`}>{message.text}</p>
+              <div
+                role={message.kind === "error" ? "alert" : "status"}
+                className={`text-sm mb-3 rounded-md border px-3 py-2 ${
+                  message.kind === "ok"
+                    ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                    : "text-red-700 bg-red-50 border-red-200"
+                }`}
+              >
+                {message.text}
+              </div>
             )}
 
             <div className="grid sm:grid-cols-2 gap-5">
