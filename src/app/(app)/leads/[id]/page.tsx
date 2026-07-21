@@ -163,7 +163,9 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
   const [saleClosedOpen, setSaleClosedOpen] = useState(false);
   const [installDate, setInstallDate] = useState("");
   const [saleNote, setSaleNote] = useState("");
-  const [callBackLaterOpen, setCallBackLaterOpen] = useState(false);
+  // Which callback-promising disposition is pending ("Call Back Later" or
+  // "Call Back") — it applies only after the callback is actually booked.
+  const [callBackLaterOpen, setCallBackLaterOpen] = useState<string | null>(null);
   // Note-required flow (Hung Up / High Price / Not Interested).
   const [noteGate, setNoteGate] = useState<{ disposition: string; title: string; placeholder: string } | null>(null);
   const [gateNote, setGateNote] = useState("");
@@ -344,9 +346,9 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
       setConfirmDnc(true);
       return;
     }
-    if (next === "Call Back Later") {
+    if (next === "Call Back Later" || next === "Call Back") {
       // Mandatory callback: the disposition only saves after one is booked.
-      setCallBackLaterOpen(true);
+      setCallBackLaterOpen(next);
       return;
     }
     if (next === "Sale Closed") {
@@ -1129,17 +1131,18 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
         </WorkspaceModal>
       )}
 
-      {/* Call Back Later — REQUIRES a scheduled callback; the disposition is
-          applied only after the callback is actually saved. */}
+      {/* Call Back Later / Call Back — REQUIRE a scheduled callback; the
+          disposition is applied only after the callback is actually saved. */}
       {callBackLaterOpen && (
         <ScheduleCallbackModal
           leadId={id}
           leadName={lead.name}
-          onClose={() => setCallBackLaterOpen(false)}
+          onClose={() => setCallBackLaterOpen(null)}
           onSaved={() => {
-            setCallBackLaterOpen(false);
+            const pending = callBackLaterOpen;
+            setCallBackLaterOpen(null);
             setCbRefresh((n) => n + 1);
-            applyDisposition("Call Back Later");
+            applyDisposition(pending);
           }}
         />
       )}

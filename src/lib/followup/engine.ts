@@ -86,9 +86,9 @@ export function computeFollowUp(lead: FollowUpLeadState, openCallback: OpenCallb
     return finish("None — lead closed", null, "low", `Marked "${d}"`);
   }
 
-  // 3. "Call Back Later" without an actual callback on the books is a broken
-  //    promise in the making.
-  if (d === "Call Back Later" || d === "Follow-up Scheduled") {
+  // 3. A promised callback ("Call Back Later" / "Call Back") without an
+  //    actual callback on the books is a broken promise in the making.
+  if (d === "Call Back Later" || d === "Call Back" || d === "Follow-up Scheduled") {
     if (lead.followUpAt) return finish("Follow up as planned", lead.followUpAt, "high", "Follow-up date on file");
     return finish("Schedule the promised callback", now, "urgent", `Disposition is "${d}" but no callback is scheduled`);
   }
@@ -100,7 +100,7 @@ export function computeFollowUp(lead: FollowUpLeadState, openCallback: OpenCallb
   }
 
   // 5. Contact attempted but not reached: retry on a short clock.
-  if (d === "No Answer" || d === "Busy" || d === "Voicemail Left") {
+  if (d === "No Answer" || d === "Busy" || d === "Voicemail Left" || d === "Disconnected") {
     const due = new Date(lead.updatedAt.getTime() + 3 * HOUR);
     return finish("Retry the call", due, "normal", `Last attempt ended "${d}"`);
   }

@@ -46,10 +46,15 @@ export const DEFAULT_DISPOSITIONS: DefaultDisposition[] = [
   { label: "Hung Up", category: "CONTACT ATTEMPT", color: "#d97706", sortOrder: 12 },
   { label: "Voicemail Left", category: "CONTACT ATTEMPT", color: "#d97706", sortOrder: 13 },
   { label: "Wrong Number", category: "CONTACT ATTEMPT", color: "#d97706", sortOrder: 14 },
+  // 15 is the legacy "Answering Machine" slot (see migration 0037).
+  { label: "Disconnected", category: "CONTACT ATTEMPT", color: "#d97706", sortOrder: 16 },
   // INTERESTED (20-29)
   { label: "Interested", category: "INTERESTED", color: "#0891b2", sortOrder: 20 },
   { label: "Follow-up Scheduled", category: "INTERESTED", color: "#0891b2", sortOrder: 21 },
   { label: "Call Back Later", category: "INTERESTED", color: "#0891b2", sortOrder: 22 },
+  // 23 is the legacy "Qualified" slot (see migration 0037).
+  { label: "Call Back", category: "INTERESTED", color: "#0891b2", sortOrder: 24 },
+  { label: "In Progress", category: "INTERESTED", color: "#0891b2", sortOrder: 25 },
   // SALES (30-39)
   { label: "Sale Closed", category: "SALES", color: "#16a34a", sortOrder: 30 },
   { label: "Installation Scheduled", category: "SALES", color: "#16a34a", sortOrder: 31 },
