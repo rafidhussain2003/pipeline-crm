@@ -235,7 +235,10 @@ export default function Sidebar({
         >
           <span aria-hidden="true" className="block text-lg leading-none">☰</span>
         </button>
-        <span className="text-sm font-semibold text-slate-900 truncate">{companyName}</span>
+        <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-slate-900 text-white text-[10px] font-bold shrink-0">Z</span>
+        <span className="text-sm font-semibold text-slate-900 truncate">
+          Ziplod<span className="font-normal text-slate-400"> · {companyName}</span>
+        </span>
       </div>
 
       {/* Backdrop — tapping outside closes the drawer. */}
@@ -261,8 +264,13 @@ export default function Sidebar({
       >
       <div className="px-5 py-5 border-b border-slate-100 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-lg font-semibold text-slate-900 tracking-tight">Pipeline</div>
-          <div className="text-xs text-slate-500 mt-0.5 truncate">{companyName}</div>
+          {/* Ziplod product branding (same mark as the marketing pages), with
+              the signed-in company underneath. */}
+          <div className="flex items-center gap-2 text-lg font-bold text-slate-900 tracking-tight">
+            <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-slate-900 text-white text-xs shrink-0">Z</span>
+            Ziplod
+          </div>
+          <div className="text-xs text-slate-500 mt-1 truncate">{companyName}</div>
         </div>
         <button
           onClick={() => setMobileOpen(false)}
