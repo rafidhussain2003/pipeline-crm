@@ -45,7 +45,18 @@ export type LeadUpdatedSignal = {
   at: string; // ISO
 };
 
-export type LeadStreamSignal = NewLeadSignal | LeadAssignedSignal | LeadUpdatedSignal;
+// Team roster changed (today: an agent's tier was changed by an admin).
+// Rides the same stream so every open Agent Tier Assignments screen updates
+// live; the stream route forwards it to admin/manager connections ONLY —
+// agents never receive roster signals.
+export type TeamUpdatedSignal = {
+  type: "team.updated";
+  companyId: string;
+  userId: string;
+  at: string; // ISO
+};
+
+export type LeadStreamSignal = NewLeadSignal | LeadAssignedSignal | LeadUpdatedSignal | TeamUpdatedSignal;
 
 type Listener = (signal: LeadStreamSignal) => void;
 
@@ -127,5 +138,10 @@ export function ensureLeadStreamListener(): void {
   });
   eventBus.on("lead.disposition_changed", (p) => {
     leadStreamHub.publish({ type: "lead.updated", leadId: p.leadId, companyId: p.companyId, at: new Date().toISOString() });
+  });
+  // Tier management realtime: a user change (tier today; the event is
+  // deliberately generic) refreshes open admin rosters.
+  eventBus.on("user.updated", (p) => {
+    leadStreamHub.publish({ type: "team.updated", companyId: p.companyId, userId: p.userId, at: new Date().toISOString() });
   });
 }

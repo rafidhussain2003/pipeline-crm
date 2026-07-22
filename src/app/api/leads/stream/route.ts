@@ -138,6 +138,10 @@ export async function GET(req: NextRequest) {
               send("lead.assigned.me", { leadId: signal.leadId, name, phone, source, at: signal.at });
             })();
           }
+        } else if (signal.type === "team.updated") {
+          // Roster change (agent tier). Admin/manager screens only — the
+          // Agent Portal never exposes roster data to agents.
+          if (!isAgent) send("team.updated", { userId: signal.userId, at: signal.at });
         } else if (signal.type === "lead.updated") {
           // In-place change (note / callback / disposition) — the Lead
           // Workspace re-fetches what it's showing. Agents get a bare

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import ProgressiveReleaseSection from "@/components/automation/ProgressiveReleaseSection";
+import AgentTierAssignments from "@/components/team/AgentTierAssignments";
 
 type AssignmentMode =
   | "round_robin"
@@ -81,7 +82,7 @@ export default function AutomationPage() {
   if (!settings) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
 
   return (
-    <div className="p-6 max-w-2xl space-y-8">
+    <div className="p-6 max-w-4xl space-y-8">
       <div>
         <h1 className="text-xl font-semibold text-slate-900 mb-1">Automation</h1>
         <p className="text-sm text-slate-500">Control how leads get assigned and recycled.</p>
@@ -159,6 +160,11 @@ export default function AutomationPage() {
           </div>
         )}
       </div>
+
+      {/* Enterprise Agent Tier Management — per-agent tier the engine's
+          tier-aware modes read. Managers see it read-only; agents never see
+          it (the API 403s and the component renders nothing). */}
+      <AgentTierAssignments />
 
       {/* Phase 17 — Progressive Lead Release (only meaningful when auto
           assignment is on; the engine itself also honors the master toggle). */}
