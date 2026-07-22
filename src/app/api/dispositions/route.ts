@@ -71,16 +71,19 @@ export async function GET() {
   if (missing.length > 0 || misplaced.length > 0) {
     try {
       if (missing.length > 0) {
+        // id supplied explicitly — see POST: on long-lived databases this
+        // table may lack a server-side uuid default, which made every heal
+        // insert fail (and the catch below swallow it) forever.
         try {
           await db
             .insert(dispositionOptions)
-            .values(missing.map((d) => ({ companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder, category: d.category })))
+            .values(missing.map((d) => ({ id: crypto.randomUUID(), companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder, category: d.category })))
             .onConflictDoNothing();
         } catch (err) {
           if (!isUndefinedColumn(err)) throw err;
           await db
             .insert(dispositionOptions)
-            .values(missing.map((d) => ({ companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder })))
+            .values(missing.map((d) => ({ id: crypto.randomUUID(), companyId: session.companyId!, label: d.label, color: d.color, sortOrder: d.sortOrder })))
             .onConflictDoNothing();
         }
       }
@@ -123,11 +126,15 @@ export async function POST(req: NextRequest) {
   // would be indistinguishable on a lead and would split every pipeline count.
   // The (company_id, label) unique index enforces it; translate the violation
   // into a 409 rather than letting it surface as a 500.
+  // id supplied EXPLICITLY: this table predates the rest of the schema on
+  // long-lived databases, and a missing server-side uuid default there makes
+  // every insert fail while the whole rest of the app works — supplying the
+  // id removes that dependency entirely.
   let created;
   try {
     [created] = await db
       .insert(dispositionOptions)
-      .values({ companyId: session.companyId, label: trimmed, color: color || "#2563eb", sortOrder: 999, category: requestedCategory || "OTHER" })
+      .values({ id: crypto.randomUUID(), companyId: session.companyId, label: trimmed, color: color || "#2563eb", sortOrder: 999, category: requestedCategory || "OTHER" })
       .returning();
   } catch (err) {
     if (isUniqueViolation(err, "disposition_options_company_label_uniq")) {
@@ -137,12 +144,19 @@ export async function POST(req: NextRequest) {
     // not be held hostage by a pending migration — retry the pre-0037 shape
     // (no category column; it groups under OTHER until the schema lands,
     // exactly like the GET fallback serves it). Loud log either way.
-    if (!isUndefinedColumn(err)) throw err;
+    if (!isUndefinedColumn(err)) {
+      // The REAL reason, on screen — a masked "could not create" cost days
+      // of blind debugging; the admin creating dispositions owns this
+      // platform and gets the truth.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[dispositions] create failed:", message);
+      return NextResponse.json({ error: `Could not create the disposition — database said: ${message}` }, { status: 500 });
+    }
     console.error("[dispositions] category column missing — migration 0037 not applied yet; creating without category");
     try {
       [created] = await db
         .insert(dispositionOptions)
-        .values({ companyId: session.companyId, label: trimmed, color: color || "#2563eb", sortOrder: 999 })
+        .values({ id: crypto.randomUUID(), companyId: session.companyId, label: trimmed, color: color || "#2563eb", sortOrder: 999 })
         .returning({
           id: dispositionOptions.id,
           companyId: dispositionOptions.companyId,
@@ -154,7 +168,9 @@ export async function POST(req: NextRequest) {
       if (isUniqueViolation(retryErr, "disposition_options_company_label_uniq")) {
         return NextResponse.json({ error: `A disposition named "${trimmed}" already exists` }, { status: 409 });
       }
-      throw retryErr;
+      const message = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      console.error("[dispositions] create failed (legacy shape):", message);
+      return NextResponse.json({ error: `Could not create the disposition — database said: ${message}` }, { status: 500 });
     }
   }
 
