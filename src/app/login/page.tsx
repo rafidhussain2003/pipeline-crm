@@ -68,7 +68,12 @@ export default function LoginPage() {
       <div className="flex-1 flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm">
           <div className="text-center mb-8">
-            <div className="text-2xl font-semibold text-slate-900 tracking-tight">Pipeline</div>
+            {/* Ziplod product branding (same mark as the marketing pages and
+                the in-app sidebar). */}
+            <div className="flex items-center justify-center gap-2 text-2xl font-bold text-slate-900 tracking-tight">
+              <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-slate-900 text-white text-sm shrink-0">Z</span>
+              Ziplod
+            </div>
             <p className="text-sm text-slate-500 mt-1">Sign in to your account</p>
           </div>
           <form onSubmit={submit} className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
