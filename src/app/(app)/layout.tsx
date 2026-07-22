@@ -8,6 +8,7 @@ import BillingBanner from "@/components/billing/BillingBanner";
 import BillingBlockScreen from "@/components/billing/BillingBlockScreen";
 import ForcePasswordChange from "@/components/auth/ForcePasswordChange";
 import CallbackReminders from "@/components/callbacks/CallbackReminders";
+import LeadAssignedAlerts from "@/components/leads/LeadAssignedAlerts";
 import { billingBlockReason, daysRemaining, isBillingBlocked } from "@/lib/billing";
 import { getEnabledFeatures, type FeatureMap } from "@/lib/features";
 import { getEffectiveModuleAccess, type ModuleAccessMap } from "@/lib/module-access";
@@ -94,6 +95,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           mounted at all when the Callback Engine module is disabled, so the
           stream is never even opened. */}
       {session.companyId && features?.callback_engine && <CallbackReminders />}
+      {/* New-lead alert (sound + floating toast) — mounted once here for the
+          same reason as CallbackReminders: an assignment must reach its agent
+          on whatever page they have open. Gated on CRM module access; the
+          server only ever sends the alert event to the lead's new owner. */}
+      {session.companyId && modules?.crm && <LeadAssignedAlerts />}
     </div>
   );
 }

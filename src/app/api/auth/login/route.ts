@@ -133,9 +133,34 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ otpRequired: true, error: request.error }, { status: 429 });
         }
         const sent = await sendLoginOtpEmail(user.email, request.code);
-        // Same dev-mode convention as the other verification flows: when no
-        // email provider is configured the code is readable from server logs.
-        if (!sent) logger.warn("otp_email_not_sent", { code: request.code });
+        if (!sent.ok) {
+          if (process.env.NODE_ENV === "production") {
+            // In production a failed OTP email means sign-in from this device
+            // CANNOT proceed — saying "check your email" would strand the
+            // agent at a prompt waiting for mail that was never sent (which
+            // is exactly how "OTP isn't working" looked from the outside).
+            // Fail loudly with the provider's reason in the logs. The OTP is
+            // NOT bypassed — that would trade a visible outage for a silent
+            // security hole. The code is deliberately never logged here.
+            logger.error("otp_email_send_failed", { reason: sent.reason || "unknown" });
+            await recordAudit({
+              companyId: user.companyId,
+              userId: user.id,
+              action: "auth.otp_email_failed",
+              entityType: "user",
+              entityId: user.id,
+              requestId,
+              metadata: { reason: sent.reason || "unknown" },
+            });
+            return NextResponse.json(
+              { error: "We couldn't send your verification code right now. Please try again shortly, or contact your administrator if this keeps happening." },
+              { status: 502 }
+            );
+          }
+          // Dev convention (no email provider configured): the code is
+          // readable from server logs so the flow stays fully testable.
+          logger.warn("otp_email_not_sent", { code: request.code, reason: sent.reason });
+        }
         await recordAudit({
           companyId: user.companyId,
           userId: user.id,

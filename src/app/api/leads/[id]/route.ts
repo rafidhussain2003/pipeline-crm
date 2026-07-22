@@ -176,7 +176,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       // Same event every other assignment path emits — notifications,
       // insights, and the leads-page live stream (open tabs see the owner
       // change without refreshing) all key off it.
-      await eventBus.emit("lead.assigned", { leadId: id, companyId: session.companyId, agentId: String(body.ownerId) });
+      await eventBus.emit("lead.assigned", { leadId: id, companyId: session.companyId, agentId: String(body.ownerId), actorUserId: session.userId });
     }
     await recordAudit({
       companyId: session.companyId,

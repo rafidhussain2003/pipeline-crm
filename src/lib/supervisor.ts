@@ -97,6 +97,11 @@ export async function forceAssignLead(
     metadata: { via: "supervisor_force_assign" },
   });
 
+  // Same event every other assignment path emits (automatic engine, bulk
+  // assign, direct edit) — force-assign was the one path that never told the
+  // live stream or the new-lead alert about the ownership change.
+  await eventBus.emit("lead.assigned", { leadId, companyId, agentId, actorUserId });
+
   metrics.increment("supervisor.force_assigned");
   logger.info("force_assigned", { leadId, agentId });
   return { ok: true, value: { ownerId: agentId } };
@@ -165,7 +170,7 @@ export async function bulkAssignLeads(
       after: { ownerId: agentId },
       metadata: { via: "manual_bulk_assign", bulkCount: before.length },
     });
-    await eventBus.emit("lead.assigned", { leadId: lead.id, companyId, agentId });
+    await eventBus.emit("lead.assigned", { leadId: lead.id, companyId, agentId, actorUserId });
   }
 
   metrics.increment("supervisor.manual_assigned", before.length);

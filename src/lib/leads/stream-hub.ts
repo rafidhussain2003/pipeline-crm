@@ -28,6 +28,10 @@ export type LeadAssignedSignal = {
   leadId: string;
   companyId: string;
   agentId: string;
+  // Present when a person performed the assignment (absent for the automatic
+  // engine) — the stream uses it to suppress the new-lead alert for
+  // self-assignments.
+  actorUserId?: string;
   at: string; // ISO
 };
 
@@ -111,6 +115,7 @@ export function ensureLeadStreamListener(): void {
       leadId: p.leadId,
       companyId: p.companyId,
       agentId: p.agentId,
+      actorUserId: p.actorUserId,
       at: new Date().toISOString(),
     });
   });

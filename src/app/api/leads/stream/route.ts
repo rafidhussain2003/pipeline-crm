@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leads } from "@/db/schema";
+import { leads, leadSources } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { and, eq, gt, isNull, count } from "drizzle-orm";
 import { leadStreamHub, ensureLeadStreamListener } from "@/lib/leads/stream-hub";
@@ -98,6 +98,46 @@ export async function GET(req: NextRequest) {
           // the client re-runs its current query to see the change.
           if (isAgent) send("lead.assigned", { at: signal.at });
           else send("lead.assigned", { leadId: signal.leadId, agentId: signal.agentId, at: signal.at });
+          // New-lead alert: ONLY the connection belonging to the NEW OWNER
+          // gets an enriched event (name/phone/source drive the floating
+          // notification + sound). The privacy discipline above is intact —
+          // this is the owner's own lead, delivered to nobody else — and
+          // self-assignments don't alert. Enrichment is a single indexed
+          // lookup, async so the callback (and the plain signal above) never
+          // waits on it; if it fails the alert still fires with what the
+          // signal carries.
+          if (signal.agentId === session.userId && signal.actorUserId !== session.userId) {
+            void (async () => {
+              let name: string | null = null;
+              let phone: string | null = null;
+              let source: string | null = null;
+              try {
+                const [row] = await db
+                  .select({
+                    name: leads.name,
+                    phone: leads.phone,
+                    // Same privacy layer as every agent-facing source read:
+                    // the agent alias when set, the real page name otherwise
+                    // (pageName alone is admin-only — campaign names leak
+                    // strategy; see the leadSources schema comment).
+                    sourceAlias: leadSources.agentDisplayName,
+                    sourceName: leadSources.pageName,
+                  })
+                  .from(leads)
+                  .leftJoin(leadSources, eq(leads.sourceId, leadSources.id))
+                  .where(and(eq(leads.id, signal.leadId), eq(leads.companyId, companyId)))
+                  .limit(1);
+                if (row) {
+                  name = row.name;
+                  phone = row.phone;
+                  source = row.sourceAlias || row.sourceName;
+                }
+              } catch {
+                /* alert still fires below with ids only */
+              }
+              send("lead.assigned.me", { leadId: signal.leadId, name, phone, source, at: signal.at });
+            })();
+          }
         } else if (signal.type === "lead.updated") {
           // In-place change (note / callback / disposition) — the Lead
           // Workspace re-fetches what it's showing. Agents get a bare

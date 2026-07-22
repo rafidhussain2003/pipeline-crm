@@ -35,14 +35,19 @@ export async function sendVerificationEmail(email: string, code: string): Promis
 }
 
 // New-device login OTP (Enterprise Agent Portal). Sent to the signing-in
-// user's own email when their browser is not a trusted device.
-export async function sendLoginOtpEmail(email: string, code: string): Promise<boolean> {
+// user's own email when their browser is not a trusted device. Unlike the
+// other senders this returns the full result, not a boolean: sign-in is DEAD
+// in production if this email doesn't go out, so the login route needs the
+// provider's reason (missing RESEND_API_KEY, rejected domain, timeout) to
+// log and surface — a silent false stranded agents at the OTP prompt with an
+// email that was never coming.
+export async function sendLoginOtpEmail(email: string, code: string): Promise<{ ok: boolean; reason?: string }> {
   const html = shell(
     "Verify this sign-in",
     `<p style="font-size:14px;color:#475569">A sign-in to your Ziplod account was attempted from a device we don't recognize. Enter this code to continue. It expires in 10 minutes.</p>${codeBlock(code)}<p style="font-size:12px;color:#94a3b8">If this wasn't you, change your password now — your password was entered correctly.</p>`
   );
   const res = await sendViaResend({ from: FROM, to: [email], subject: `${code} is your Ziplod sign-in code`, html, text: `Your Ziplod sign-in verification code is ${code}. It expires in 10 minutes. If this wasn't you, change your password.` });
-  return res.ok;
+  return res.ok ? { ok: true } : { ok: false, reason: res.reason };
 }
 
 // Admin-approval code for an agent's email/password change request (Enterprise

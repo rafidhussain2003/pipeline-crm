@@ -58,7 +58,11 @@ export type EventPayloads = {
   "lead.created": { leadId: string; companyId: string; source: "manual" | "import" | "webhook" };
   "lead.updated": { leadId: string; companyId: string; changedFields: string[] };
   "lead.deleted": { leadId: string; companyId: string };
-  "lead.assigned": { leadId: string; companyId: string; agentId: string };
+  // actorUserId: who performed the assignment when it was a person (manual
+  // assign / force-assign / direct edit); absent for the automatic engine.
+  // Lets the client suppress the new-lead alert when someone assigns a lead
+  // to themselves.
+  "lead.assigned": { leadId: string; companyId: string; agentId: string; actorUserId?: string };
   "lead.imported": { companyId: string; createdCount: number; duplicateCount: number; skippedCount: number };
   "lead.exported": { companyId: string; count: number };
   "lead.queued": { leadId: string; companyId: string; source: string };
