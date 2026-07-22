@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { subscribeLeadStream } from "@/lib/leads/stream-client";
 
 // New-lead alert (sound + floating notification), mounted once in the app
 // layout so an assignment reaches the agent on whatever page they're on.
@@ -67,8 +68,6 @@ export default function LeadAssignedAlerts() {
   }, []);
 
   useEffect(() => {
-    const es = new EventSource("/api/leads/stream");
-
     const chime = () => {
       const ctx = audioRef.current;
       const now = Date.now();
@@ -98,10 +97,10 @@ export default function LeadAssignedAlerts() {
       }
     };
 
-    const onAssigned = (e: MessageEvent) => {
+    const onAssigned = (raw: string) => {
       let data: Toast;
       try {
-        data = JSON.parse(e.data);
+        data = JSON.parse(raw);
       } catch {
         return;
       }
@@ -123,12 +122,10 @@ export default function LeadAssignedAlerts() {
       chime();
     };
 
-    es.addEventListener("lead.assigned.me", onAssigned);
-    // EventSource reconnects by itself; nothing to do on error.
-    return () => {
-      es.removeEventListener("lead.assigned.me", onAssigned);
-      es.close();
-    };
+    // Shared tab-wide stream (see stream-client.ts) — this component being
+    // mounted in the persistent app layout is what keeps the one connection
+    // warm across page navigations for every other consumer too.
+    return subscribeLeadStream({ events: { "lead.assigned.me": onAssigned } });
   }, []);
 
   const current = queue[0];

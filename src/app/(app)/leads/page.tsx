@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
+import { subscribeLeadStream } from "@/lib/leads/stream-client";
 
 type Lead = {
   id: string;
@@ -266,88 +267,56 @@ export default function LeadsPage() {
   // Ids rather than a bare counter so two tabs, a reconnect replay and a live
   // push can't count the same lead twice (Task 4 — no duplicate notifications).
   const pendingIdsRef = useRef<Set<string>>(new Set());
-  // Watermark for reconnect replay. Starts at mount so we only ever ask about
-  // leads that arrived while this tab was actually open.
-  const lastSeenAtRef = useRef<string>(new Date().toISOString());
-  // load() changes identity on every keystroke; the stream must not reconnect
-  // when it does, so the effect reads it through a ref.
+  // load() changes identity on every keystroke; the stream subscription must
+  // not churn when it does, so the handlers read it through a ref.
   const loadRef = useRef(load);
   useEffect(() => { loadRef.current = load; }, [load]);
   // Coalesces the per-lead "lead.assigned" frames of a bulk assignment into
   // one silent refetch.
   const assignedReloadRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Realtime, via the tab's SHARED stream connection (stream-client.ts owns
+  // the reconnect/backoff/`since`-watermark plumbing that used to live here).
   useEffect(() => {
-    let es: EventSource | null = null;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let attempt = 0;
-    let stopped = false;
-
-    const connect = () => {
-      if (stopped) return;
-      const url = `/api/leads/stream?since=${encodeURIComponent(lastSeenAtRef.current)}`;
-      es = new EventSource(url);
-
-      es.addEventListener("ready", () => {
-        attempt = 0; // a clean connect resets the backoff
-        setConnected(true);
-      });
-
-      es.addEventListener("lead.created", (e) => {
-        try {
-          const data = JSON.parse((e as MessageEvent).data) as { leadId: string; at: string };
-          if (pendingIdsRef.current.has(data.leadId)) return; // already counted
-          pendingIdsRef.current.add(data.leadId);
-          lastSeenAtRef.current = data.at;
-          setPendingCount(pendingIdsRef.current.size);
-        } catch {
-          /* a malformed frame must not kill the stream */
-        }
-      });
-
-      // Arrivals that happened while this tab was disconnected. Counted, not
-      // listed — the exact rows come from the normal query on View.
-      // Ownership changed somewhere (this tab, a colleague, the automatic
-      // engine). Re-run the CURRENT query — silently, keeping selection and
-      // scroll — so the Owner column is live for every connected user.
-      // Debounced: a bulk assignment emits one frame per lead, and 50 frames
-      // should cost one refetch, not 50.
-      es.addEventListener("lead.assigned", () => {
-        if (assignedReloadRef.current) clearTimeout(assignedReloadRef.current);
-        assignedReloadRef.current = setTimeout(() => {
-          loadRef.current({ preserveSelection: true, silent: true });
-        }, 400);
-      });
-
-      es.addEventListener("missed", (e) => {
-        try {
-          const data = JSON.parse((e as MessageEvent).data) as { count: number };
-          if (data.count > 0) setPendingCount((n) => n + data.count);
-          lastSeenAtRef.current = new Date().toISOString();
-        } catch {
-          /* ignore */
-        }
-      });
-
-      es.onerror = () => {
-        setConnected(false);
-        es?.close();
-        es = null;
-        if (stopped) return;
-        // EventSource retries on its own, but always to the ORIGINAL url — the
-        // stale `since` would then re-report the same missed leads. Reconnect
-        // manually so the watermark is current, with capped backoff.
-        attempt += 1;
-        retry = setTimeout(connect, Math.min(1000 * 2 ** (attempt - 1), 30_000));
-      };
-    };
-
-    connect();
+    const unsubscribe = subscribeLeadStream({
+      onConnectionChange: setConnected,
+      events: {
+        "lead.created": (raw) => {
+          try {
+            const data = JSON.parse(raw) as { leadId: string; at: string };
+            if (pendingIdsRef.current.has(data.leadId)) return; // already counted
+            pendingIdsRef.current.add(data.leadId);
+            setPendingCount(pendingIdsRef.current.size);
+          } catch {
+            /* a malformed frame must not kill the handler */
+          }
+        },
+        // Ownership changed somewhere (this tab, a colleague, the automatic
+        // engine). Re-run the CURRENT query — silently, keeping selection and
+        // scroll — so the Owner column is live for every connected user.
+        // Debounced: a bulk assignment emits one frame per lead, and 50
+        // frames should cost one refetch, not 50.
+        "lead.assigned": () => {
+          if (assignedReloadRef.current) clearTimeout(assignedReloadRef.current);
+          assignedReloadRef.current = setTimeout(() => {
+            loadRef.current({ preserveSelection: true, silent: true });
+          }, 400);
+        },
+        // Arrivals that happened while this tab was disconnected. Counted,
+        // not listed — the exact rows come from the normal query on View.
+        missed: (raw) => {
+          try {
+            const data = JSON.parse(raw) as { count: number };
+            if (data.count > 0) setPendingCount((n) => n + data.count);
+          } catch {
+            /* ignore */
+          }
+        },
+      },
+    });
     return () => {
-      stopped = true;
-      if (retry) clearTimeout(retry);
       if (assignedReloadRef.current) clearTimeout(assignedReloadRef.current);
-      es?.close();
+      unsubscribe();
     };
   }, []);
 

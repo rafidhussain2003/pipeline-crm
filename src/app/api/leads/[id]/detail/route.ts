@@ -16,47 +16,63 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   // empty-bodied 500; treat it as the missing record it describes.
   if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const [lead] = await db
-    .select({
-      id: leads.id,
-      name: leads.name,
-      phone: leads.phone,
-      email: leads.email,
-      state: leads.state,
-      disposition: leads.disposition,
-      ownerId: leads.ownerId,
-      ownerName: users.name,
-      followUpAt: leads.followUpAt,
-      priority: leads.priority,
-      isBlacklisted: leads.isBlacklisted,
-      isDuplicate: leads.isDuplicate,
-      duplicateOfLeadId: leads.duplicateOfLeadId,
-      createdAt: leads.createdAt,
-      updatedAt: leads.updatedAt,
-      sourceId: leads.sourceId,
-      // Lead Workspace: raw names come out of the query; what the caller
-      // SEES is resolved below through the privacy layer — never returned raw.
-      sourcePageName: leadSources.pageName,
-      sourceAlias: leadSources.agentDisplayName,
-      sourcePlatform: leadSources.platform,
-    })
-    .from(leads)
-    .leftJoin(leadSources, eq(leads.sourceId, leadSources.id))
-    // Agent Portal: leadVisibilityConditions scopes agents to their own
-    // leads — another agent's lead 404s exactly like a nonexistent one.
-    .where(and(eq(leads.id, id), ...leadVisibilityConditions(session as CompanySession), isNull(leads.deletedAt)))
-    .limit(1);
+  // All three lookups depend only on the lead id + session — NONE needs
+  // another's result — yet they ran in series, so opening a workspace paid
+  // three database round trips of latency back-to-back. Fired together: one
+  // round trip of wait. (The form lookup used to be skipped for sourceless
+  // leads; run in parallel it costs no latency, and it's a single indexed
+  // probe that returns nothing for CSV/manual leads.)
+  const [[lead], [openCallback], [delivery]] = await Promise.all([
+    db
+      .select({
+        id: leads.id,
+        name: leads.name,
+        phone: leads.phone,
+        email: leads.email,
+        state: leads.state,
+        disposition: leads.disposition,
+        ownerId: leads.ownerId,
+        ownerName: users.name,
+        followUpAt: leads.followUpAt,
+        priority: leads.priority,
+        isBlacklisted: leads.isBlacklisted,
+        isDuplicate: leads.isDuplicate,
+        duplicateOfLeadId: leads.duplicateOfLeadId,
+        createdAt: leads.createdAt,
+        updatedAt: leads.updatedAt,
+        sourceId: leads.sourceId,
+        // Lead Workspace: raw names come out of the query; what the caller
+        // SEES is resolved below through the privacy layer — never returned raw.
+        sourcePageName: leadSources.pageName,
+        sourceAlias: leadSources.agentDisplayName,
+        sourcePlatform: leadSources.platform,
+      })
+      .from(leads)
+      .leftJoin(leadSources, eq(leads.sourceId, leadSources.id))
+      // Agent Portal: leadVisibilityConditions scopes agents to their own
+      // leads — another agent's lead 404s exactly like a nonexistent one.
+      .where(and(eq(leads.id, id), ...leadVisibilityConditions(session as CompanySession), isNull(leads.deletedAt)))
+      .limit(1),
+    // Follow-up engine input: the earliest still-open callback (indexed on
+    // leadId). One small query; the engine itself is pure computation.
+    db
+      .select({ scheduledAt: callbacks.scheduledAt, priority: callbacks.priority, reason: callbacks.reason })
+      .from(callbacks)
+      .where(and(eq(callbacks.leadId, id), eq(callbacks.companyId, session.companyId), inArray(callbacks.status, ["scheduled", "due", "missed"])))
+      .orderBy(asc(callbacks.scheduledAt))
+      .limit(1),
+    // Facebook form (Lead Workspace left panel). The lead row doesn't carry a
+    // form id — the delivery log does. Best-effort (a lead without a delivery
+    // row simply shows no form).
+    db
+      .select({ formName: leadForms.formName, formAlias: leadForms.agentDisplayName })
+      .from(webhookLogs)
+      .innerJoin(leadForms, and(eq(leadForms.sourceId, webhookLogs.sourceId), eq(leadForms.formId, webhookLogs.formId)))
+      .where(and(eq(webhookLogs.leadId, id), isNotNull(webhookLogs.formId)))
+      .limit(1),
+  ]);
 
   if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  // Follow-up engine input: the earliest still-open callback (indexed on
-  // leadId). One small query; the engine itself is pure computation.
-  const [openCallback] = await db
-    .select({ scheduledAt: callbacks.scheduledAt, priority: callbacks.priority, reason: callbacks.reason })
-    .from(callbacks)
-    .where(and(eq(callbacks.leadId, id), eq(callbacks.companyId, session.companyId), inArray(callbacks.status, ["scheduled", "due", "missed"])))
-    .orderBy(asc(callbacks.scheduledAt))
-    .limit(1);
 
   const followUp = computeFollowUp(
     {
@@ -69,20 +85,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     openCallback ?? null
   );
 
-  // Facebook form (Lead Workspace left panel). The lead row doesn't carry a
-  // form id — the delivery log does. One indexed lookup, only for
-  // provider-sourced leads; best-effort (a lead without a delivery row simply
-  // shows no form).
-  let formName: string | null = null;
-  if (lead.sourceId) {
-    const [delivery] = await db
-      .select({ formName: leadForms.formName, formAlias: leadForms.agentDisplayName })
-      .from(webhookLogs)
-      .innerJoin(leadForms, and(eq(leadForms.sourceId, webhookLogs.sourceId), eq(leadForms.formId, webhookLogs.formId)))
-      .where(and(eq(webhookLogs.leadId, id), isNotNull(webhookLogs.formId)))
-      .limit(1);
-    if (delivery) formName = resolveSourceName(session.role, delivery.formName, delivery.formAlias);
-  }
+  const formName: string | null = delivery ? resolveSourceName(session.role, delivery.formName, delivery.formAlias) : null;
 
   const { sourcePageName, sourceAlias, sourceId, ...rest } = lead;
   void sourceId;

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, use } from "react";
 import Link from "next/link";
+import { subscribeLeadStream } from "@/lib/leads/stream-client";
 import LeadCallbacks from "@/components/callbacks/LeadCallbacks";
 import ScheduleCallbackModal from "@/components/callbacks/ScheduleCallbackModal";
 import { isSafeHttpUrl } from "@/lib/url";
@@ -254,11 +255,6 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
   const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    let es: EventSource | null = null;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let attempt = 0;
-    let stopped = false;
-
     const scheduleReload = (payload: string) => {
       let leadId: string | undefined;
       try {
@@ -274,29 +270,18 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
       }, 400);
     };
 
-    const connect = () => {
-      if (stopped) return;
-      es = new EventSource("/api/leads/stream");
-      es.addEventListener("ready", () => {
-        attempt = 0;
-      });
-      es.addEventListener("lead.updated", (e) => scheduleReload((e as MessageEvent).data));
-      es.addEventListener("lead.assigned", (e) => scheduleReload((e as MessageEvent).data));
-      es.onerror = () => {
-        es?.close();
-        es = null;
-        if (stopped) return;
-        attempt += 1;
-        retry = setTimeout(connect, Math.min(1000 * 2 ** (attempt - 1), 30_000));
-      };
-    };
-
-    connect();
+    // Rides the tab's SHARED stream connection (stream-client.ts) instead of
+    // opening its own — navigating list → workspace no longer tears down and
+    // re-handshakes an EventSource.
+    const unsubscribe = subscribeLeadStream({
+      events: {
+        "lead.updated": scheduleReload,
+        "lead.assigned": scheduleReload,
+      },
+    });
     return () => {
-      stopped = true;
-      if (retry) clearTimeout(retry);
       if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
-      es?.close();
+      unsubscribe();
     };
   }, [id]);
 

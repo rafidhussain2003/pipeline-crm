@@ -46,40 +46,47 @@ export async function GET(req: NextRequest) {
     if (searchCond) conditions.push(searchCond);
   }
 
-  const rows = await db
-    .select({
-      id: leads.id,
-      name: leads.name,
-      phone: leads.phone,
-      email: leads.email,
-      disposition: leads.disposition,
-      followUpAt: leads.followUpAt,
-      createdAt: leads.createdAt,
-      ownerId: leads.ownerId,
-      ownerName: users.name,
-      isDuplicate: leads.isDuplicate,
-    })
-    .from(leads)
-    .leftJoin(users, eq(leads.ownerId, users.id))
-    .where(and(...conditions))
-    // createdAt DESC is the product requirement (newest first). leads.id DESC is
-    // the tiebreaker that makes it a TOTAL order: two leads sharing a createdAt
-    // (a burst import, or two webhook deliveries in the same instant) would
-    // otherwise have no defined relative order, and Postgres is free to return
-    // them differently per query — which with LIMIT/OFFSET silently duplicates a
-    // row on one page and drops another. Never remove the second key.
-    .orderBy(desc(leads.createdAt), desc(leads.id))
-    .limit(pageSize)
-    .offset((page - 1) * pageSize);
-
-  // Total matching rows for the paginator. Counted with the SAME conditions as
-  // the page query so the page count can't disagree with what's listed, and as
-  // a COUNT rather than a fetch — the row data never leaves Postgres.
-  const [{ total }] = await db
-    .select({ total: count() })
-    .from(leads)
-    .leftJoin(users, eq(leads.ownerId, users.id))
-    .where(and(...conditions));
+  // The page of rows and the total count are independent — fired together so
+  // the endpoint pays ONE database round trip of latency, not two in series
+  // (this endpoint runs on every list view, search, page change and realtime
+  // reload — it was the single hottest serial wait in the app). The count
+  // deliberately has no users join: conditions only reference leads columns,
+  // and a LEFT JOIN can never change the row count — it only made Postgres
+  // do the join work for a number.
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select({
+        id: leads.id,
+        name: leads.name,
+        phone: leads.phone,
+        email: leads.email,
+        disposition: leads.disposition,
+        followUpAt: leads.followUpAt,
+        createdAt: leads.createdAt,
+        ownerId: leads.ownerId,
+        ownerName: users.name,
+        isDuplicate: leads.isDuplicate,
+      })
+      .from(leads)
+      .leftJoin(users, eq(leads.ownerId, users.id))
+      .where(and(...conditions))
+      // createdAt DESC is the product requirement (newest first). leads.id DESC is
+      // the tiebreaker that makes it a TOTAL order: two leads sharing a createdAt
+      // (a burst import, or two webhook deliveries in the same instant) would
+      // otherwise have no defined relative order, and Postgres is free to return
+      // them differently per query — which with LIMIT/OFFSET silently duplicates a
+      // row on one page and drops another. Never remove the second key.
+      .orderBy(desc(leads.createdAt), desc(leads.id))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    // Total matching rows for the paginator. Counted with the SAME conditions
+    // as the page query so the page count can't disagree with what's listed,
+    // and as a COUNT rather than a fetch — the row data never leaves Postgres.
+    db
+      .select({ total: count() })
+      .from(leads)
+      .where(and(...conditions)),
+  ]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   return NextResponse.json({ leads: rows, page, pageSize, total, totalPages });

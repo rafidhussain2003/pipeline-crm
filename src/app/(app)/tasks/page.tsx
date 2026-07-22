@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { subscribeLeadStream } from "@/lib/leads/stream-client";
 
 // My Tasks (Follow-up & Pipeline Part 4) — the agent's marching orders for
 // the day: overdue callbacks first, then today's, newly assigned leads and
@@ -90,39 +91,22 @@ export default function MyTasksPage() {
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    let es: EventSource | null = null;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let attempt = 0;
-    let stopped = false;
-
     const schedule = () => {
       if (reloadTimer.current) clearTimeout(reloadTimer.current);
       reloadTimer.current = setTimeout(() => loadRef.current(), 600);
     };
 
-    const connect = () => {
-      if (stopped) return;
-      es = new EventSource("/api/leads/stream");
-      es.addEventListener("ready", () => {
-        attempt = 0;
-      });
-      es.addEventListener("lead.assigned", schedule);
-      es.addEventListener("lead.updated", schedule);
-      es.onerror = () => {
-        es?.close();
-        es = null;
-        if (stopped) return;
-        attempt += 1;
-        retry = setTimeout(connect, Math.min(1000 * 2 ** (attempt - 1), 30_000));
-      };
-    };
-
-    connect();
+    // Rides the tab's SHARED stream connection (stream-client.ts) — no
+    // per-page EventSource or reconnect loop anymore.
+    const unsubscribe = subscribeLeadStream({
+      events: {
+        "lead.assigned": schedule,
+        "lead.updated": schedule,
+      },
+    });
     return () => {
-      stopped = true;
-      if (retry) clearTimeout(retry);
       if (reloadTimer.current) clearTimeout(reloadTimer.current);
-      es?.close();
+      unsubscribe();
     };
   }, []);
 
