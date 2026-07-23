@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leads, assignmentLog, dispositionOptions } from "@/db/schema";
+import { leads, assignmentLog, dispositionOptions, users } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { isUuid } from "@/lib/url";
 import { hasPermission } from "@/lib/permissions";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { transitionLifecycle } from "@/lib/lifecycle/service";
 import { dispositionToLifecycle } from "@/lib/lifecycle/stages";
@@ -71,6 +71,29 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         { status: 400 }
       );
     }
+  }
+
+  // Reassignment target — TENANT-SCOPED, mirroring the disposition and
+  // duplicateOfLeadId validations above. ownerId is the only cross-entity
+  // reference on this endpoint that lands a foreign id in a column, so it
+  // gets the same treatment: the new owner must be a real, active,
+  // non-deleted member of THIS company. Without this a crafted PATCH could
+  // set ownerId to another tenant's user, a deactivated account, a non-agent,
+  // or a random uuid — which never surfaces the lead to that foreign user
+  // (every read is company-scoped) but would corrupt ownership, the
+  // assignment_log audit trail, the "assignments today" counts and the
+  // round-robin cursor. null = unassign, always permitted. Matches the
+  // membership check bulkAssignLeads/forceAssignLead already enforce.
+  if ("ownerId" in body && body.ownerId !== null) {
+    if (typeof body.ownerId !== "string" || !isUuid(body.ownerId)) {
+      return NextResponse.json({ error: "ownerId must be a company member's id, or null." }, { status: 400 });
+    }
+    const [member] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, body.ownerId), eq(users.companyId, session.companyId), eq(users.active, true), isNull(users.deletedAt)))
+      .limit(1);
+    if (!member) return NextResponse.json({ error: "That teammate could not be found in your company." }, { status: 404 });
   }
 
   // Follow-up & Pipeline: "Duplicate Lead" can link to the original lead.
