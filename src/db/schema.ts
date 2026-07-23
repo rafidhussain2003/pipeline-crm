@@ -1394,6 +1394,41 @@ export const auditLog = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Security events — the authentication/abuse trail (Security Hardening
+// phase). Separate from audit_log on purpose: these rows are mostly
+// PRE-authentication (failed logins, OTP spam, bot traffic), usually have no
+// company or user to attach to, and are queried by ip/email/event — axes
+// audit_log has no columns or indexes for. No foreign keys: a security
+// event must always be writable, fast, for identities that may not exist.
+// ---------------------------------------------------------------------------
+export const securityEvents = pgTable(
+  "security_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // e.g. "login.failed", "otp.rate_limited", "bot.detected" — see
+    // src/lib/security/events.ts for the catalog.
+    event: varchar("event", { length: 60 }).notNull(),
+    riskLevel: varchar("risk_level", { length: 10 }).notNull().default("low"), // low | medium | high
+    email: varchar("email", { length: 255 }),
+    ip: varchar("ip", { length: 64 }),
+    userAgent: varchar("user_agent", { length: 255 }),
+    companyId: uuid("company_id"),
+    userId: uuid("user_id"),
+    reason: text("reason"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // The dashboard's axes: recent events (createdAt), per-event counts over
+    // a window, top attacking IPs, most-targeted emails.
+    createdIdx: index("security_events_created_idx").on(t.createdAt),
+    eventCreatedIdx: index("security_events_event_created_idx").on(t.event, t.createdAt),
+    ipCreatedIdx: index("security_events_ip_created_idx").on(t.ip, t.createdAt),
+    emailCreatedIdx: index("security_events_email_created_idx").on(t.email, t.createdAt),
+  })
+);
+
+// ---------------------------------------------------------------------------
 // Notifications — in-app is the only channel actually delivered today (see
 // src/lib/notifications); email/sms/webhook/push rows can be written here
 // too (for a unified history/status view) once those channels have a real

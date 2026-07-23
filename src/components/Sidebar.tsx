@@ -540,6 +540,14 @@ export default function Sidebar({
             >
               Diagnostics
             </Link>
+            <Link
+              href="/super-admin/security"
+              className={`block px-3 py-2 rounded-md text-sm font-medium ${
+                pathname.startsWith("/super-admin/security") ? "bg-purple-50 text-purple-700" : "text-purple-700 hover:bg-purple-50"
+              }`}
+            >
+              Security
+            </Link>
           </>
         )}
           </>

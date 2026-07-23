@@ -12,6 +12,8 @@ import { sendLoginOtpEmail } from "@/lib/email/send";
 import { recordAudit } from "@/lib/audit";
 import { isSchemaLagError } from "@/lib/db-errors";
 import { checkPolicy, getClientIp, checkAccountLockout, recordLoginFailure, recordLoginSuccess } from "@/lib/rate-limit";
+import { isIpBlocked, otpSendAllowed, recordStrike, trackLoginTarget } from "@/lib/security/abuse-guard";
+import { recordSecurityEvent } from "@/lib/security/events";
 import { eq } from "drizzle-orm";
 import { withRoute } from "@/lib/api-handler";
 
@@ -28,9 +30,23 @@ const schema = z.object({
 export async function POST(req: NextRequest) {
   return withRoute("auth.login", "POST", req, async (logger, requestId) => {
     const ip = getClientIp(req);
+    const userAgent = req.headers.get("user-agent");
+
+    // Progressive temporary IP block (see abuse-guard): an IP that has been
+    // hammering auth endpoints gets a flat 429 before any work happens.
+    const block = isIpBlocked(ip);
+    if (block.blocked) {
+      return NextResponse.json({ error: "Too many requests. Please try again later." }, { status: 429 });
+    }
+
     const rl = checkPolicy("auth.login", ip);
     if (!rl.allowed) {
       logger.warn("rate_limited", { ip });
+      const strike = recordStrike(ip, 2);
+      await recordSecurityEvent({ event: "login.rate_limited", riskLevel: "medium", ip, userAgent, reason: "per-ip minute cap" });
+      if (strike.blockedNow) {
+        await recordSecurityEvent({ event: "ip.blocked", riskLevel: "high", ip, userAgent, reason: `login abuse — blocked ${Math.round(strike.blockMs / 60000)}m` });
+      }
       return NextResponse.json({ error: "Too many login attempts. Please wait a minute and try again." }, { status: 429 });
     }
 
@@ -45,6 +61,8 @@ export async function POST(req: NextRequest) {
     const lockout = checkAccountLockout(lockoutKey);
     if (lockout.locked) {
       logger.warn("account_locked", { retryAfterMs: lockout.retryAfterMs });
+      recordStrike(ip);
+      await recordSecurityEvent({ event: "login.locked", riskLevel: "medium", ip, userAgent, email, reason: "attempt while account locked" });
       return NextResponse.json(
         { error: "Too many failed attempts on this account. Please try again later." },
         { status: 429 }
@@ -69,8 +87,27 @@ export async function POST(req: NextRequest) {
       .from(users)
       .where(eq(users.email, email))
       .limit(1);
+    // Shared bookkeeping for BOTH failure shapes (unknown email and wrong
+    // password) so the two stay byte-identical to the caller — the classic
+    // enumeration channel is the difference between those responses.
+    const noteFailure = async (companyId: string | null, userId: string | null, reason: string) => {
+      const locked = recordLoginFailure(lockoutKey);
+      recordStrike(ip);
+      const target = trackLoginTarget(email, ip);
+      await recordSecurityEvent({ event: "login.failed", riskLevel: "low", ip, userAgent, email, companyId, userId, reason });
+      if (locked.lockedNow) {
+        await recordSecurityEvent({ event: "account.locked", riskLevel: "high", ip, userAgent, email, companyId, userId, reason: "5 failed attempts — 15m lockout" });
+      }
+      if (target.suspicious) {
+        await recordSecurityEvent({
+          event: "credential_stuffing.detected", riskLevel: "high", ip, userAgent, email, companyId, userId,
+          reason: `${target.distinctIps} distinct IPs failing on this account in an hour`,
+        });
+      }
+    };
+
     if (!user || !user.active || user.deletedAt) {
-      recordLoginFailure(lockoutKey);
+      await noteFailure(null, null, !user ? "unknown email" : "inactive account");
       await recordAudit({
         companyId: null,
         userId: null,
@@ -83,7 +120,7 @@ export async function POST(req: NextRequest) {
     }
     const valid = await verifyPassword(password, user.passwordHash);
     if (!valid) {
-      recordLoginFailure(lockoutKey);
+      await noteFailure(user.companyId, user.id, "wrong password");
       await recordAudit({
         companyId: user.companyId,
         userId: user.id,
@@ -128,8 +165,38 @@ export async function POST(req: NextRequest) {
         // Step 1 of the challenge: send the code, tell the client to ask.
         // Deliberately does NOT count as a login failure — the password was
         // right.
+        //
+        // OTP send caps (per identity + per IP, hourly): the password being
+        // correct doesn't entitle unlimited email — a stolen password must
+        // not become an OTP spam cannon. Denied = the success-shaped
+        // response below WITHOUT a new email; any previously emailed code
+        // stays valid.
+        const gate = otpSendAllowed(user.email, ip);
+        if (!gate.allowed) {
+          await recordSecurityEvent({
+            event: "otp.rate_limited", riskLevel: "medium", ip, userAgent, email: user.email,
+            companyId: user.companyId, userId: user.id, reason: `${gate.reason.replace(/_/g, " ")} (login otp)`,
+          });
+          return NextResponse.json({
+            otpRequired: true,
+            message: "This device isn't recognized. Enter the verification code we emailed you.",
+          });
+        }
         const request = await requestCode({ email: user.email, purpose: "device_otp" });
         if (!request.ok) {
+          // Within the 60s cooldown: the code already in their inbox is
+          // valid — success-shaped response, no duplicate email (Email
+          // Protection). Only a truly exhausted resend budget surfaces.
+          if (request.retryAfterSec !== undefined) {
+            return NextResponse.json({
+              otpRequired: true,
+              message: "Enter the verification code we emailed you.",
+            });
+          }
+          await recordSecurityEvent({
+            event: "otp.rate_limited", riskLevel: "medium", ip, userAgent, email: user.email,
+            companyId: user.companyId, userId: user.id, reason: "resend budget exhausted (login otp)",
+          });
           return NextResponse.json({ otpRequired: true, error: request.error }, { status: 429 });
         }
         const sent = await sendLoginOtpEmail(user.email, request.code);
@@ -143,6 +210,10 @@ export async function POST(req: NextRequest) {
             // NOT bypassed — that would trade a visible outage for a silent
             // security hole. The code is deliberately never logged here.
             logger.error("otp_email_send_failed", { reason: sent.reason || "unknown" });
+            await recordSecurityEvent({
+              event: "otp.email_failed", riskLevel: "high", ip, userAgent, email: user.email,
+              companyId: user.companyId, userId: user.id, reason: sent.reason || "unknown",
+            });
             await recordAudit({
               companyId: user.companyId,
               userId: user.id,
@@ -171,6 +242,10 @@ export async function POST(req: NextRequest) {
           metadata: { reason: "new_device" },
         });
         logger.info("otp_challenged");
+        await recordSecurityEvent({
+          event: "otp.sent", riskLevel: "low", ip, userAgent, email: user.email,
+          companyId: user.companyId, userId: user.id, reason: "new device login",
+        });
         return NextResponse.json({
           otpRequired: true,
           message: "This device isn't recognized. Enter the verification code we emailed you.",
@@ -179,6 +254,11 @@ export async function POST(req: NextRequest) {
       const verified = await verifyCode({ email: user.email, purpose: "device_otp", code: otp });
       if (!verified.ok) {
         recordLoginFailure(lockoutKey);
+        recordStrike(ip);
+        await recordSecurityEvent({
+          event: "otp.failed", riskLevel: "medium", ip, userAgent, email: user.email,
+          companyId: user.companyId, userId: user.id, reason: "wrong or expired code",
+        });
         await recordAudit({
           companyId: user.companyId,
           userId: user.id,

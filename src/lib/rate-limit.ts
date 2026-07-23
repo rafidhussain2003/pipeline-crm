@@ -127,18 +127,36 @@ export function checkAccountLockout(key: string): { locked: boolean; retryAfterM
   return { locked: true, retryAfterMs: entry.lockedUntil - Date.now() };
 }
 
-export function recordLoginFailure(key: string): void {
+// Returns whether THIS failure tripped the lockout, so the caller can record
+// one "account.locked" security event at the moment it happens.
+export function recordLoginFailure(key: string): { lockedNow: boolean } {
   const now = Date.now();
   const entry = lockouts.get(key);
   if (entry && now - entry.lastFailureAt < FAILURE_MEMORY_MS) {
     entry.failures += 1;
     entry.lastFailureAt = now;
-    if (entry.failures >= MAX_LOGIN_FAILURES) entry.lockedUntil = now + LOCKOUT_DURATION_MS;
+    if (entry.failures >= MAX_LOGIN_FAILURES && (entry.lockedUntil === null || entry.lockedUntil <= now)) {
+      entry.lockedUntil = now + LOCKOUT_DURATION_MS;
+      return { lockedNow: true };
+    }
   } else {
     lockouts.set(key, { failures: 1, lockedUntil: null, lastFailureAt: now });
   }
+  return { lockedNow: false };
 }
 
 export function recordLoginSuccess(key: string): void {
   lockouts.delete(key);
+}
+
+/** Currently locked accounts — Security dashboard use. */
+export function listActiveLockouts(): { key: string; failures: number; lockedUntilIso: string }[] {
+  const now = Date.now();
+  const out: { key: string; failures: number; lockedUntilIso: string }[] = [];
+  for (const [key, entry] of lockouts) {
+    if (entry.lockedUntil !== null && entry.lockedUntil > now) {
+      out.push({ key, failures: entry.failures, lockedUntilIso: new Date(entry.lockedUntil).toISOString() });
+    }
+  }
+  return out;
 }
