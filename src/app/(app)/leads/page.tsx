@@ -153,10 +153,83 @@ function AssignModal({
   );
 }
 
+// Enterprise Lead Filters — one object drives the query, the URL and the
+// active-filter chips. Every field is optional/empty by default; an empty
+// value means "this filter is off". Server-side only: these become query
+// params on /api/leads, which ANDs them onto the tenant/ownership scope.
+type Filters = {
+  search: string;
+  disposition: string; // label
+  ownerId: string; // agent id
+  source: string; // source id
+  state: string;
+  saleStatus: string; // "" | "won" | "lost" | "in_progress"
+  followUpToday: boolean;
+  date: string; // yyyy-mm-dd
+};
+
+const EMPTY_FILTERS: Filters = {
+  search: "",
+  disposition: "",
+  ownerId: "",
+  source: "",
+  state: "",
+  saleStatus: "",
+  followUpToday: false,
+  date: "",
+};
+
+const SALE_STATUS_OPTIONS = [
+  { value: "won", label: "Won" },
+  { value: "lost", label: "Lost" },
+  { value: "in_progress", label: "In Progress" },
+];
+
+// The SINGLE serializer used for BOTH the API request and the browser URL, so
+// a shared/refreshed URL reproduces the exact same query. Empty filters and
+// page 1 are omitted to keep the URL clean.
+function filtersToParams(f: Filters, page: number): URLSearchParams {
+  const p = new URLSearchParams();
+  if (f.search) p.set("search", f.search);
+  if (f.disposition) p.set("disposition", f.disposition);
+  if (f.ownerId) p.set("ownerId", f.ownerId);
+  if (f.source) p.set("source", f.source);
+  if (f.state) p.set("state", f.state);
+  if (f.saleStatus) p.set("saleStatus", f.saleStatus);
+  if (f.followUpToday) p.set("followUpToday", "1");
+  if (f.date) p.set("date", f.date);
+  if (page > 1) p.set("page", String(page));
+  return p;
+}
+
+function paramsToFilters(sp: URLSearchParams): Filters {
+  return {
+    search: sp.get("search") || "",
+    disposition: sp.get("disposition") || "",
+    ownerId: sp.get("ownerId") || "",
+    source: sp.get("source") || "",
+    state: sp.get("state") || "",
+    saleStatus: sp.get("saleStatus") || "",
+    followUpToday: sp.get("followUpToday") === "1",
+    date: sp.get("date") || "",
+  };
+}
+
 export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [dispositions, setDispositions] = useState<Disposition[]>([]);
-  const [search, setSearch] = useState("");
+  // All active filters in one object; `search` lives here too so the URL and
+  // chips treat it like any other filter.
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  // Dropdown data that isn't already loaded elsewhere: Sources + States come
+  // from /api/leads/filter-options; Agents (admin/manager only) reuse the
+  // assignees roster; Dispositions reuse the existing fetch below.
+  const [sources, setSources] = useState<{ id: string; name: string | null }[]>([]);
+  const [states, setStates] = useState<string[]>([]);
+  const [agentOptions, setAgentOptions] = useState<{ id: string; name: string }[]>([]);
+  // Set once the URL has been read on mount — the first fetch waits for it so
+  // a shared/refreshed URL loads its filters instead of the empty default.
+  const [hydrated, setHydrated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [importing, setImporting] = useState(false);
@@ -206,9 +279,9 @@ export default function LeadsPage() {
     // table out from under someone mid-read (Task 5 — no flickering).
     if (!opts?.silent) setLoading(true);
     setLoadError("");
-    const params = new URLSearchParams();
-    if (search) params.set("search", search);
-    params.set("page", String(page));
+    // Same serializer as the URL — the query the server runs is exactly the
+    // one the address bar describes.
+    const params = filtersToParams(filters, page);
     params.set("pageSize", String(pageSize));
     // Previously this had no try/catch and setLoading(false) was the last
     // statement: a network failure — or a non-JSON error body, which .json()
@@ -245,18 +318,75 @@ export default function LeadsPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, page, pageSize]);
+  }, [filters, page, pageSize]);
+
+  // Change a filter → reset to page 1 (a narrowed result shouldn't strand you
+  // on a page that no longer exists) and let the URL/query effects follow.
+  const setFilter = useCallback((patch: Partial<Filters>) => {
+    setFilters((f) => ({ ...f, ...patch }));
+    setPage(1);
+  }, []);
+  const clearAllFilters = useCallback(() => {
+    setFilters(EMPTY_FILTERS);
+    setPage(1);
+  }, []);
+
+  // Hydrate filters + page from the URL ONCE on mount (client-only, so no SSR
+  // mismatch). Until this runs the first fetch is held back, so a shared or
+  // refreshed URL loads its own filtered view instead of the empty default.
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    setFilters(paramsToFilters(sp));
+    const p = parseInt(sp.get("page") || "1", 10);
+    if (p > 1) setPage(p);
+    setHydrated(true);
+  }, []);
+
+  // Reflect filters + page back into the URL (replace, not push — filtering
+  // shouldn't spawn a back-button trail). Refresh or copy-link reproduces the
+  // exact view.
+  useEffect(() => {
+    if (!hydrated) return;
+    const qs = filtersToParams(filters, page).toString();
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+  }, [hydrated, filters, page]);
 
   useEffect(() => {
+    if (!hydrated) return; // wait for URL hydration before the first fetch
     const timeout = setTimeout(load, 250);
     return () => clearTimeout(timeout);
-  }, [load]);
+  }, [load, hydrated]);
 
-  // A narrowed search can leave you on a page that no longer exists (page 40 of
+  // A narrowed filter can leave you on a page that no longer exists (page 40 of
   // a 3-page result), which would render an empty table with no way back.
   useEffect(() => {
     if (!loading && page > totalPages) setPage(totalPages);
   }, [loading, page, totalPages]);
+
+  // Source + State options for the filter bar (scoped server-side to the
+  // caller's visible leads). Best-effort — empty dropdowns never block search.
+  useEffect(() => {
+    fetch("/api/leads/filter-options")
+      .then((r) => (r.ok ? r.json() : { sources: [], states: [] }))
+      .then((d) => {
+        setSources(d.sources || []);
+        setStates(d.states || []);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Agent filter options — admin/manager only (the assignees roster is gated
+  // by leads:assign). Agents never see this filter: they are already
+  // hard-scoped to their own leads server-side, so there's nothing to pick.
+  useEffect(() => {
+    if (role !== "admin" && role !== "manager") return;
+    fetch("/api/leads/assignees")
+      .then((r) => (r.ok ? r.json() : { assignees: [] }))
+      .then((d: { assignees?: { id: string; name: string }[] }) =>
+        setAgentOptions((d.assignees || []).map((a) => ({ id: a.id, name: a.name })))
+      )
+      .catch(() => {});
+  }, [role]);
 
   // --- Phase 1B: realtime arrivals ---------------------------------------
   // Arrivals are COUNTED, never auto-inserted: the table only changes when the
@@ -480,6 +610,26 @@ export default function LeadsPage() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
+  // Shared control styling for the filter bar.
+  const selectCls =
+    "rounded-md border border-slate-200 px-2.5 py-2 text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500";
+
+  // Active-filter chips — one per set filter, each individually removable,
+  // with human-readable labels resolved from the option lists.
+  const agentName = (id: string) => agentOptions.find((a) => a.id === id)?.name || "Agent";
+  const sourceName = (id: string) => sources.find((s) => s.id === id)?.name || "Source";
+  const saleLabel = (v: string) => SALE_STATUS_OPTIONS.find((o) => o.value === v)?.label || v;
+  const activeChips: { key: string; label: string; clear: () => void }[] = [
+    filters.search && { key: "search", label: `Search: ${filters.search}`, clear: () => setFilter({ search: "" }) },
+    filters.disposition && { key: "disposition", label: `Disposition: ${filters.disposition}`, clear: () => setFilter({ disposition: "" }) },
+    filters.ownerId && { key: "ownerId", label: `Agent: ${agentName(filters.ownerId)}`, clear: () => setFilter({ ownerId: "" }) },
+    filters.source && { key: "source", label: `Source: ${sourceName(filters.source)}`, clear: () => setFilter({ source: "" }) },
+    filters.state && { key: "state", label: `State: ${filters.state}`, clear: () => setFilter({ state: "" }) },
+    filters.saleStatus && { key: "saleStatus", label: `Sale: ${saleLabel(filters.saleStatus)}`, clear: () => setFilter({ saleStatus: "" }) },
+    filters.followUpToday && { key: "followUpToday", label: "Follow-up Today", clear: () => setFilter({ followUpToday: false }) },
+    filters.date && { key: "date", label: `Created: ${filters.date}`, clear: () => setFilter({ date: "" }) },
+  ].filter((c): c is { key: string; label: string; clear: () => void } => Boolean(c));
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
@@ -549,13 +699,106 @@ export default function LeadsPage() {
         </div>
       )}
 
-      <div className="flex items-center gap-3 mb-4">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search name, phone, email"
-          className="w-full max-w-md rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
+      {/* Enterprise Lead Filter bar. Every control filters SERVER-SIDE (the
+          browser never holds more than one page) and updates the URL; changing
+          any one re-runs the query with no page reload, ALL filters combined
+          with AND. Filters compose with search, pagination, sorting and the
+          realtime/bulk-assign features untouched. */}
+      <div className="mb-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={filters.search}
+            onChange={(e) => setFilter({ search: e.target.value })}
+            placeholder="Search name, phone, email"
+            className="flex-1 min-w-[200px] max-w-md rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <select value={filters.disposition} onChange={(e) => setFilter({ disposition: e.target.value })} aria-label="Filter by disposition" className={selectCls}>
+            <option value="">All Dispositions</option>
+            {groupedDispositions.map((g) => (
+              <optgroup key={g.category} label={g.category}>
+                {g.options.map((d) => (
+                  <option key={d.id} value={d.label}>
+                    {d.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          {/* Agent filter — admin/manager only. Agents are already scoped to
+              their own leads server-side, so the API ignores ?ownerId= for
+              them and this control is hidden. */}
+          {canAssign && (
+            <select value={filters.ownerId} onChange={(e) => setFilter({ ownerId: e.target.value })} aria-label="Filter by agent" className={selectCls}>
+              <option value="">All Agents</option>
+              {agentOptions.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <select value={filters.source} onChange={(e) => setFilter({ source: e.target.value })} aria-label="Filter by source" className={selectCls}>
+            <option value="">All Sources</option>
+            {sources.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name || "Unnamed source"}
+              </option>
+            ))}
+          </select>
+          <select value={filters.state} onChange={(e) => setFilter({ state: e.target.value })} aria-label="Filter by state" className={selectCls}>
+            <option value="">All States</option>
+            {states.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <select value={filters.saleStatus} onChange={(e) => setFilter({ saleStatus: e.target.value })} aria-label="Filter by sale status" className={selectCls}>
+            <option value="">All Sale Status</option>
+            {SALE_STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => setFilter({ followUpToday: !filters.followUpToday })}
+            aria-pressed={filters.followUpToday}
+            className={`text-sm font-medium rounded-md px-3 py-2 border ${
+              filters.followUpToday
+                ? "border-blue-500 bg-blue-50 text-blue-700"
+                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+            }`}
+          >
+            Follow-up Today
+          </button>
+          <input
+            type="date"
+            value={filters.date}
+            onChange={(e) => setFilter({ date: e.target.value })}
+            aria-label="Filter by created date"
+            className={selectCls}
+          />
+        </div>
+
+        {activeChips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            {activeChips.map((c) => (
+              <span
+                key={c.key}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-800 bg-blue-50 border border-blue-200 rounded-full pl-2.5 pr-1.5 py-1"
+              >
+                {c.label}
+                <button onClick={c.clear} aria-label={`Remove ${c.label} filter`} className="text-blue-500 hover:text-blue-800 text-sm leading-none">
+                  ×
+                </button>
+              </span>
+            ))}
+            <button onClick={clearAllFilters} className="text-xs font-medium text-slate-500 hover:text-slate-800 underline">
+              Clear all filters
+            </button>
+          </div>
+        )}
       </div>
 
       {/* New-arrival notification. Deliberately does NOT insert rows on its own

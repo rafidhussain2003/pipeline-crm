@@ -3,7 +3,9 @@ import { db } from "@/db";
 import { leads, users } from "@/db/schema";
 import { getSession, type CompanySession } from "@/lib/auth";
 import { leadVisibilityConditions } from "@/lib/leads/access";
-import { and, count, desc, eq, ilike, isNull, or } from "drizzle-orm";
+import { isUuid } from "@/lib/url";
+import { WON_DISPOSITIONS, LOST_DISPOSITIONS, TERMINAL_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
+import { and, count, desc, eq, gte, ilike, inArray, isNull, lt, notInArray, or } from "drizzle-orm";
 import "@/lib/assignment"; // registers the "lead.assign" job handler with the queue
 import "@/lib/workflows/registry"; // registers the lead.created -> workflow listener
 import { queue } from "@/lib/infra/queue";
@@ -22,6 +24,15 @@ export async function GET(req: NextRequest) {
   const search = searchParams.get("search")?.trim();
   const disposition = searchParams.get("disposition");
   const ownerId = searchParams.get("ownerId");
+  // Enterprise Lead Filters — every one is ANDed onto the SAME
+  // leadVisibilityConditions base (tenant + agent-ownership), so a filter can
+  // only ever NARROW what the caller may already see; it can never widen scope
+  // across tenants or (for an agent) beyond their own leads.
+  const source = searchParams.get("source");
+  const state = searchParams.get("state")?.trim();
+  const saleStatus = searchParams.get("saleStatus"); // won | lost | in_progress
+  const followUpToday = searchParams.get("followUpToday") === "1";
+  const date = searchParams.get("date"); // yyyy-mm-dd — leads created that day
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
   // Phase 1A: caller-selectable page size, clamped to a fixed allow-list. Not a
   // free-form number — an arbitrary ?pageSize=100000 would let one request pull
@@ -37,6 +48,37 @@ export async function GET(req: NextRequest) {
   const conditions = [...leadVisibilityConditions(session as CompanySession), isNull(leads.deletedAt)];
   if (disposition) conditions.push(eq(leads.disposition, disposition));
   if (ownerId && session.role !== "agent") conditions.push(eq(leads.ownerId, ownerId));
+  // Source — a uuid FK. Validate first: a non-uuid reaching the uuid column
+  // would surface as a 500 (22P02) instead of an empty result; an invalid
+  // value is simply treated as "no source filter".
+  if (source && isUuid(source)) conditions.push(eq(leads.sourceId, source));
+  if (state) conditions.push(eq(leads.state, state));
+  // Sale Status — derived from the disposition, using the SAME won/lost sets
+  // the pipeline and analytics use (one source of truth). "in_progress" is any
+  // still-open disposition (not a terminal won/lost one).
+  if (saleStatus === "won") conditions.push(inArray(leads.disposition, WON_DISPOSITIONS));
+  else if (saleStatus === "lost") conditions.push(inArray(leads.disposition, LOST_DISPOSITIONS));
+  else if (saleStatus === "in_progress") conditions.push(notInArray(leads.disposition, TERMINAL_DISPOSITIONS));
+  // Follow-up Today — a callback/follow-up scheduled within today's window
+  // (server-local day boundaries, same basis as the rest of the app).
+  if (followUpToday) {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    conditions.push(and(gte(leads.followUpAt, start), lt(leads.followUpAt, end))!);
+  }
+  // Created-on date — a single calendar day (yyyy-mm-dd). Range-capable at the
+  // query level (>= start of day, < next day) so a future from/to UI is a
+  // trivial extension.
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const start = new Date(`${date}T00:00:00`);
+    if (!Number.isNaN(start.getTime())) {
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      conditions.push(and(gte(leads.createdAt, start), lt(leads.createdAt, end))!);
+    }
+  }
   if (search) {
     const searchCond = or(
       ilike(leads.name, `%${search}%`),
