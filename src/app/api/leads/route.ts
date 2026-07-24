@@ -5,7 +5,7 @@ import { getSession, type CompanySession } from "@/lib/auth";
 import { leadVisibilityConditions } from "@/lib/leads/access";
 import { isUuid } from "@/lib/url";
 import { WON_DISPOSITIONS, LOST_DISPOSITIONS, TERMINAL_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
-import { resolveFormName, canSeeActualFormName } from "@/lib/leads/source-privacy";
+import { resolveFormDisplayName, canSeeActualFormName } from "@/lib/leads/source-privacy";
 import { and, count, desc, eq, exists, gte, ilike, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import "@/lib/assignment"; // registers the "lead.assign" job handler with the queue
 import "@/lib/workflows/registry"; // registers the lead.created -> workflow listener
@@ -149,10 +149,10 @@ export async function GET(req: NextRequest) {
 
   // Role-aware Form name per lead (the "Form" column). Kept OUT of the hot
   // rows/count query above: one extra query bounded to THIS page's lead ids
-  // (never the whole table), joining the delivery log to the form. The name is
-  // resolved through the privacy layer — agents/managers get the display name
-  // only, admins additionally get the actual name (formActual) for the tooltip.
-  // A lead with no provider form (CSV/manual/website) simply has form: null.
+  // (never the whole table), joining the delivery log to the form. `form` is
+  // the DISPLAY NAME (alias) for EVERYONE, admins included; admins additionally
+  // get the actual name (formActual) for the tooltip. A lead with no provider
+  // form (CSV/manual/website) simply has form: null.
   const canSeeActual = canSeeActualFormName(session.role);
   let leadsOut: ((typeof rows)[number] & { form: string | null; formActual: string | null })[] = rows.map((r) => ({
     ...r,
@@ -176,7 +176,7 @@ export async function GET(req: NextRequest) {
       const f = byLead.get(r.id);
       return {
         ...r,
-        form: f ? resolveFormName(session.role, f.formName, f.displayName) : null,
+        form: f ? resolveFormDisplayName(session.role, f.formName, f.displayName) : null,
         formActual: f && canSeeActual ? f.formName ?? null : null,
       };
     });

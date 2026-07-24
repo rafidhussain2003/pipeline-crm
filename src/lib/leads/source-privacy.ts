@@ -102,3 +102,22 @@ export function resolveFormName(
   if (canSeeActualFormName(role)) return actual ?? GENERIC_FORM_LABEL;
   return display ?? GENERIC_FORM_LABEL;
 }
+
+/**
+ * The name shown in the Form COLUMN / lead detail — the DISPLAY NAME (alias)
+ * for EVERYONE, admins included. This is the correction to the earlier
+ * behavior where admins saw the actual name in the column: admins see the
+ * alias here too (the actual name is exposed separately, admin-only, for a
+ * tooltip). Falls back only when no alias is set (a brand-new form before an
+ * admin names it): admins may fall back to the actual name, but managers and
+ * agents fall back to the generic label — NEVER the actual name.
+ */
+export function resolveFormDisplayName(
+  role: PrivacyRole,
+  actualFormName: string | null | undefined,
+  displayName: string | null | undefined
+): string {
+  const display = displayName?.trim() || null;
+  if (display) return display;
+  return canSeeActualFormName(role) ? actualFormName?.trim() || GENERIC_FORM_LABEL : GENERIC_FORM_LABEL;
+}

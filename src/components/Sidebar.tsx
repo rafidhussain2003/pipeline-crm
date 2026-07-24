@@ -108,6 +108,9 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   // this needs no role gate.
   { href: "/callbacks", label: "Callbacks", feature: "callback_engine" },
   { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration", roles: ["admin", "manager"] },
+  // Facebook Forms alias management — admin only (the page shows real Meta form
+  // names, which managers/agents must never see).
+  { href: "/settings/facebook-forms", label: "Facebook Forms", feature: "meta_integration", roles: ["admin"] },
   { href: "/settings/website-forms", label: "Website Forms", feature: "website_forms", roles: ["admin"] },
   { href: "/settings/conversions", label: "Conversions API", feature: "meta_integration", roles: ["admin", "manager"] },
   { href: "/settings/delivery-log", label: "Delivery Log", roles: ["admin", "manager"] },

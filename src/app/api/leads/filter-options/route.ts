@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { leads, leadSources, webhookLogs, leadForms } from "@/db/schema";
 import { getSession, type CompanySession } from "@/lib/auth";
 import { leadVisibilityConditions } from "@/lib/leads/access";
-import { resolveSourceName, resolveFormName } from "@/lib/leads/source-privacy";
+import { resolveSourceName, resolveFormDisplayName } from "@/lib/leads/source-privacy";
 import { and, asc, eq, isNotNull, isNull, ne } from "drizzle-orm";
 
 // Dropdown data for the Lead Filter bar: the Sources and States that actually
@@ -53,7 +53,7 @@ export async function GET() {
     // Dedupe by Meta form id (the filter value), keeping one resolved label.
     const formMap = new Map<string, string>();
     for (const r of formRows) {
-      if (!formMap.has(r.formId)) formMap.set(r.formId, resolveFormName(session.role, r.formName, r.displayName));
+      if (!formMap.has(r.formId)) formMap.set(r.formId, resolveFormDisplayName(session.role, r.formName, r.displayName));
     }
     const forms = [...formMap.entries()].map(([formId, name]) => ({ formId, name })).sort((a, b) => a.name.localeCompare(b.name));
 
