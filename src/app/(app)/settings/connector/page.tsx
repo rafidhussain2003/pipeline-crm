@@ -33,7 +33,7 @@ type Account = {
   status: "connected" | "token_expired" | "permission_revoked" | "error" | "disconnected";
 };
 
-type ConnectedForm = { id: string; formId: string; formName: string | null; enabled: boolean };
+type ConnectedForm = { id: string; formId: string; formName: string | null; agentDisplayName: string | null; enabled: boolean };
 
 type Business = { id: string; name: string } | null;
 type PendingPage = { id: string; name: string; business: Business };
@@ -308,6 +308,29 @@ function ConnectorContent() {
         [source.id]: (prev[source.id] || []).map((f) => (f.id === form.id ? { ...f, enabled: !f.enabled } : f)),
       }));
     }
+  }
+
+  // Save a form's agent-facing Display Name (on blur — one request per rename).
+  // Clearing it re-initializes to the real form name server-side, so agents
+  // always see a concrete label and never the actual name once it's customized.
+  async function saveFormDisplayName(source: Source, form: ConnectedForm, value: string) {
+    const trimmed = value.trim();
+    if (trimmed === (form.agentDisplayName || "")) return; // no change
+    const res = await fetch(`/api/lead-sources/${source.id}/forms/${form.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentDisplayName: trimmed }),
+    });
+    if (!res.ok) {
+      setAccountMessage((await res.json().catch(() => ({}))).error || "Could not save the form display name.");
+      return;
+    }
+    const saved = (await res.json()).form as ConnectedForm;
+    setDetailFormsBySource((prev) => ({
+      ...prev,
+      [source.id]: (prev[source.id] || []).map((f) => (f.id === form.id ? { ...f, agentDisplayName: saved.agentDisplayName } : f)),
+    }));
+    setAccountMessage("Form display name saved — this is what agents see.");
   }
 
   async function disconnectSource(source: Source) {
@@ -889,18 +912,39 @@ function ConnectorContent() {
                             {(detailFormsBySource[s.id] || []).length === 0 && (
                               <div className="text-xs text-slate-400">No forms connected.</div>
                             )}
-                            <div className="space-y-1">
+                            {(detailFormsBySource[s.id] || []).length > 0 && (
+                              <div className="grid grid-cols-[auto_1fr_1fr] gap-x-3 gap-y-1 items-center text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1">
+                                <span />
+                                <span>Actual Form Name</span>
+                                <span>Display Name (agents see this)</span>
+                              </div>
+                            )}
+                            <div className="space-y-1.5">
                               {(detailFormsBySource[s.id] || []).map((f) => (
-                                <label key={f.id} className="flex items-center gap-2 text-xs text-slate-700">
+                                <div key={f.id} className="grid grid-cols-[auto_1fr_1fr] gap-x-3 items-center">
                                   <input
                                     type="checkbox"
                                     checked={f.enabled}
                                     disabled={togglingFormId === f.id}
                                     onChange={() => toggleFormEnabled(s, f)}
+                                    aria-label={`Enable ${f.formName || f.formId}`}
                                     className="rounded border-slate-300"
                                   />
-                                  {f.formName || f.formId}
-                                </label>
+                                  {/* Actual (Meta) name — admin-only surface; never
+                                      shown to agents anywhere. */}
+                                  <span className="text-xs text-slate-500 truncate" title={f.formName || f.formId}>
+                                    {f.formName || f.formId}
+                                  </span>
+                                  {/* Editable agent-facing Display Name. */}
+                                  <input
+                                    type="text"
+                                    defaultValue={f.agentDisplayName || ""}
+                                    placeholder={f.formName || "Display name for agents"}
+                                    onBlur={(e) => saveFormDisplayName(s, f, e.target.value)}
+                                    aria-label={`Display name for ${f.formName || f.formId}`}
+                                    className="text-xs rounded-md border border-slate-200 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  />
+                                </div>
                               ))}
                             </div>
                           </div>

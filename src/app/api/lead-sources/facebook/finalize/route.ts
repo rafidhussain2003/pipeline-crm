@@ -100,7 +100,10 @@ export async function POST(req: NextRequest) {
   }
   if (selectedForms.length > 0) {
     await db.insert(leadForms).values(
-      selectedForms.map((f) => ({ sourceId: source.id, formId: f.id, formName: f.name || null, enabled: true }))
+      // Display name (agent-facing) initializes to the actual form name on
+      // connect, until an admin customizes it — form SETUP, not lead
+      // ingestion. Agents/managers see this value; the real name is admin-only.
+      selectedForms.map((f) => ({ sourceId: source.id, formId: f.id, formName: f.name || null, agentDisplayName: f.name || null, enabled: true }))
     );
   }
 

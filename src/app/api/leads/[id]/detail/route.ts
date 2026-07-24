@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { leads, users, leadSources, leadForms, webhookLogs, callbacks } from "@/db/schema";
 import { getSession, type CompanySession } from "@/lib/auth";
 import { leadVisibilityConditions } from "@/lib/leads/access";
-import { resolveSourceName } from "@/lib/leads/source-privacy";
+import { resolveSourceName, resolveFormName, canSeeActualFormName } from "@/lib/leads/source-privacy";
 import { computeFollowUp } from "@/lib/followup/engine";
 import { isUuid } from "@/lib/url";
 import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
@@ -85,7 +85,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     openCallback ?? null
   );
 
-  const formName: string | null = delivery ? resolveSourceName(session.role, delivery.formName, delivery.formAlias) : null;
+  // Form name uses the STRICTER form rule (resolveFormName), not the source
+  // rule: only Platform Owner/Admin ever see the actual form name — managers
+  // and agents see the display name only. formActual is populated for
+  // admin/owner alone, so the workspace can show the real name as secondary
+  // text; it is never sent to a manager or agent.
+  const formName: string | null = delivery ? resolveFormName(session.role, delivery.formName, delivery.formAlias) : null;
+  const formActual: string | null = delivery && canSeeActualFormName(session.role) ? delivery.formName ?? null : null;
 
   const { sourcePageName, sourceAlias, sourceId, ...rest } = lead;
   void sourceId;
@@ -96,6 +102,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       // same single resolution rule as every other surface.
       sourceName: resolveSourceName(session.role, sourcePageName, sourceAlias),
       formName,
+      formActual,
     },
     // The follow-up engine's verdict — Next Action / Due / Priority for the
     // workspace card. Computed here so the page needs no extra API call.

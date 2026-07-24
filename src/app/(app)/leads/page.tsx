@@ -14,6 +14,10 @@ type Lead = {
   followUpAt: string | null;
   createdAt: string;
   isDuplicate: boolean;
+  // Role-resolved Facebook form name (display name for agents/managers, actual
+  // for admins). formActual is the real Meta name, sent to admins ONLY.
+  form: string | null;
+  formActual: string | null;
 };
 
 type Disposition = { id: string; label: string; color: string; category?: string };
@@ -166,6 +170,7 @@ type Filters = {
   saleStatus: string; // "" | "won" | "lost" | "in_progress"
   followUpToday: boolean;
   date: string; // yyyy-mm-dd
+  formId: string; // Meta form id
 };
 
 const EMPTY_FILTERS: Filters = {
@@ -177,6 +182,7 @@ const EMPTY_FILTERS: Filters = {
   saleStatus: "",
   followUpToday: false,
   date: "",
+  formId: "",
 };
 
 const SALE_STATUS_OPTIONS = [
@@ -198,6 +204,7 @@ function filtersToParams(f: Filters, page: number): URLSearchParams {
   if (f.saleStatus) p.set("saleStatus", f.saleStatus);
   if (f.followUpToday) p.set("followUpToday", "1");
   if (f.date) p.set("date", f.date);
+  if (f.formId) p.set("formId", f.formId);
   if (page > 1) p.set("page", String(page));
   return p;
 }
@@ -212,6 +219,7 @@ function paramsToFilters(sp: URLSearchParams): Filters {
     saleStatus: sp.get("saleStatus") || "",
     followUpToday: sp.get("followUpToday") === "1",
     date: sp.get("date") || "",
+    formId: sp.get("formId") || "",
   };
 }
 
@@ -226,6 +234,7 @@ export default function LeadsPage() {
   // assignees roster; Dispositions reuse the existing fetch below.
   const [sources, setSources] = useState<{ id: string; name: string | null }[]>([]);
   const [states, setStates] = useState<string[]>([]);
+  const [forms, setForms] = useState<{ formId: string; name: string }[]>([]);
   const [agentOptions, setAgentOptions] = useState<{ id: string; name: string }[]>([]);
   // Set once the URL has been read on mount — the first fetch waits for it so
   // a shared/refreshed URL loads its filters instead of the empty default.
@@ -367,10 +376,11 @@ export default function LeadsPage() {
   // caller's visible leads). Best-effort — empty dropdowns never block search.
   useEffect(() => {
     fetch("/api/leads/filter-options")
-      .then((r) => (r.ok ? r.json() : { sources: [], states: [] }))
+      .then((r) => (r.ok ? r.json() : { sources: [], states: [], forms: [] }))
       .then((d) => {
         setSources(d.sources || []);
         setStates(d.states || []);
+        setForms(d.forms || []);
       })
       .catch(() => {});
   }, []);
@@ -618,6 +628,7 @@ export default function LeadsPage() {
   // with human-readable labels resolved from the option lists.
   const agentName = (id: string) => agentOptions.find((a) => a.id === id)?.name || "Agent";
   const sourceName = (id: string) => sources.find((s) => s.id === id)?.name || "Source";
+  const formLabel = (id: string) => forms.find((f) => f.formId === id)?.name || "Form";
   const saleLabel = (v: string) => SALE_STATUS_OPTIONS.find((o) => o.value === v)?.label || v;
   const activeChips: { key: string; label: string; clear: () => void }[] = [
     filters.search && { key: "search", label: `Search: ${filters.search}`, clear: () => setFilter({ search: "" }) },
@@ -625,6 +636,7 @@ export default function LeadsPage() {
     filters.ownerId && { key: "ownerId", label: `Agent: ${agentName(filters.ownerId)}`, clear: () => setFilter({ ownerId: "" }) },
     filters.source && { key: "source", label: `Source: ${sourceName(filters.source)}`, clear: () => setFilter({ source: "" }) },
     filters.state && { key: "state", label: `State: ${filters.state}`, clear: () => setFilter({ state: "" }) },
+    filters.formId && { key: "formId", label: `Form: ${formLabel(filters.formId)}`, clear: () => setFilter({ formId: "" }) },
     filters.saleStatus && { key: "saleStatus", label: `Sale: ${saleLabel(filters.saleStatus)}`, clear: () => setFilter({ saleStatus: "" }) },
     filters.followUpToday && { key: "followUpToday", label: "Follow-up Today", clear: () => setFilter({ followUpToday: false }) },
     filters.date && { key: "date", label: `Created: ${filters.date}`, clear: () => setFilter({ date: "" }) },
@@ -753,6 +765,19 @@ export default function LeadsPage() {
               </option>
             ))}
           </select>
+          {/* Form filter — labels are role-resolved server-side (agents see
+              display names, admins see actual names); the value is the form id,
+              so it filters identically for everyone. Hidden if no forms. */}
+          {forms.length > 0 && (
+            <select value={filters.formId} onChange={(e) => setFilter({ formId: e.target.value })} aria-label="Filter by form" className={selectCls}>
+              <option value="">All Forms</option>
+              {forms.map((f) => (
+                <option key={f.formId} value={f.formId}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          )}
           <select value={filters.saleStatus} onChange={(e) => setFilter({ saleStatus: e.target.value })} aria-label="Filter by sale status" className={selectCls}>
             <option value="">All Sale Status</option>
             {SALE_STATUS_OPTIONS.map((o) => (
@@ -875,20 +900,21 @@ export default function LeadsPage() {
               <th className="px-4 py-3">Email</th>
               <th className="px-4 py-3">Owner</th>
               <th className="px-4 py-3">Disposition</th>
+              <th className="px-4 py-3">Form</th>
               <th className="px-4 py-3">Created</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
                   Loading leads…
                 </td>
               </tr>
             )}
             {!loading && leads.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
                   No leads yet. Connect a Facebook page under Connect Facebook to start receiving leads.
                 </td>
               </tr>
@@ -941,6 +967,16 @@ export default function LeadsPage() {
                       </optgroup>
                     ))}
                   </select>
+                </td>
+                <td className="px-4 py-3 text-slate-600">
+                  {lead.form ? (
+                    // Admins get the actual Meta name on hover (formActual is
+                    // sent to admins only); agents/managers get the display
+                    // name with no actual name anywhere.
+                    <span title={lead.formActual || undefined}>{lead.form}</span>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-slate-400">{new Date(lead.createdAt).toLocaleString()}</td>
               </tr>

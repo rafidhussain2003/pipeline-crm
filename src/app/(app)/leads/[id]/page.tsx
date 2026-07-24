@@ -31,6 +31,9 @@ type LeadDetail = {
   sourceName: string | null;
   sourcePlatform: string | null;
   formName: string | null;
+  // Actual Meta form name — the detail API sends this to admins/owner ONLY
+  // (null for managers/agents), so showing it can never leak.
+  formActual: string | null;
 };
 
 type Note = { id: string; body: string; createdAt: string; editedAt: string | null; authorId: string | null; authorName: string | null };
@@ -599,7 +602,19 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
             )}
             {lead.state && infoRow("Address / State", lead.state)}
             {lead.sourceName && infoRow("Lead Source", lead.sourceName)}
-            {lead.formName && infoRow("Facebook Form", lead.formName)}
+            {lead.formName &&
+              infoRow(
+                "Facebook Form",
+                // Display name is the primary value everyone sees; the actual
+                // Meta name shows as secondary text for admins only (formActual
+                // is null for managers/agents, so it simply never renders).
+                <span>
+                  {lead.formName}
+                  {lead.formActual && lead.formActual !== lead.formName && (
+                    <span className="block text-xs text-slate-400">Actual: {lead.formActual}</span>
+                  )}
+                </span>
+              )}
             {infoRow(
               lead.sourcePlatform === "facebook" ? "Original Facebook Created Time" : "Created",
               new Date(lead.createdAt).toLocaleString()

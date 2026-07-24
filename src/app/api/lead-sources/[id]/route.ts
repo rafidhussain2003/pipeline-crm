@@ -34,8 +34,22 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     .limit(1);
   if (!source) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  // Connection management is admin-only (matches the form enable/rename PATCH).
+  // This also keeps the REAL form name — returned below — out of any lower
+  // role's reach, satisfying "the actual form name must never be returned to
+  // users who don't have permission" at the API, not just the UI.
+  if (session.role !== "admin") {
+    return NextResponse.json({ error: "Only company admins can view connection details" }, { status: 403 });
+  }
+
   const forms = await db
-    .select({ id: leadForms.id, formId: leadForms.formId, formName: leadForms.formName, enabled: leadForms.enabled })
+    .select({
+      id: leadForms.id,
+      formId: leadForms.formId,
+      formName: leadForms.formName,
+      agentDisplayName: leadForms.agentDisplayName,
+      enabled: leadForms.enabled,
+    })
     .from(leadForms)
     .where(eq(leadForms.sourceId, id));
 

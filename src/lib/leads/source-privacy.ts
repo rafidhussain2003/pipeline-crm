@@ -57,3 +57,48 @@ export function sourceNamesForAdmin(
   const alias = agentDisplayName?.trim() || null;
   return { actualName: actual, agentDisplayName: alias, effectiveForAgents: alias ?? actual };
 }
+
+// ---------------------------------------------------------------------------
+// FACEBOOK FORM names — a STRICTER rule than source (page) names above.
+//
+// A Facebook Lead FORM name ("AT&T Fiber Texas Campaign") is campaign
+// intelligence the business does not want agents OR managers to see; only the
+// Platform Owner and the company Admin may. This deliberately differs from the
+// source/page rule, where managers DO see the real name for reporting — hence
+// a separate resolver instead of reusing resolveSourceName. The two must not
+// be conflated: changing one must never silently change the other.
+//
+// The security-critical property: for manager/agent this function can NEVER
+// return the actual form name — not even as a fallback when no display name is
+// set. An unaliased form falls back to a GENERIC label, never the real one.
+// Existing forms are backfilled (display name := form name) so this generic
+// fallback is only ever hit by a brand-new form before an admin names it.
+// ---------------------------------------------------------------------------
+
+const ROLES_SEEING_ACTUAL_FORM_NAME = new Set(["super_admin", "admin"]);
+
+/** Only the Platform Owner and company Admin may see a form's REAL name. */
+export function canSeeActualFormName(role: PrivacyRole): boolean {
+  return typeof role === "string" && ROLES_SEEING_ACTUAL_FORM_NAME.has(role);
+}
+
+// Shown to manager/agent when a form has no display name yet (a new form an
+// admin hasn't labelled). Deliberately NOT the actual form name.
+export const GENERIC_FORM_LABEL = "Facebook Lead Form";
+
+/**
+ * The form name to render for `role`.
+ *   - Platform Owner / Admin → the actual form name.
+ *   - Manager / Agent → the display name, or the generic label if unset.
+ *     NEVER the actual name.
+ */
+export function resolveFormName(
+  role: PrivacyRole,
+  actualFormName: string | null | undefined,
+  displayName: string | null | undefined
+): string {
+  const actual = actualFormName?.trim() || null;
+  const display = displayName?.trim() || null;
+  if (canSeeActualFormName(role)) return actual ?? GENERIC_FORM_LABEL;
+  return display ?? GENERIC_FORM_LABEL;
+}

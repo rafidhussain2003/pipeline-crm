@@ -47,7 +47,9 @@ export async function syncOneSource(
     if (newForms.length > 0) {
       await db
         .insert(leadForms)
-        .values(newForms.map((f) => ({ sourceId: source.id, formId: f.id, formName: f.name, enabled: false })));
+        // Display name initializes to the actual form name (agent-facing),
+        // customizable by an admin later — additive to form discovery.
+        .values(newForms.map((f) => ({ sourceId: source.id, formId: f.id, formName: f.name, agentDisplayName: f.name, enabled: false })));
     }
 
     await db

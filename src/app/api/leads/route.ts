@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leads, users } from "@/db/schema";
+import { leads, users, webhookLogs, leadForms } from "@/db/schema";
 import { getSession, type CompanySession } from "@/lib/auth";
 import { leadVisibilityConditions } from "@/lib/leads/access";
 import { isUuid } from "@/lib/url";
 import { WON_DISPOSITIONS, LOST_DISPOSITIONS, TERMINAL_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
-import { and, count, desc, eq, gte, ilike, inArray, isNull, lt, notInArray, or } from "drizzle-orm";
+import { resolveFormName, canSeeActualFormName } from "@/lib/leads/source-privacy";
+import { and, count, desc, eq, exists, gte, ilike, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import "@/lib/assignment"; // registers the "lead.assign" job handler with the queue
 import "@/lib/workflows/registry"; // registers the lead.created -> workflow listener
 import { queue } from "@/lib/infra/queue";
@@ -33,6 +34,7 @@ export async function GET(req: NextRequest) {
   const saleStatus = searchParams.get("saleStatus"); // won | lost | in_progress
   const followUpToday = searchParams.get("followUpToday") === "1";
   const date = searchParams.get("date"); // yyyy-mm-dd — leads created that day
+  const formId = searchParams.get("formId"); // Meta form id — leads from that form
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
   // Phase 1A: caller-selectable page size, clamped to a fixed allow-list. Not a
   // free-form number — an arbitrary ?pageSize=100000 would let one request pull
@@ -78,6 +80,21 @@ export async function GET(req: NextRequest) {
       end.setDate(end.getDate() + 1);
       conditions.push(and(gte(leads.createdAt, start), lt(leads.createdAt, end))!);
     }
+  }
+  // Form filter — a lead's form lives on its delivery log (webhook_logs), not
+  // the lead row, so this is an EXISTS on that link. The value is the Meta form
+  // id; agents pick it from a display-name-labelled dropdown, admins from an
+  // actual-name-labelled one, but the underlying id (and therefore the result)
+  // is identical — role only changes the LABEL, never which leads match.
+  if (formId) {
+    conditions.push(
+      exists(
+        db
+          .select({ x: sql`1` })
+          .from(webhookLogs)
+          .where(and(eq(webhookLogs.leadId, leads.id), eq(webhookLogs.formId, formId)))
+      )
+    );
   }
   if (search) {
     const searchCond = or(
@@ -130,8 +147,43 @@ export async function GET(req: NextRequest) {
       .where(and(...conditions)),
   ]);
 
+  // Role-aware Form name per lead (the "Form" column). Kept OUT of the hot
+  // rows/count query above: one extra query bounded to THIS page's lead ids
+  // (never the whole table), joining the delivery log to the form. The name is
+  // resolved through the privacy layer — agents/managers get the display name
+  // only, admins additionally get the actual name (formActual) for the tooltip.
+  // A lead with no provider form (CSV/manual/website) simply has form: null.
+  const canSeeActual = canSeeActualFormName(session.role);
+  let leadsOut: ((typeof rows)[number] & { form: string | null; formActual: string | null })[] = rows.map((r) => ({
+    ...r,
+    form: null,
+    formActual: null,
+  }));
+  if (rows.length > 0) {
+    const ids = rows.map((r) => r.id);
+    const formRows = await db
+      .selectDistinctOn([webhookLogs.leadId], {
+        leadId: webhookLogs.leadId,
+        formName: leadForms.formName,
+        displayName: leadForms.agentDisplayName,
+      })
+      .from(webhookLogs)
+      .innerJoin(leadForms, and(eq(leadForms.sourceId, webhookLogs.sourceId), eq(leadForms.formId, webhookLogs.formId)))
+      .where(and(inArray(webhookLogs.leadId, ids), isNotNull(webhookLogs.formId)))
+      .orderBy(webhookLogs.leadId);
+    const byLead = new Map(formRows.map((f) => [f.leadId, f]));
+    leadsOut = rows.map((r) => {
+      const f = byLead.get(r.id);
+      return {
+        ...r,
+        form: f ? resolveFormName(session.role, f.formName, f.displayName) : null,
+        formActual: f && canSeeActual ? f.formName ?? null : null,
+      };
+    });
+  }
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  return NextResponse.json({ leads: rows, page, pageSize, total, totalPages });
+  return NextResponse.json({ leads: leadsOut, page, pageSize, total, totalPages });
 }
 
 export async function POST(req: NextRequest) {
