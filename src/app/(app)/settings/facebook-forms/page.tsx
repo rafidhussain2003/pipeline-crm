@@ -59,7 +59,10 @@ export default function FacebookFormsPage() {
     setSavingId(form.id);
     setNotice("");
     try {
-      const res = await fetch(`/api/lead-sources/${form.sourceId}/forms/${form.formId}`, {
+      // The forms PATCH keys on the lead_forms ROW id (a uuid), not the Meta
+      // form id — passing form.formId (the Meta numeric id) made Postgres try
+      // to cast it to uuid and 500, which surfaced as "Could not save".
+      const res = await fetch(`/api/lead-sources/${form.sourceId}/forms/${form.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agentDisplayName: trimmed }),
