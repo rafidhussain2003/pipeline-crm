@@ -35,6 +35,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (session.role !== "admin" && (before.role === "admin" || body.role === "admin")) {
     return NextResponse.json({ error: "Only an admin can manage another admin's account." }, { status: 403 });
   }
+  // Lead Distribution Manager is admin-only to grant or change, matching how
+  // creating one is admin-only (see POST /api/users) — it's a company-wide
+  // (masked) leads role, not an ordinary seat a manager assigns.
+  if (session.role !== "admin" && (before.role === "lead_distributor" || body.role === "lead_distributor")) {
+    return NextResponse.json({ error: "Only an admin can manage a Lead Distribution Manager." }, { status: 403 });
+  }
 
   // Prevent locking yourself out: disabling your own account here would
   // leave you unable to re-enable it (no one else may be around to do it).

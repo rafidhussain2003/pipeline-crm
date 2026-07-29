@@ -455,6 +455,12 @@ export default function AgentsPage() {
               >
                 <option value="agent">Agent</option>
                 <option value="manager">Manager</option>
+                {/* Lead Distribution Manager — admin-only, and shown when the
+                    edited user already has it so the dropdown never hides their
+                    current role. */}
+                {(canManageAdmins || editForm.role === "lead_distributor") && (
+                  <option value="lead_distributor">Lead Distribution Manager</option>
+                )}
                 {canManageAdmins && <option value="admin">Admin</option>}
               </select>
               {editing.isOwner && <p className="text-xs text-slate-400">The company owner&apos;s role can&apos;t be changed.</p>}
