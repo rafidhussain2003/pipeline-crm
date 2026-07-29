@@ -84,4 +84,6 @@ export interface CandidateAgent {
   presenceStatus: PresenceStatus;
   lastHeartbeatAt: Date | null;
   lastAssignedAt: Date | null;
+  // Last AUTOMATIC assignment time — drives the cooldown eligibility filter.
+  lastAutoAssignedAt: Date | null;
 }

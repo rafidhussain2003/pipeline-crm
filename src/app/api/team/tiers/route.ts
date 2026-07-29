@@ -7,8 +7,9 @@ import { recordAudit } from "@/lib/audit";
 import { eventBus } from "@/lib/events/bus";
 import { checkPolicy } from "@/lib/rate-limit";
 import { deriveDisplayStatus, type PresenceStatus } from "@/lib/presence";
-import { and, count, eq, gte, isNull } from "drizzle-orm";
+import { and, count, eq, gte, isNull, notInArray } from "drizzle-orm";
 import { resolveDateRange } from "@/lib/analytics/range";
+import { TERMINAL_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
 
 // Enterprise Agent Tier Management — the roster behind the "Agent Tier
 // Assignments" section on the Automation settings page.
@@ -39,9 +40,10 @@ export async function GET() {
 
   const { from: startOfToday } = resolveDateRange("today");
 
-  // Roster, per-company heartbeat timeout (to derive an honest online state),
-  // and today's per-agent assignment counts — independent, fired together.
-  const [agents, [settingsRow], assignedTodayRows] = await Promise.all([
+  // Roster (incl. cooldown clock), company settings (heartbeat + master switch
+  // + cooldown duration), today's assignment counts, and the current waiting
+  // queue depth — independent, fired together.
+  const [agents, [settingsRow], assignedTodayRows, [{ queueDepth }]] = await Promise.all([
     db
       .select({
         id: users.id,
@@ -51,12 +53,17 @@ export async function GET() {
         presenceStatus: users.presenceStatus,
         lastHeartbeatAt: users.lastHeartbeatAt,
         locked: users.locked,
+        lastAutoAssignedAt: users.lastAutoAssignedAt,
       })
       .from(users)
       .where(and(eq(users.companyId, session.companyId), eq(users.role, "agent"), eq(users.active, true), isNull(users.deletedAt)))
       .orderBy(users.name),
     db
-      .select({ heartbeatTimeoutSeconds: automationSettings.heartbeatTimeoutSeconds })
+      .select({
+        heartbeatTimeoutSeconds: automationSettings.heartbeatTimeoutSeconds,
+        autoAssignEnabled: automationSettings.autoAssignEnabled,
+        assignmentCooldownSeconds: automationSettings.assignmentCooldownSeconds,
+      })
       .from(automationSettings)
       .where(eq(automationSettings.companyId, session.companyId))
       .limit(1),
@@ -66,28 +73,48 @@ export async function GET() {
       .innerJoin(leads, eq(assignmentLog.leadId, leads.id))
       .where(and(eq(leads.companyId, session.companyId), eq(assignmentLog.status, "assigned"), gte(assignmentLog.assignedAt, startOfToday)))
       .groupBy(assignmentLog.assignedTo),
+    // Waiting queue = unassigned, live leads (owner NULL, not deleted, not
+    // terminal) — what the cooldown/queue engine will hand out next.
+    db
+      .select({ queueDepth: count() })
+      .from(leads)
+      .where(and(eq(leads.companyId, session.companyId), isNull(leads.ownerId), isNull(leads.deletedAt), notInArray(leads.disposition, TERMINAL_DISPOSITIONS))),
   ]);
 
   const heartbeatTimeoutSeconds = settingsRow?.heartbeatTimeoutSeconds ?? 90;
+  const cooldownSeconds = settingsRow?.assignmentCooldownSeconds ?? 300;
   const assignedTodayMap = new Map(assignedTodayRows.map((r) => [r.assignedTo, r.value]));
+  const now = Date.now();
 
   return NextResponse.json({
     viewerCanEdit: session.role === "admin" || session.role === "lead_distributor",
-    agents: agents.map((a) => ({
-      id: a.id,
-      name: a.name,
-      email: a.email,
-      tier: a.tier ?? "1",
-      presenceStatus: deriveDisplayStatus(
-        { presenceStatus: a.presenceStatus as PresenceStatus, lastHeartbeatAt: a.lastHeartbeatAt },
-        heartbeatTimeoutSeconds
-      ),
-      assignedToday: assignedTodayMap.get(a.id) || 0,
-      // "Auto assign" per agent = not locked. Locking (Team dashboard) is the
-      // existing mechanism that excludes an agent from automatic assignment —
-      // surfaced here read-only so the roster matches what the engine does.
-      autoAssignEnabled: !a.locked,
-    })),
+    // Master auto-assignment switch + cooldown config + live queue depth for
+    // the Auto Assignment console header.
+    autoAssignEnabled: settingsRow?.autoAssignEnabled ?? true,
+    cooldownSeconds,
+    queueDepth,
+    agents: agents.map((a) => {
+      // Server-computed cooldown remaining (never trust browser time). 0 = ready.
+      const remaining =
+        cooldownSeconds > 0 && a.lastAutoAssignedAt
+          ? Math.max(0, Math.ceil((a.lastAutoAssignedAt.getTime() + cooldownSeconds * 1000 - now) / 1000))
+          : 0;
+      return {
+        id: a.id,
+        name: a.name,
+        email: a.email,
+        tier: a.tier ?? "1",
+        presenceStatus: deriveDisplayStatus(
+          { presenceStatus: a.presenceStatus as PresenceStatus, lastHeartbeatAt: a.lastHeartbeatAt },
+          heartbeatTimeoutSeconds
+        ),
+        assignedToday: assignedTodayMap.get(a.id) || 0,
+        // "Auto assign" per agent = not locked (the participation toggle).
+        autoAssignEnabled: !a.locked,
+        // Seconds until this agent is eligible for another auto lead (0 = Ready).
+        cooldownRemainingSeconds: remaining,
+      };
+    }),
   });
 }
 

@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { subscribeLeadStream } from "@/lib/leads/stream-client";
+import {
+  startNewLeadAlert,
+  stopNewLeadAlert,
+  isNewLeadSoundMuted,
+  setNewLeadSoundMuted,
+} from "@/lib/leads/new-lead-alert-sound";
 
 // Manager Console — Fresh Leads. The Lead Distribution Manager's primary
 // workspace, optimized for one job: decide which agent gets a lead and assign
@@ -113,6 +119,59 @@ export default function FreshLeadsPage() {
   const [pickerFor, setPickerFor] = useState<{ ids: string[] } | null>(null);
   const [notice, setNotice] = useState("");
 
+  // Realtime new-lead alerts. `newLeadIds` drives the row glow + NEW badge;
+  // `alertCount` drives the "N New Leads Waiting" banner. Both are cleared when
+  // the manager acknowledges (opens a picker / assigns / dismisses), which also
+  // silences the sound. Arrivals are deduped by id so a reconnect never
+  // double-counts the same lead.
+  const [newLeadIds, setNewLeadIds] = useState<Set<string>>(new Set());
+  const [alertCount, setAlertCount] = useState(0);
+  const [soundMuted, setSoundMuted] = useState(false);
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission | "unsupported">("unsupported");
+  const arrivalIdsRef = useRef<Set<string>>(new Set());
+  const notifiedIdsRef = useRef<Set<string>>(new Set());
+  const tableRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setSoundMuted(isNewLeadSoundMuted());
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setNotifPermission(Notification.permission);
+    }
+    // Never leave a sequence ringing after the manager leaves the page.
+    return () => stopNewLeadAlert();
+  }, []);
+
+  // Silence + clear the alert. Called on open/assign/dismiss — the three
+  // "acknowledged" actions from the spec.
+  const acknowledge = useCallback(() => {
+    stopNewLeadAlert();
+    arrivalIdsRef.current.clear();
+    setNewLeadIds(new Set());
+    setAlertCount(0);
+  }, []);
+
+  // Opening the assign picker counts as acknowledging the alert.
+  const openPicker = useCallback((ids: string[]) => {
+    acknowledge();
+    setPickerFor({ ids });
+  }, [acknowledge]);
+
+  function toggleMute() {
+    const next = !soundMuted;
+    setSoundMuted(next);
+    setNewLeadSoundMuted(next);
+    if (next) stopNewLeadAlert();
+  }
+
+  async function enableDesktopAlerts() {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    try {
+      setNotifPermission(await Notification.requestPermission());
+    } catch {
+      /* ignore */
+    }
+  }
+
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!opts?.silent) setLoading(true);
     setError("");
@@ -147,8 +206,56 @@ export default function FreshLeadsPage() {
   useEffect(() => {
     const timer = { current: null as ReturnType<typeof setTimeout> | null };
     const bump = () => { if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => loadRef.current({ silent: true }), 500); };
-    return subscribeLeadStream({ events: { "lead.created": bump, "lead.assigned": bump } });
+
+    // A brand-new unassigned lead: sound + banner + row highlight + desktop
+    // notification. The SSE frame carries only { leadId, at, source } — never
+    // customer name or phone — so nothing here can leak PII regardless of
+    // Privacy Mode; the per-lead detail (form/state/time) shown in the desktop
+    // notification is read later from the already-masked /api/leads row.
+    const onCreated = (raw: string) => {
+      let leadId: string | null = null;
+      try {
+        leadId = (JSON.parse(raw) as { leadId?: string }).leadId ?? null;
+      } catch {
+        /* payload-less frame — still worth a refresh */
+      }
+      if (leadId && !arrivalIdsRef.current.has(leadId)) {
+        arrivalIdsRef.current.add(leadId);
+        setNewLeadIds((prev) => new Set(prev).add(leadId!));
+        setAlertCount((c) => c + 1);
+        startNewLeadAlert(); // no-op if a sequence is already playing
+      }
+      bump();
+    };
+
+    return subscribeLeadStream({ events: { "lead.created": onCreated, "lead.assigned": bump } });
   }, []);
+
+  // Desktop notification + scroll-into-view for freshly arrived leads, sourced
+  // from the (already privacy-masked) reloaded rows so form/state/time are
+  // correct and PII-safe. Fires once per lead. Never touches name/phone.
+  useEffect(() => {
+    if (newLeadIds.size === 0) return;
+    const fresh = leads.filter((l) => newLeadIds.has(l.id) && !notifiedIdsRef.current.has(l.id));
+    if (fresh.length === 0) return;
+    for (const l of fresh) {
+      notifiedIdsRef.current.add(l.id);
+      if (notifPermission === "granted" && typeof window !== "undefined" && "Notification" in window) {
+        try {
+          const parts = [l.form && `Form: ${l.form}`, l.state && `State: ${l.state}`, `Received ${new Date(l.createdAt).toLocaleTimeString()}`].filter(Boolean);
+          new Notification("New Lead Received", { body: parts.join(" · "), tag: `new-lead-${l.id}`, icon: "/favicon.ico" });
+        } catch {
+          /* notifications are a nicety */
+        }
+      }
+    }
+    // Scroll the newest arrival into view — but never yank the page while the
+    // manager is mid-assignment in the picker dialog.
+    if (!pickerFor) {
+      const row = tableRef.current?.querySelector('[data-new="1"]');
+      row?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [leads, newLeadIds, notifPermission, pickerFor]);
 
   async function assignTo(ids: string[], agentId: string): Promise<string | null> {
     try {
@@ -159,6 +266,7 @@ export default function FreshLeadsPage() {
       });
       if (!res.ok) return (await res.json().catch(() => ({}))).error || "Could not assign";
       setPickerFor(null);
+      acknowledge();
       setNotice(`Assigned ${ids.length === 1 ? "1 lead" : `${ids.length} leads`}.`);
       await load({ silent: true });
       return null;
@@ -171,15 +279,53 @@ export default function FreshLeadsPage() {
 
   return (
     <div className="p-6">
-      <div className="mb-5">
-        <h1 className="text-xl font-semibold text-slate-900">
-          Fresh Leads <span className="text-blue-600">{total.toLocaleString()} total</span>
-        </h1>
-        <p className="text-sm text-slate-500 mt-0.5">
-          Assign incoming leads to your agents.{" "}
-          {masked ? "Customer identity is protected (Privacy Mode on)." : "Full customer details are visible."}
-        </p>
+      <div className="mb-5 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-900">
+            Fresh Leads <span className="text-blue-600">{total.toLocaleString()} total</span>
+          </h1>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Assign incoming leads to your agents.{" "}
+            {masked ? "Customer identity is protected (Privacy Mode on)." : "Full customer details are visible."}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {notifPermission === "default" && (
+            <button
+              onClick={enableDesktopAlerts}
+              className="text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md px-2.5 py-1.5"
+            >
+              Enable desktop alerts
+            </button>
+          )}
+          <button
+            onClick={toggleMute}
+            aria-pressed={soundMuted}
+            title={soundMuted ? "New-lead sound is muted" : "New-lead sound is on"}
+            className={`text-xs font-medium rounded-md px-2.5 py-1.5 ${soundMuted ? "text-slate-500 bg-slate-100 hover:bg-slate-200" : "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"}`}
+          >
+            {soundMuted ? "🔇 Sound off" : "🔔 Sound on"}
+          </button>
+        </div>
       </div>
+
+      {/* Realtime new-lead banner. Privacy-safe by construction: it shows only a
+          count — never a customer's name or phone. */}
+      {alertCount > 0 && (
+        <div role="status" className="mb-4 flex items-center justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-2.5 animate-pulse">
+          <span className="text-sm font-semibold text-amber-900">
+            🔔 {alertCount === 1 ? "1 New Lead Waiting" : `${alertCount} New Leads Waiting`}
+          </span>
+          <div className="flex items-center gap-2">
+            {status !== "unassigned" && (
+              <button onClick={() => { setStatus("unassigned"); }} className="text-xs font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 rounded px-2.5 py-1">
+                View fresh
+              </button>
+            )}
+            <button onClick={acknowledge} className="text-xs font-semibold text-amber-900 hover:text-amber-950 px-2 py-1">Dismiss</button>
+          </div>
+        </div>
+      )}
 
       {notice && (
         <div role="status" className="mb-4 flex items-center justify-between gap-3 text-sm bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-md px-3 py-2">
@@ -219,12 +365,12 @@ export default function FreshLeadsPage() {
           <span className="text-sm font-medium text-blue-900">{selected.size === 1 ? "1 lead selected" : `${selected.size} leads selected`}</span>
           <div className="flex items-center gap-2">
             <button onClick={() => setSelected(new Set())} className="text-sm font-medium text-slate-600 hover:text-slate-800 px-2 py-1.5">Clear</button>
-            <button onClick={() => setPickerFor({ ids: [...selected] })} className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md px-4 py-1.5">Assign</button>
+            <button onClick={() => openPicker([...selected])} className="text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md px-4 py-1.5">Assign</button>
           </div>
         </div>
       )}
 
-      <div className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
+      <div ref={tableRef} className="bg-white rounded-lg border border-slate-200 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500 uppercase tracking-wide">
@@ -249,8 +395,16 @@ export default function FreshLeadsPage() {
           <tbody>
             {loading && <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">Loading…</td></tr>}
             {!loading && leads.length === 0 && <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">No leads here right now.</td></tr>}
-            {leads.map((l) => (
-              <tr key={l.id} className={`border-b border-slate-100 hover:bg-slate-50 ${selected.has(l.id) ? "bg-blue-50/50" : ""}`}>
+            {leads.map((l) => {
+              const isNew = newLeadIds.has(l.id);
+              return (
+              <tr
+                key={l.id}
+                data-new={isNew ? "1" : undefined}
+                className={`border-b border-slate-100 transition-colors hover:bg-slate-50 ${
+                  isNew ? "bg-amber-50 shadow-[inset_3px_0_0_0_#f59e0b]" : selected.has(l.id) ? "bg-blue-50/50" : ""
+                }`}
+              >
                 <td className="px-3 py-3">
                   <input type="checkbox" aria-label={`Select ${l.name || "lead"}`} checked={selected.has(l.id)}
                     onChange={() => setSelected((prev) => { const n = new Set(prev); if (n.has(l.id)) n.delete(l.id); else n.add(l.id); return n; })}
@@ -264,6 +418,7 @@ export default function FreshLeadsPage() {
                   ) : (
                     <Link href={`/leads/${l.id}`} className="font-medium text-blue-700 hover:underline">{l.name || "—"}</Link>
                   )}
+                  {isNew && <span className="ml-2 text-[10px] font-bold uppercase tracking-wide text-white bg-amber-500 rounded-full px-2 py-0.5 animate-pulse">New</span>}
                   {l.isDuplicate && <span className="ml-2 text-[10px] font-semibold text-amber-700 bg-amber-50 rounded-full px-2 py-0.5">DUPLICATE</span>}
                 </td>
                 <td className="px-3 py-3 text-slate-700">{l.phone || "—"}</td>
@@ -281,12 +436,13 @@ export default function FreshLeadsPage() {
                 <td className="px-3 py-3 text-slate-500">{leadAge(l.createdAt)}</td>
                 <td className="px-3 py-3 text-slate-400 whitespace-nowrap">{new Date(l.createdAt).toLocaleString()}</td>
                 <td className="px-3 py-3 text-right">
-                  <button onClick={() => setPickerFor({ ids: [l.id] })} className="text-xs font-semibold text-blue-700 hover:text-blue-900 whitespace-nowrap">
+                  <button onClick={() => openPicker([l.id])} className="text-xs font-semibold text-blue-700 hover:text-blue-900 whitespace-nowrap">
                     {l.ownerId ? "Reassign" : "Assign"}
                   </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

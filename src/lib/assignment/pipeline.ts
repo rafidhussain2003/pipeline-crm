@@ -202,6 +202,32 @@ async function decide(
     pool = assignable;
   }
 
+  // Smart Cooldown — an agent who received an AUTOMATIC lead within the
+  // configured window sits out so a small online pool isn't flooded while
+  // others are unavailable. HARD filter: if it empties the pool the lead stays
+  // unassigned and the existing sweep (cron + the heartbeat-triggered kick when
+  // an agent frees up or a new agent logs in) re-drives it FIFO once a
+  // cooldown expires. Weighting/tier/rotation are untouched — this only removes
+  // cooling-down agents from the candidate set, exactly like the presence
+  // filter above. Manual/supervisor assignment never stamps lastAutoAssignedAt,
+  // so it never triggers or is blocked by cooldown.
+  const cooldownSeconds = settings?.assignmentCooldownSeconds ?? 300;
+  if (cooldownSeconds > 0) {
+    const cutoffMs = Date.now() - cooldownSeconds * 1000;
+    const ready = pool.filter((a) => !a.lastAutoAssignedAt || a.lastAutoAssignedAt.getTime() <= cutoffMs);
+    const cooling = pool.length - ready.length;
+    if (cooling > 0) {
+      metrics.increment("assignment.filtered_cooldown", cooling);
+      logger.debug("assignment_filtered", { reason: "cooldown", cooling, remaining: ready.length });
+    }
+    if (ready.length === 0) {
+      metrics.increment("assignment.unassigned_cooldown");
+      logger.info("assignment_skipped", { reason: "all_agents_cooling_down" });
+      return result("no_eligible_agent", startedAt, { reason: "all_agents_cooling_down" });
+    }
+    pool = ready;
+  }
+
   const mode = settings?.assignmentMode || "weighted";
 
   // Skill filter (skill_based only) — never strands a lead: falls back to the
@@ -321,7 +347,11 @@ async function decide(
       .returning({ id: leads.id });
     if (claimed.length === 0) return { kind: "claim_lost" as const };
 
-    await db.update(users).set({ lastAssignedAt: new Date() }).where(eq(users.id, decision.agentId));
+    // Stamp BOTH: lastAssignedAt (idle-based strategies, unchanged) and
+    // lastAutoAssignedAt (starts this agent's cooldown). Only the automatic
+    // pipeline writes lastAutoAssignedAt — manual/supervisor assignment doesn't,
+    // so a manual assignment never puts an agent on cooldown.
+    await db.update(users).set({ lastAssignedAt: new Date(), lastAutoAssignedAt: new Date() }).where(eq(users.id, decision.agentId));
     return { kind: "assigned" as const, agentId: decision.agentId, rationale: decision.rationale, score: decision.score, detail: decision.detail };
   });
 

@@ -11,6 +11,8 @@ export interface RosterAgent {
   presenceStatus: PresenceStatus;
   lastHeartbeatAt: Date | null;
   lastAssignedAt: Date | null;
+  // Last AUTOMATIC assignment time — drives the cooldown eligibility filter.
+  lastAutoAssignedAt: Date | null;
 }
 
 // One agent's live presence as tracked by the service's in-memory cache.

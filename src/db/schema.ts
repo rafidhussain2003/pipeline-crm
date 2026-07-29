@@ -261,6 +261,12 @@ export const users = pgTable(
     // assignment_log on every assignment. Drives the last_assigned /
     // most_available selection modes and the "ai" mode's idle-time signal.
     lastAssignedAt: timestamp("last_assigned_at"),
+    // Smart Cooldown: the last time this agent received an AUTOMATIC assignment
+    // (stamped only by the assignment pipeline, never by manual/supervisor
+    // assignment). While within automation_settings.assignment_cooldown_seconds
+    // of this, the agent is skipped by auto-assignment so a few online agents
+    // aren't flooded — see the cooldown filter in lib/assignment/pipeline.ts.
+    lastAutoAssignedAt: timestamp("last_auto_assigned_at"),
     // Supervisor kill-switch: a locked agent is excluded from assignment
     // regardless of presence/workload, until a supervisor unlocks them
     // (see src/lib/supervisor.ts). Defaults false so no existing agent is
@@ -1041,6 +1047,11 @@ export const automationSettings = pgTable("automation_settings", {
   // the recycle cron stops touching it (an admin can still act on it
   // manually) instead of cycling it between agents forever.
   maxRecycleCount: integer("max_recycle_count").notNull().default(5),
+  // Smart Assignment Cooldown — after an agent receives an automatic lead they
+  // sit out this many seconds before they're eligible for another, so a small
+  // online pool isn't flooded while others are unavailable. Default 300s (5
+  // min); admin-configurable to 60/120/180/300/600/900. 0 disables the cooldown.
+  assignmentCooldownSeconds: integer("assignment_cooldown_seconds").notNull().default(300),
   // Persistent round-robin position for this company's automatic
   // assignment cycle (see assignLead()). Replaces the old approach of
   // computing the cursor as COUNT(*) over the company's entire

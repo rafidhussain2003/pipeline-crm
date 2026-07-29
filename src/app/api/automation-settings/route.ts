@@ -43,8 +43,15 @@ export async function PATCH(req: NextRequest) {
     "workingHoursEnd",
     "maxOpenLeadsPerAgent",
     "maxRecycleCount",
+    // Smart Assignment Cooldown (seconds). Admin-only, like the rest here.
+    "assignmentCooldownSeconds",
   ]) {
     if (key in body) allowed[key] = body[key];
+  }
+  // Cooldown must be one of the offered durations (or 0 = disabled).
+  const ALLOWED_COOLDOWNS = [0, 60, 120, 180, 300, 600, 900];
+  if ("assignmentCooldownSeconds" in allowed && !ALLOWED_COOLDOWNS.includes(allowed.assignmentCooldownSeconds as number)) {
+    return NextResponse.json({ error: "Assignment cooldown must be 1, 2, 3, 5, 10, or 15 minutes." }, { status: 400 });
   }
 
   const [beforeRow] = await db.select().from(automationSettings).where(eq(automationSettings.companyId, session.companyId)).limit(1);
@@ -100,6 +107,7 @@ export async function PATCH(req: NextRequest) {
             workingHoursEnd: beforeRow.workingHoursEnd,
             maxOpenLeadsPerAgent: beforeRow.maxOpenLeadsPerAgent,
             maxRecycleCount: beforeRow.maxRecycleCount,
+            assignmentCooldownSeconds: beforeRow.assignmentCooldownSeconds,
           }
         : null,
       after: {
@@ -112,6 +120,7 @@ export async function PATCH(req: NextRequest) {
         workingHoursEnd: updated.workingHoursEnd,
         maxOpenLeadsPerAgent: updated.maxOpenLeadsPerAgent,
         maxRecycleCount: updated.maxRecycleCount,
+        assignmentCooldownSeconds: updated.assignmentCooldownSeconds,
       },
     });
   }

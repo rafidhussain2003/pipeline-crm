@@ -26,7 +26,19 @@ type Settings = {
   workingHoursEnd: number | null;
   maxOpenLeadsPerAgent: number | null;
   maxRecycleCount: number;
+  assignmentCooldownSeconds: number;
 };
+
+// Smart Assignment Cooldown — the offered durations (0 = disabled).
+const COOLDOWN_OPTIONS = [
+  { value: 0, label: "Off" },
+  { value: 60, label: "1 minute" },
+  { value: 120, label: "2 minutes" },
+  { value: 180, label: "3 minutes" },
+  { value: 300, label: "5 minutes" },
+  { value: 600, label: "10 minutes" },
+  { value: 900, label: "15 minutes" },
+];
 
 const ASSIGNMENT_MODES: { id: AssignmentMode; label: string; description: string }[] = [
   { id: "round_robin", label: "Round Robin", description: "Every available agent gets an equal share of leads, in turn." },
@@ -157,14 +169,36 @@ export default function AutomationPage() {
             <p className="text-xs text-slate-400 mt-2">
               {ASSIGNMENT_MODES.find((m) => m.id === settings.assignmentMode)?.description}
             </p>
+
+            {/* Smart Assignment Cooldown — how long an agent sits out after an
+                automatic lead, so a small online pool isn't flooded. */}
+            <div className="mt-4 pt-4 border-t border-slate-100 flex items-center gap-2">
+              <span className="text-sm text-slate-700">After an auto assignment, cool the agent down for</span>
+              <select
+                value={settings.assignmentCooldownSeconds}
+                onChange={(e) => update({ assignmentCooldownSeconds: Number(e.target.value) })}
+                className="rounded-md border border-slate-200 px-2 py-1.5 text-sm text-slate-700"
+              >
+                {COOLDOWN_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="text-xs text-slate-400 mt-2">
+              While cooling down, an agent is skipped by auto-assignment and leads wait in the queue until they (or
+              another agent) become eligible. Weighting and tiers are unaffected. &quot;Off&quot; disables the cooldown.
+            </p>
           </div>
         )}
       </div>
 
       {/* Enterprise Agent Tier Management — per-agent tier the engine's
           tier-aware modes read. Managers see it read-only; agents never see
-          it (the API 403s and the component renders nothing). */}
-      <AgentTierAssignments />
+          it. The master Auto Assignment switch is hidden here (showMasterSwitch
+          false) — this page already has its own toggle above. */}
+      <AgentTierAssignments showMasterSwitch={false} />
 
       {/* Phase 17 — Progressive Lead Release (only meaningful when auto
           assignment is on; the engine itself also honors the master toggle). */}

@@ -34,8 +34,10 @@ export type MetricName =
   | "presence.state_transition"
   | "assignment.filtered_offline"
   | "assignment.filtered_workload"
+  | "assignment.filtered_cooldown"
   | "assignment.overflow_used"
   | "assignment.unassigned_no_agents"
+  | "assignment.unassigned_cooldown"
   | "assignment.lead_not_in_company"
   | "assignment.skipped_blacklisted"
   | "assignment.assigned"
@@ -120,8 +122,10 @@ const ALL_METRIC_NAMES: MetricName[] = [
   "presence.state_transition",
   "assignment.filtered_offline",
   "assignment.filtered_workload",
+  "assignment.filtered_cooldown",
   "assignment.overflow_used",
   "assignment.unassigned_no_agents",
+  "assignment.unassigned_cooldown",
   "assignment.lead_not_in_company",
   "assignment.skipped_blacklisted",
   "assignment.assigned",

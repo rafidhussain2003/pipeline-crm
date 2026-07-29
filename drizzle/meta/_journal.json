@@ -330,6 +330,13 @@
 			"when": 1785077179437,
 			"tag": "0046_manager_privacy_mode",
 			"breakpoints": true
+		},
+		{
+			"idx": 47,
+			"version": "7",
+			"when": 1785163579437,
+			"tag": "0047_assignment_cooldown",
+			"breakpoints": true
 		}
 	]
 }

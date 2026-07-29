@@ -218,6 +218,7 @@ class PresenceService {
         presenceStatus: users.presenceStatus,
         lastHeartbeatAt: users.lastHeartbeatAt,
         lastAssignedAt: users.lastAssignedAt,
+        lastAutoAssignedAt: users.lastAutoAssignedAt,
       })
       .from(users)
       .where(
