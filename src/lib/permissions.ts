@@ -62,6 +62,14 @@ const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   // callbacks:supervise above).
   manager: new Set(["agents:manage", "callbacks:supervise", "leads:assign"]),
   agent: new Set(["tags:manage"]),
+  // Lead Distribution Manager — exactly ONE company permission: assign/reassign
+  // leads (the whole point of the role). Deliberately NOT agents:manage (can't
+  // create/edit/delete users), NOT leads:supervise (no recycle), NOT
+  // callbacks:supervise, NOT company_settings/billing. Its extra abilities
+  // (change agent tier, toggle auto-assign participation, view the team roster)
+  // are granted by explicit role checks on those specific routes, not by a
+  // broad permission here — keeping this set as small as the role's purpose.
+  lead_distributor: new Set(["leads:assign"]),
 };
 
 export function hasPermission(role: Role, permission: Permission): boolean {

@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCompanySession } from "@/lib/auth";
 import { canAccessLead } from "@/lib/leads/access";
+import { shouldMaskLeadPII } from "@/lib/leads/pii";
 import { scoreLead } from "@/lib/ai/lead-scoring";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireCompanySession();
   if (!auth.ok) return auth.response;
+  if (shouldMaskLeadPII(auth.session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const { id } = await params;
 
   // Tenant + Agent Portal check: company always, own-leads-only for agents

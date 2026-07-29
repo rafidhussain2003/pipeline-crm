@@ -101,12 +101,13 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   { href: "/leads", label: "All Leads" },
   // My Tasks (Follow-up & Pipeline) — every role's daily queue, agents
   // included; scope is decided server-side (personal for everyone, plus the
-  // pipeline overview for supervisors).
-  { href: "/tasks", label: "My Tasks" },
+  // pipeline overview for supervisors). Hidden from the Lead Distribution
+  // Manager — they don't own leads/callbacks and their tool is the Leads page.
+  { href: "/tasks", label: "My Tasks", roles: ["admin", "manager", "agent"] },
   // Callbacks (Phase 15) is every role's tool — an agent works their own list,
-  // a manager/admin sees the whole company's. Scope is decided server-side, so
-  // this needs no role gate.
-  { href: "/callbacks", label: "Callbacks", feature: "callback_engine" },
+  // a manager/admin sees the whole company's. Scope is decided server-side.
+  // Also hidden from the Lead Distribution Manager (a customer-PII surface).
+  { href: "/callbacks", label: "Callbacks", feature: "callback_engine", roles: ["admin", "manager", "agent"] },
   { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration", roles: ["admin", "manager"] },
   // Facebook Forms alias management — admin only (the page shows real Meta form
   // names, which managers/agents must never see).
@@ -558,7 +559,7 @@ export default function Sidebar({
       </nav>
       {role !== "super_admin" && <PresenceHeartbeat />}
       <div className="px-3 py-4 border-t border-slate-100 space-y-1">
-        {role !== "super_admin" && role !== "agent" && (
+        {role !== "super_admin" && role !== "agent" && role !== "lead_distributor" && (
           <Link
             href="/subscription"
             className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${

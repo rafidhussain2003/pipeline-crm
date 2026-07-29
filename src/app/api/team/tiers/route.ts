@@ -29,7 +29,9 @@ const ASSIGNABLE_TIERS = tierEnum.enumValues;
 export async function GET() {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (session.role !== "admin" && session.role !== "manager") {
+  // Admin + manager view; the Lead Distribution Manager also views (and edits,
+  // below) tiers — assigning agents to tiers is part of distributing leads.
+  if (session.role !== "admin" && session.role !== "manager" && session.role !== "lead_distributor") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   const rl = checkPolicy("api.authenticated", session.userId);
@@ -70,7 +72,7 @@ export async function GET() {
   const assignedTodayMap = new Map(assignedTodayRows.map((r) => [r.assignedTo, r.value]));
 
   return NextResponse.json({
-    viewerCanEdit: session.role === "admin",
+    viewerCanEdit: session.role === "admin" || session.role === "lead_distributor",
     agents: agents.map((a) => ({
       id: a.id,
       name: a.name,
@@ -92,9 +94,10 @@ export async function GET() {
 export async function PATCH(req: NextRequest) {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  // Managers are read-only on this screen; only admins change tiers.
-  if (session.role !== "admin") {
-    return NextResponse.json({ error: "Only company admins can change agent tiers" }, { status: 403 });
+  // Admins and the Lead Distribution Manager may change tiers (both are
+  // responsible for how leads route to agents); managers stay read-only here.
+  if (session.role !== "admin" && session.role !== "lead_distributor") {
+    return NextResponse.json({ error: "You can't change agent tiers" }, { status: 403 });
   }
   const rl = checkPolicy("api.authenticated", session.userId);
   if (!rl.allowed) return NextResponse.json({ error: "Too many requests." }, { status: 429 });

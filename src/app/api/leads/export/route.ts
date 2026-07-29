@@ -10,9 +10,13 @@ export async function GET() {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Agent Portal: agents may never export lead data — supervisor tooling
-  // only (admin/manager), enforced here regardless of what the UI shows.
-  if (session.role === "agent") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  // Agents may never export lead data — supervisor tooling only. A Lead
+  // Distribution Manager is likewise blocked: an export is raw customer PII,
+  // the exact thing their role must never receive. Enforced here regardless
+  // of what the UI shows.
+  if (session.role === "agent" || session.role === "lead_distributor") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const rl = checkPolicy("api.authenticated", session.userId);
   if (!rl.allowed) return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });

@@ -6,6 +6,7 @@ import { leadVisibilityConditions } from "@/lib/leads/access";
 import { isUuid } from "@/lib/url";
 import { WON_DISPOSITIONS, LOST_DISPOSITIONS, TERMINAL_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
 import { resolveFormDisplayName, canSeeActualFormName } from "@/lib/leads/source-privacy";
+import { shouldMaskLeadPII, maskLeadRow } from "@/lib/leads/pii";
 import { and, count, desc, eq, exists, gte, ilike, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import "@/lib/assignment"; // registers the "lead.assign" job handler with the queue
 import "@/lib/workflows/registry"; // registers the lead.created -> workflow listener
@@ -180,6 +181,17 @@ export async function GET(req: NextRequest) {
         formActual: f && canSeeActual ? f.formName ?? null : null,
       };
     });
+  }
+
+  // BACKEND PII MASKING — the last thing before the response leaves. For a
+  // privacy-restricted role (Lead Distribution Manager) every row's customer
+  // name becomes Fresh/Assigned Lead, the phone collapses to its last four
+  // digits, and the email is dropped. The real values never reach this role's
+  // client regardless of how the request was crafted; form/source/state/
+  // disposition/priority/owner/timestamps (their distribution signals) are
+  // untouched. Admins/managers/agents skip this entirely.
+  if (shouldMaskLeadPII(session.role)) {
+    leadsOut = leadsOut.map((l) => maskLeadRow(l));
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));

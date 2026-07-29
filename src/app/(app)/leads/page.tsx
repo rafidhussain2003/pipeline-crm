@@ -270,7 +270,12 @@ export default function LeadsPage() {
   const [role, setRole] = useState<string>("");
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignResult, setAssignResult] = useState("");
-  const canAssign = role === "admin" || role === "manager";
+  // Lead Distribution Manager: sees masked leads and DISTRIBUTES them. Can
+  // assign (bulk bar), but never imports/exports, never opens the full
+  // workspace, and never edits a disposition — the API enforces all of this
+  // too; this only keeps the UI honest.
+  const isDistributor = role === "lead_distributor";
+  const canAssign = role === "admin" || role === "manager" || isDistributor;
   const isAgent = role === "agent";
 
   useEffect(() => {
@@ -667,7 +672,7 @@ export default function LeadsPage() {
         </div>
         {/* Import/Export are management tools — hidden from agents, and the
             APIs behind them refuse agents regardless. */}
-        {!isAgent && (
+        {!isAgent && !isDistributor && (
           <div className="flex items-center gap-2">
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -934,9 +939,15 @@ export default function LeadsPage() {
                   />
                 </td>
                 <td className="px-4 py-3">
-                  <Link href={`/leads/${lead.id}`} className="font-medium text-blue-700 hover:underline">
-                    {lead.name || "—"}
-                  </Link>
+                  {/* Distributor sees the masked name as plain text — no link
+                      into the full workspace (which they're barred from). */}
+                  {isDistributor ? (
+                    <span className="font-medium text-slate-700">{lead.name || "—"}</span>
+                  ) : (
+                    <Link href={`/leads/${lead.id}`} className="font-medium text-blue-700 hover:underline">
+                      {lead.name || "—"}
+                    </Link>
+                  )}
                   {lead.isDuplicate && (
                     <span className="ml-2 text-[10px] font-semibold text-amber-700 bg-amber-50 rounded-full px-2 py-0.5">
                       POSSIBLE DUPLICATE
@@ -954,8 +965,11 @@ export default function LeadsPage() {
                     // has no way to tell which lead they are about to change.
                     aria-label={`Disposition for ${lead.name || "unnamed lead"}`}
                     onChange={(e) => updateDisposition(lead.id, e.target.value)}
+                    // Distributor may not change dispositions (the PATCH rejects
+                    // it too) — the badge is read-only for them.
+                    disabled={isDistributor}
                     style={{ backgroundColor: `${colorFor(lead.disposition)}1a`, color: colorFor(lead.disposition) }}
-                    className="text-xs font-medium rounded-full px-3 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="text-xs font-medium rounded-full px-3 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-default"
                   >
                     {groupedDispositions.map((g) => (
                       <optgroup key={g.category} label={g.category}>

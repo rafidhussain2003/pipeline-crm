@@ -19,6 +19,8 @@ const FINANCE_ROLE_PERMISSIONS: Record<Role, ReadonlySet<FinancePermission>> = {
   admin: new Set(["finance:view", "finance:post", "finance:manage"]),
   manager: new Set(["finance:view", "finance:post"]),
   agent: new Set(),
+  // Lead Distribution Manager: no Finance access.
+  lead_distributor: new Set(),
 };
 
 export function hasFinancePermission(role: Role, permission: FinancePermission): boolean {

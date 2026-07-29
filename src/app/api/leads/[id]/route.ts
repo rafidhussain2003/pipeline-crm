@@ -4,6 +4,7 @@ import { leads, assignmentLog, dispositionOptions, users } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { isUuid } from "@/lib/url";
 import { hasPermission } from "@/lib/permissions";
+import { shouldMaskLeadPII } from "@/lib/leads/pii";
 import { and, eq, isNull } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { transitionLifecycle } from "@/lib/lifecycle/service";
@@ -33,6 +34,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
   if ("isBlacklisted" in body && !hasPermission(session.role, "leads:supervise")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  // Lead Distribution Manager: assignment ONLY. They can't see customer fields,
+  // so they can't edit them either — a crafted PATCH touching disposition,
+  // name, phone, email, state, priority, blacklist or follow-up is rejected.
+  // The one thing they may change is ownerId (distribute the lead).
+  if (shouldMaskLeadPII(session.role)) {
+    const forbiddenEdit = Object.keys(body).some(
+      (k) => k !== "ownerId" && ["disposition", "followUpAt", "name", "phone", "email", "state", "priority", "isBlacklisted", "duplicateOfLeadId"].includes(k)
+    );
+    if (forbiddenEdit) {
+      return NextResponse.json({ error: "A Lead Distribution Manager can only assign leads." }, { status: 403 });
+    }
   }
 
   const [before] = await db.select().from(leads).where(and(eq(leads.id, id), eq(leads.companyId, session.companyId))).limit(1);
@@ -221,9 +234,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   if (!session || !session.companyId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  // Agent Portal: agents may never delete leads — not even their own.
-  // Admin/manager behavior is unchanged.
-  if (session.role === "agent") {
+  // Agents may never delete leads — not even their own. A Lead Distribution
+  // Manager can't delete either (distribution only). Admin/manager unchanged.
+  if (session.role === "agent" || session.role === "lead_distributor") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   const { id } = await params;

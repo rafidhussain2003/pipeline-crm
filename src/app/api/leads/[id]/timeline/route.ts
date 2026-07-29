@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession, type CompanySession } from "@/lib/auth";
 import { canAccessLead } from "@/lib/leads/access";
+import { shouldMaskLeadPII } from "@/lib/leads/pii";
 import { isUuid } from "@/lib/url";
 import { buildLeadTimeline } from "@/lib/insights/timeline";
 
@@ -12,6 +13,9 @@ import { buildLeadTimeline } from "@/lib/insights/timeline";
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // The timeline can carry customer details in its entries — blocked for a
+  // Lead Distribution Manager.
+  if (shouldMaskLeadPII(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const { id } = await params;
   // A malformed id would otherwise reach a uuid column and surface as an
   // empty-bodied 500; treat it as the missing record it describes.

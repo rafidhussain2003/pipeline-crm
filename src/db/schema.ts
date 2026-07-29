@@ -25,7 +25,11 @@ import { relations, sql } from "drizzle-orm";
 // can delete a company), so "Owner" has no enforceable difference from
 // "admin" here — it's shown in the Agents UI as a computed label (the
 // earliest-created admin per company), not a stored role.
-export const roleEnum = pgEnum("role", ["super_admin", "admin", "manager", "agent"]);
+// "lead_distributor" (Lead Distribution Manager) — a privacy-masked role that
+// sees all company leads with customer PII hidden and distributes them to
+// agents. NOT an admin. See src/lib/leads/pii.ts for the masking and
+// src/lib/permissions.ts for its (narrow) permission set.
+export const roleEnum = pgEnum("role", ["super_admin", "admin", "manager", "agent", "lead_distributor"]);
 // Tiers are a configurable priority band, not hardcoded logic — the ORDER/
 // weight of each tier comes from assignment_rules + the AI tier factor's
 // config, never from the enum values themselves. "senior"/"supervisor" (Phase

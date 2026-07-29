@@ -19,6 +19,8 @@ const WORKFLOW_ROLE_PERMISSIONS: Record<Role, ReadonlySet<WorkflowPermission>> =
   admin: new Set(["workflow:view", "workflow:run", "workflow:manage", "workflow:admin"]),
   manager: new Set(["workflow:view", "workflow:run"]),
   agent: new Set(),
+  // Lead Distribution Manager: no Workflow access.
+  lead_distributor: new Set(),
 };
 
 export function hasWorkflowPermission(role: Role, permission: WorkflowPermission): boolean {

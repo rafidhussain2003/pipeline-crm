@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { leadAttachments } from "@/db/schema";
 import { getSession, type CompanySession } from "@/lib/auth";
 import { canAccessLead } from "@/lib/leads/access";
+import { shouldMaskLeadPII } from "@/lib/leads/pii";
 import { desc, eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { isSafeHttpUrl, isUuid } from "@/lib/url";
@@ -19,6 +20,9 @@ import { isSafeHttpUrl, isUuid } from "@/lib/url";
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Attachments are customer documents — a Lead Distribution Manager may never
+  // see them.
+  if (shouldMaskLeadPII(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const { id } = await params;
   // A malformed id would otherwise reach a uuid column and surface as an
   // empty-bodied 500; treat it as the missing record it describes.

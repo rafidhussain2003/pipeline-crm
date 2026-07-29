@@ -7,7 +7,7 @@ type Agent = {
   name: string;
   email: string;
   phone: string | null;
-  role: "super_admin" | "admin" | "manager" | "agent";
+  role: "super_admin" | "admin" | "manager" | "agent" | "lead_distributor";
   tier: string | null;
   active: boolean;
   presenceStatus: string | null;
@@ -21,6 +21,7 @@ const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
   manager: "Manager",
   agent: "Agent",
+  lead_distributor: "Lead Distribution Manager",
 };
 
 function roleLabel(a: Agent) {
@@ -406,6 +407,9 @@ export default function AgentsPage() {
               >
                 <option value="agent">Agent</option>
                 <option value="manager">Manager</option>
+                {/* Lead Distribution Manager — admin-only to grant (a masked,
+                    company-wide leads role). */}
+                {canManageAdmins && <option value="lead_distributor">Lead Distribution Manager</option>}
                 {canManageAdmins && <option value="admin">Admin</option>}
               </select>
             </div>

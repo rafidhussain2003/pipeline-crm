@@ -4,6 +4,7 @@ import { leads, users, leadSources, leadForms, webhookLogs, callbacks } from "@/
 import { getSession, type CompanySession } from "@/lib/auth";
 import { leadVisibilityConditions } from "@/lib/leads/access";
 import { resolveSourceName, resolveFormDisplayName, canSeeActualFormName } from "@/lib/leads/source-privacy";
+import { shouldMaskLeadPII, maskedLeadName, maskPhoneLast4 } from "@/lib/leads/pii";
 import { computeFollowUp } from "@/lib/followup/engine";
 import { isUuid } from "@/lib/url";
 import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
@@ -94,9 +95,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const { sourcePageName, sourceAlias, sourceId, ...rest } = lead;
   void sourceId;
+  // Lead Distribution Manager: mask the customer's identity even on the detail
+  // endpoint (defence in depth — the UI also keeps them out of the workspace).
+  // Name → Fresh/Assigned Lead, phone → last-4, email → null; everything else
+  // they're permitted to see (disposition, priority, state, form, source,
+  // owner, timestamps, duplicate flag) is unchanged.
+  const maskPII = shouldMaskLeadPII(session.role);
   return NextResponse.json({
     lead: {
       ...rest,
+      name: maskPII ? maskedLeadName(rest.ownerId) : rest.name,
+      phone: maskPII ? maskPhoneLast4(rest.phone) : rest.phone,
+      email: maskPII ? null : rest.email,
       // Lead Privacy: agents get the alias, admins/managers the real name —
       // same single resolution rule as every other surface.
       sourceName: resolveSourceName(session.role, sourcePageName, sourceAlias),

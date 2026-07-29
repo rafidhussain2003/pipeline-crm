@@ -14,7 +14,7 @@ import { sendNotification } from "@/lib/notifications/service";
 // Assignable roles via this endpoint — "super_admin" is platform-level and
 // never created here. There is no separate "owner" role (see schema.ts);
 // it's computed below as the earliest-created admin per company.
-const ASSIGNABLE_ROLES = ["admin", "manager", "agent"] as const;
+const ASSIGNABLE_ROLES = ["admin", "manager", "agent", "lead_distributor"] as const;
 type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
 
 export async function GET(req: NextRequest) {
@@ -114,8 +114,13 @@ export async function POST(req: NextRequest) {
   const requestedRole: AssignableRole = (ASSIGNABLE_ROLES as readonly string[]).includes(role) ? role : "agent";
   // A manager can add agents and other managers, but not admins — creating
   // an admin is a bigger privilege grant than "Agents" management covers.
-  if (requestedRole === "admin" && session.role !== "admin") {
-    return NextResponse.json({ error: "Only an admin can add another admin." }, { status: 403 });
+  // Creating a Lead Distribution Manager is likewise admin-only: it's a
+  // company-wide (masked) leads role, not an ordinary seat a manager grants.
+  if ((requestedRole === "admin" || requestedRole === "lead_distributor") && session.role !== "admin") {
+    return NextResponse.json(
+      { error: requestedRole === "admin" ? "Only an admin can add another admin." : "Only an admin can add a Lead Distribution Manager." },
+      { status: 403 }
+    );
   }
 
   const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
