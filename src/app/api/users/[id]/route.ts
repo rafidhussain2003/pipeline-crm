@@ -8,7 +8,7 @@ import { revokeAllRefreshTokensForUser } from "@/lib/refresh-tokens";
 import { invalidateAllSessions } from "@/lib/auth/session-registry";
 import { revokeTrustedDevicesForUser } from "@/lib/auth/device-trust";
 
-const ASSIGNABLE_ROLES = ["admin", "manager", "agent"] as const;
+const ASSIGNABLE_ROLES = ["admin", "manager", "agent", "lead_distributor"] as const;
 
 // Administrator-forced logout: dead session, dead refresh chain, dead device
 // trust — the account cannot act again until (re-enabled and) freshly logged
