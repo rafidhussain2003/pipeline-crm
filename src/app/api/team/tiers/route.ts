@@ -102,55 +102,66 @@ export async function PATCH(req: NextRequest) {
   const rl = checkPolicy("api.authenticated", session.userId);
   if (!rl.allowed) return NextResponse.json({ error: "Too many requests." }, { status: 429 });
 
+  // Accepts a tier change and/or an auto-assign participation toggle. The
+  // toggle writes users.locked (locked = excluded from the assignment roster;
+  // see presence/service.ts) — enabled ⇒ locked=false, disabled ⇒ locked=true.
   const body = await req.json().catch(() => null);
   const agentId = body?.agentId;
-  const tier = body?.tier;
   if (typeof agentId !== "string" || !isUuid(agentId)) {
     return NextResponse.json({ error: "agentId must be a valid id" }, { status: 400 });
   }
-  if (typeof tier !== "string" || !(ASSIGNABLE_TIERS as readonly string[]).includes(tier)) {
+  const hasTier = body?.tier !== undefined;
+  const hasToggle = typeof body?.autoAssignEnabled === "boolean";
+  if (!hasTier && !hasToggle) {
+    return NextResponse.json({ error: "Provide tier and/or autoAssignEnabled." }, { status: 400 });
+  }
+  if (hasTier && (typeof body.tier !== "string" || !(ASSIGNABLE_TIERS as readonly string[]).includes(body.tier))) {
     return NextResponse.json({ error: `tier must be one of: ${ASSIGNABLE_TIERS.join(", ")}` }, { status: 400 });
   }
 
-  // Tenant + role scoping: only an ACTIVE AGENT of this company can be
-  // re-tiered; anything else — other tenants' users, admins, deleted
-  // accounts — is the same 404 a nonexistent id gets.
+  // Tenant + role scoping: only an ACTIVE AGENT of this company — anything else
+  // (other tenants' users, admins, deleted accounts) is the same 404 a
+  // nonexistent id gets.
   const [agent] = await db
-    .select({ id: users.id, name: users.name, tier: users.tier })
+    .select({ id: users.id, name: users.name, tier: users.tier, locked: users.locked })
     .from(users)
     .where(and(eq(users.id, agentId), eq(users.companyId, session.companyId), eq(users.role, "agent"), isNull(users.deletedAt)))
     .limit(1);
   if (!agent) return NextResponse.json({ error: "Agent not found" }, { status: 404 });
 
   const previousTier = agent.tier ?? "1";
-  if (previousTier === tier) {
-    // No-op change: nothing to write, nothing to audit.
-    return NextResponse.json({ agent: { id: agent.id, tier: previousTier } });
+  const set: { tier?: (typeof ASSIGNABLE_TIERS)[number]; locked?: boolean } = {};
+  if (hasTier && previousTier !== body.tier) set.tier = body.tier;
+  if (hasToggle && agent.locked !== !body.autoAssignEnabled) set.locked = !body.autoAssignEnabled;
+
+  if (Object.keys(set).length === 0) {
+    // No-op — nothing actually changed.
+    return NextResponse.json({ agent: { id: agent.id, tier: previousTier, autoAssignEnabled: !agent.locked } });
   }
 
-  await db
-    .update(users)
-    .set({ tier: tier as (typeof ASSIGNABLE_TIERS)[number] })
-    .where(and(eq(users.id, agentId), eq(users.companyId, session.companyId)));
+  await db.update(users).set(set).where(and(eq(users.id, agentId), eq(users.companyId, session.companyId)));
 
-  // Audit: who changed whose tier, from what, to what. createdAt is the
-  // timestamp.
-  await recordAudit({
-    companyId: session.companyId,
-    userId: session.userId,
-    action: "agent.tier_changed",
-    entityType: "user",
-    entityId: agentId,
-    before: { tier: previousTier },
-    after: { tier },
-    metadata: { agentName: agent.name },
-  });
+  if (set.tier !== undefined) {
+    await recordAudit({
+      companyId: session.companyId, userId: session.userId, action: "agent.tier_changed",
+      entityType: "user", entityId: agentId, before: { tier: previousTier }, after: { tier: set.tier },
+      metadata: { agentName: agent.name },
+    });
+  }
+  if (set.locked !== undefined) {
+    await recordAudit({
+      companyId: session.companyId, userId: session.userId, action: "agent.auto_assign_participation_changed",
+      entityType: "user", entityId: agentId, before: { autoAssignEnabled: !agent.locked }, after: { autoAssignEnabled: !set.locked },
+      metadata: { agentName: agent.name },
+    });
+  }
 
-  // Realtime: every other open admin screen refreshes its roster row (the
-  // stream forwards this to admin/manager connections only — see
-  // /api/leads/stream). The Assignment Engine needs no signal: it reads
-  // users.tier fresh when it loads candidates for each assignment.
+  // Realtime: open roster screens refresh (admin/manager/distributor). The
+  // Assignment Engine needs no signal — it reads tier + locked fresh per
+  // assignment.
   await eventBus.emit("user.updated", { userId: agentId, companyId: session.companyId });
 
-  return NextResponse.json({ agent: { id: agent.id, tier } });
+  return NextResponse.json({
+    agent: { id: agent.id, tier: set.tier ?? previousTier, autoAssignEnabled: !(set.locked ?? agent.locked) },
+  });
 }

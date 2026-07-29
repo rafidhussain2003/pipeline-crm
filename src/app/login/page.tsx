@@ -41,7 +41,13 @@ export default function LoginPage() {
       setError(data.error || "Something went wrong");
       return;
     }
-    router.push(data.role === "super_admin" ? "/super-admin" : "/leads");
+    router.push(
+      data.role === "super_admin"
+        ? "/super-admin"
+        : data.role === "lead_distributor"
+          ? "/manager/fresh-leads"
+          : "/leads"
+    );
     router.refresh();
   }
 

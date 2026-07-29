@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/permissions";
 import { eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
+import { cache } from "@/lib/infra/cache";
 
 // Profile > Company tab. Read is available to any company member (agents
 // can see their company's info, e.g. support email, on their own profile
@@ -24,6 +25,8 @@ export async function GET() {
       timezone: companies.timezone,
       supportEmail: companies.supportEmail,
       businessPhone: companies.businessPhone,
+      // Manager Privacy Mode — read by the admin Company settings toggle.
+      managerPrivacyMode: companies.managerPrivacyMode,
     })
     .from(companies)
     .where(eq(companies.id, session.companyId))
@@ -58,6 +61,10 @@ export async function PATCH(req: NextRequest) {
   for (const key of ["name", "logoUrl", "website", "address", "timezone", "supportEmail", "businessPhone"]) {
     if (key in body) allowed[key] = body[key] || null;
   }
+  // Manager Privacy Mode — a boolean, so it can't go through the `|| null`
+  // loop above (false would become null). Admin-only (this whole PATCH is
+  // gated by company_settings:edit) — managers/distributors can never reach it.
+  if (typeof body.managerPrivacyMode === "boolean") allowed.managerPrivacyMode = body.managerPrivacyMode;
   if (Object.keys(allowed).length === 0) {
     return NextResponse.json({ error: "No valid fields to update." }, { status: 400 });
   }
@@ -70,6 +77,10 @@ export async function PATCH(req: NextRequest) {
     .set(allowed)
     .where(eq(companies.id, session.companyId))
     .returning();
+
+  // If Manager Privacy Mode changed, invalidate its cache so masking flips for
+  // the Lead Distribution Manager immediately, not after the 30s TTL.
+  if ("managerPrivacyMode" in allowed) await cache.delete(`manager-privacy-mode:${session.companyId}`);
 
   await recordAudit({
     companyId: session.companyId,

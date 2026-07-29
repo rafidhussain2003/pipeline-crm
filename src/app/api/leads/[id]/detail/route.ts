@@ -4,7 +4,7 @@ import { leads, users, leadSources, leadForms, webhookLogs, callbacks } from "@/
 import { getSession, type CompanySession } from "@/lib/auth";
 import { leadVisibilityConditions } from "@/lib/leads/access";
 import { resolveSourceName, resolveFormDisplayName, canSeeActualFormName } from "@/lib/leads/source-privacy";
-import { shouldMaskLeadPII, maskedLeadName, maskPhoneLast4 } from "@/lib/leads/pii";
+import { leadPIIMaskedFor, maskedLeadName, maskPhoneLast4 } from "@/lib/leads/pii";
 import { computeFollowUp } from "@/lib/followup/engine";
 import { isUuid } from "@/lib/url";
 import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
@@ -100,7 +100,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   // Name → Fresh/Assigned Lead, phone → last-4, email → null; everything else
   // they're permitted to see (disposition, priority, state, form, source,
   // owner, timestamps, duplicate flag) is unchanged.
-  const maskPII = shouldMaskLeadPII(session.role);
+  const maskPII = await leadPIIMaskedFor(session.role, session.companyId);
   return NextResponse.json({
     lead: {
       ...rest,

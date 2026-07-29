@@ -14,7 +14,7 @@ type CompanyForm = {
   businessPhone: string;
 };
 
-type Session = { role: "super_admin" | "admin" | "manager" | "agent"; companyId: string | null };
+type Session = { role: "super_admin" | "admin" | "manager" | "agent" | "lead_distributor"; companyId: string | null };
 
 export default function ProfilePage() {
   const [session, setSession] = useState<Session | null>(null);
@@ -31,8 +31,11 @@ export default function ProfilePage() {
   const hasCompany = !!session.companyId;
   const isAdmin = session.role === "admin";
 
+  // Lead Distribution Manager gets ONLY their own personal profile — no
+  // Company (organization) tab, matching the console's "own profile only" rule.
+  const showCompanyTab = hasCompany && session.role !== "lead_distributor";
   const tabs: { id: Tab; label: string }[] = [
-    ...(hasCompany ? [{ id: "company" as Tab, label: "Company" }] : []),
+    ...(showCompanyTab ? [{ id: "company" as Tab, label: "Company" }] : []),
     { id: "account", label: "Account" },
     { id: "notifications", label: "Notifications" },
     { id: "security", label: "Security" },
@@ -59,7 +62,7 @@ export default function ProfilePage() {
         ))}
       </div>
 
-      {tab === "company" && hasCompany && <CompanyTab canEdit={isAdmin} />}
+      {tab === "company" && showCompanyTab && <CompanyTab canEdit={isAdmin} />}
       {tab === "account" && <AccountTab isAgent={session.role === "agent"} />}
       {tab === "notifications" && <NotificationsTab />}
       {tab === "security" && <SecurityTab />}
@@ -80,11 +83,14 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  // Manager Privacy Mode — kept separate from the text CompanyForm (it's a
+  // boolean). Admin-controlled; defaults ON.
+  const [privacyMode, setPrivacyMode] = useState(true);
 
   useEffect(() => {
     fetch("/api/company-settings")
       .then((r) => r.json())
-      .then((d) =>
+      .then((d) => {
         setForm({
           name: d.company?.name || "",
           logoUrl: d.company?.logoUrl || "",
@@ -93,8 +99,9 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
           timezone: d.company?.timezone || "",
           supportEmail: d.company?.supportEmail || "",
           businessPhone: d.company?.businessPhone || "",
-        })
-      );
+        });
+        setPrivacyMode(d.company?.managerPrivacyMode ?? true);
+      });
   }, []);
 
   async function save() {
@@ -105,7 +112,7 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
     const res = await fetch("/api/company-settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({ ...form, managerPrivacyMode: privacyMode }),
     });
     setSaving(false);
     if (res.ok) {
@@ -146,6 +153,35 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
       {field("timezone", "Timezone", "e.g. America/New_York")}
       {field("supportEmail", "Support Email", "support@example.com")}
       {field("businessPhone", "Business Phone")}
+
+      {/* Manager Privacy Mode — governs whether the Lead Distribution Manager
+          role sees customer PII. Admin-only (disabled when !canEdit). */}
+      <div className="pt-2 border-t border-slate-100">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-sm font-medium text-slate-900">Manager Privacy Mode</div>
+            <div className="text-xs text-slate-500 mt-0.5 max-w-md">
+              When on, Lead Distribution Managers see leads with customer identity hidden (Fresh/Assigned Lead, last-4
+              phone only). Turn off to let them see full customer details like a trusted operational manager.
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={privacyMode}
+            aria-label="Manager Privacy Mode"
+            disabled={!canEdit}
+            onClick={() => setPrivacyMode((v) => !v)}
+            className={`shrink-0 text-xs font-semibold rounded-full px-4 py-2 border transition-colors disabled:opacity-50 ${
+              privacyMode
+                ? "text-emerald-800 bg-emerald-50 border-emerald-200 hover:bg-emerald-100"
+                : "text-slate-600 bg-slate-100 border-slate-300 hover:bg-slate-200"
+            }`}
+          >
+            {privacyMode ? "ON" : "OFF"}
+          </button>
+        </div>
+      </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 

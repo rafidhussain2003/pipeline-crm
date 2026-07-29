@@ -114,6 +114,32 @@ export default function AgentTierAssignments() {
     }
   }
 
+  // Enable/disable an agent's participation in automatic assignment (writes
+  // users.locked server-side — a locked agent is skipped by the assignment
+  // roster). Optimistic, per-row, with revert on failure.
+  async function toggleAutoAssign(agentId: string, current: boolean) {
+    const next = !current;
+    setError("");
+    setSavingId(agentId);
+    setAgents((prev) => (prev ? prev.map((a) => (a.id === agentId ? { ...a, autoAssignEnabled: next } : a)) : prev));
+    try {
+      const res = await fetch("/api/team/tiers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId, autoAssignEnabled: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Could not save (HTTP ${res.status})`);
+      }
+    } catch (err) {
+      setAgents((prev) => (prev ? prev.map((a) => (a.id === agentId ? { ...a, autoAssignEnabled: current } : a)) : prev));
+      setError(err instanceof Error ? err.message : "Could not change auto-assign participation");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   // Agents (or anyone without roster access) see nothing — not an empty table.
   if (forbidden) return null;
 
@@ -183,25 +209,31 @@ export default function AgentTierAssignments() {
                     </td>
                     <td className="py-2.5 pr-4 text-slate-700">{a.assignedToday}</td>
                     <td className="py-2.5 pr-4">
-                      {/* Read-only mirror of the Lock control on the Team
-                          dashboard — a locked agent is excluded from
-                          automatic assignment. */}
-                      <span
+                      {/* Enable/disable this agent's participation in automatic
+                          assignment. Editable for admins and the Lead
+                          Distribution Manager; a read-only indicator otherwise. */}
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={a.autoAssignEnabled}
+                        aria-label={`Auto-assign participation for ${a.name || a.email}`}
+                        disabled={!canEdit || savingId === a.id}
+                        onClick={() => toggleAutoAssign(a.id, a.autoAssignEnabled)}
                         title={
                           a.autoAssignEnabled
-                            ? "Receiving automatic assignments"
-                            : "Locked — excluded from automatic assignment (manage on the Team page)"
+                            ? "Receiving automatic assignments — click to pause"
+                            : "Paused — excluded from automatic assignment; click to resume"
                         }
-                        className={`inline-block w-8 rounded-full relative transition-colors ${
+                        className={`inline-block w-8 rounded-full relative transition-colors align-middle ${
                           a.autoAssignEnabled ? "bg-emerald-500" : "bg-slate-300"
-                        }`}
+                        } ${canEdit ? "cursor-pointer" : "cursor-default"} disabled:opacity-60`}
                         style={{ height: "18px" }}
                       >
                         <span
                           className="absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all"
                           style={{ left: a.autoAssignEnabled ? "16px" : "2px" }}
                         />
-                      </span>
+                      </button>
                     </td>
                     <td className="py-2.5">
                       <span className="inline-block text-xs font-medium text-slate-600 bg-slate-100 rounded px-2 py-0.5">

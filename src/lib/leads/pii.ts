@@ -11,9 +11,52 @@
 // address, notes, attachments, any other PII are hidden). Admins, managers and
 // agents are unaffected.
 
-/** Roles whose lead views must have customer PII masked on the backend. */
-export function shouldMaskLeadPII(role: string | null | undefined): boolean {
-  return role === "lead_distributor";
+import { db } from "@/db";
+import { companies } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import { cache } from "@/lib/infra/cache";
+import { isUndefinedColumn } from "@/lib/db-errors";
+
+/**
+ * Whether a role's lead view must be PII-masked, GIVEN the company's Manager
+ * Privacy Mode. Only the Lead Distribution Manager is ever masked, and only
+ * while privacy mode is ON. Privacy mode OFF ⇒ the role sees full leads like a
+ * trusted operational manager. Pure — the caller supplies the flag.
+ */
+export function shouldMaskLeadPII(role: string | null | undefined, privacyModeEnabled: boolean): boolean {
+  return role === "lead_distributor" && privacyModeEnabled;
+}
+
+/**
+ * Manager Privacy Mode for a company (cached, 30s — same as the other
+ * per-company settings). Defaults to ON (the secure default) if the row or the
+ * column (migration 0046) isn't there yet, so masking is never accidentally
+ * disabled by a missing setting.
+ */
+export async function getManagerPrivacyMode(companyId: string): Promise<boolean> {
+  return cache.getOrSet(`manager-privacy-mode:${companyId}`, 30_000, async () => {
+    try {
+      const [row] = await db.select({ v: companies.managerPrivacyMode }).from(companies).where(eq(companies.id, companyId)).limit(1);
+      return row?.v ?? true;
+    } catch (err) {
+      if (isUndefinedColumn(err)) {
+        console.error("[pii] manager_privacy_mode column missing (migration 0046 pending) — defaulting privacy ON");
+        return true;
+      }
+      throw err;
+    }
+  });
+}
+
+/**
+ * The async convenience every lead-data endpoint uses: is THIS session's lead
+ * view masked? Short-circuits to false for any non-distributor (no DB read),
+ * so admins/managers/agents are entirely unaffected; only a distributor
+ * triggers the (cached) privacy-mode lookup.
+ */
+export async function leadPIIMaskedFor(role: string | null | undefined, companyId: string): Promise<boolean> {
+  if (role !== "lead_distributor") return false;
+  return getManagerPrivacyMode(companyId);
 }
 
 /**

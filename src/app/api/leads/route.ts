@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { leads, users, webhookLogs, leadForms } from "@/db/schema";
+import { leads, users, webhookLogs, leadForms, leadSources } from "@/db/schema";
 import { getSession, type CompanySession } from "@/lib/auth";
 import { leadVisibilityConditions } from "@/lib/leads/access";
 import { isUuid } from "@/lib/url";
 import { WON_DISPOSITIONS, LOST_DISPOSITIONS, TERMINAL_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
-import { resolveFormDisplayName, canSeeActualFormName } from "@/lib/leads/source-privacy";
-import { shouldMaskLeadPII, maskLeadRow } from "@/lib/leads/pii";
+import { resolveFormDisplayName, canSeeActualFormName, resolveSourceName } from "@/lib/leads/source-privacy";
+import { leadPIIMaskedFor, maskLeadRow } from "@/lib/leads/pii";
 import { and, count, desc, eq, exists, gte, ilike, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import "@/lib/assignment"; // registers the "lead.assign" job handler with the queue
 import "@/lib/workflows/registry"; // registers the lead.created -> workflow listener
@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
   const followUpToday = searchParams.get("followUpToday") === "1";
   const date = searchParams.get("date"); // yyyy-mm-dd — leads created that day
   const formId = searchParams.get("formId"); // Meta form id — leads from that form
+  const assigned = searchParams.get("assigned"); // "unassigned" | "assigned" (Manager Console Fresh/Assigned)
   const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
   // Phase 1A: caller-selectable page size, clamped to a fixed allow-list. Not a
   // free-form number — an arbitrary ?pageSize=100000 would let one request pull
@@ -56,6 +57,9 @@ export async function GET(req: NextRequest) {
   // value is simply treated as "no source filter".
   if (source && isUuid(source)) conditions.push(eq(leads.sourceId, source));
   if (state) conditions.push(eq(leads.state, state));
+  // Fresh (unassigned) vs Assigned — the Manager Console's primary split.
+  if (assigned === "unassigned") conditions.push(isNull(leads.ownerId));
+  else if (assigned === "assigned") conditions.push(isNotNull(leads.ownerId));
   // Sale Status — derived from the disposition, using the SAME won/lost sets
   // the pipeline and analytics use (one source of truth). "in_progress" is any
   // still-open disposition (not a terminal won/lost one).
@@ -126,9 +130,17 @@ export async function GET(req: NextRequest) {
         ownerId: leads.ownerId,
         ownerName: users.name,
         isDuplicate: leads.isDuplicate,
+        // Extra distribution signals (also used by the Manager Console's Fresh
+        // Leads columns) — never customer PII, so shown to every role.
+        state: leads.state,
+        priority: leads.priority,
+        assignedAt: leads.assignedAt,
+        sourcePageName: leadSources.pageName,
+        sourceAlias: leadSources.agentDisplayName,
       })
       .from(leads)
       .leftJoin(users, eq(leads.ownerId, users.id))
+      .leftJoin(leadSources, eq(leads.sourceId, leadSources.id))
       .where(and(...conditions))
       // createdAt DESC is the product requirement (newest first). leads.id DESC is
       // the tiebreaker that makes it a TOTAL order: two leads sharing a createdAt
@@ -155,11 +167,15 @@ export async function GET(req: NextRequest) {
   // get the actual name (formActual) for the tooltip. A lead with no provider
   // form (CSV/manual/website) simply has form: null.
   const canSeeActual = canSeeActualFormName(session.role);
-  let leadsOut: ((typeof rows)[number] & { form: string | null; formActual: string | null })[] = rows.map((r) => ({
-    ...r,
-    form: null,
-    formActual: null,
-  }));
+  // Whether THIS response is PII-masked (Lead Distribution Manager while the
+  // company's Manager Privacy Mode is ON). The `masked` flag is returned so
+  // the Manager Console can adapt (e.g. no workspace link when masked).
+  const masked = await leadPIIMaskedFor(session.role, session.companyId);
+
+  // Role-aware Form name per lead — one extra query bounded to THIS page's ids
+  // (never the whole table), joining the delivery log to the form.
+  type FormInfo = { formName: string | null; displayName: string | null };
+  const byLead = new Map<string, FormInfo>();
   if (rows.length > 0) {
     const ids = rows.map((r) => r.id);
     const formRows = await db
@@ -172,30 +188,29 @@ export async function GET(req: NextRequest) {
       .innerJoin(leadForms, and(eq(leadForms.sourceId, webhookLogs.sourceId), eq(leadForms.formId, webhookLogs.formId)))
       .where(and(inArray(webhookLogs.leadId, ids), isNotNull(webhookLogs.formId)))
       .orderBy(webhookLogs.leadId);
-    const byLead = new Map(formRows.map((f) => [f.leadId, f]));
-    leadsOut = rows.map((r) => {
-      const f = byLead.get(r.id);
-      return {
-        ...r,
-        form: f ? resolveFormDisplayName(session.role, f.formName, f.displayName) : null,
-        formActual: f && canSeeActual ? f.formName ?? null : null,
-      };
-    });
+    for (const f of formRows) if (f.leadId) byLead.set(f.leadId, { formName: f.formName, displayName: f.displayName });
   }
 
-  // BACKEND PII MASKING — the last thing before the response leaves. For a
-  // privacy-restricted role (Lead Distribution Manager) every row's customer
-  // name becomes Fresh/Assigned Lead, the phone collapses to its last four
-  // digits, and the email is dropped. The real values never reach this role's
-  // client regardless of how the request was crafted; form/source/state/
-  // disposition/priority/owner/timestamps (their distribution signals) are
-  // untouched. Admins/managers/agents skip this entirely.
-  if (shouldMaskLeadPII(session.role)) {
-    leadsOut = leadsOut.map((l) => maskLeadRow(l));
-  }
+  const leadsOut = rows.map((r) => {
+    const { sourcePageName, sourceAlias, ...rest } = r;
+    const f = byLead.get(r.id);
+    const row = {
+      ...rest,
+      // Source display name — alias for agents/distributor, real for admin/manager.
+      source: resolveSourceName(session.role, sourcePageName, sourceAlias),
+      form: f ? resolveFormDisplayName(session.role, f.formName, f.displayName) : null,
+      formActual: f && canSeeActual ? f.formName ?? null : null,
+    };
+    // BACKEND PII MASKING — the last transform before the row leaves. When
+    // masked: name -> Fresh/Assigned Lead, phone -> last-4, email -> null. The
+    // distribution signals (source/state/priority/form/owner/timestamps) are
+    // untouched. Everyone else — and the distributor with Privacy Mode OFF —
+    // skips this entirely and gets the real values.
+    return masked ? maskLeadRow(row) : row;
+  });
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  return NextResponse.json({ leads: leadsOut, page, pageSize, total, totalPages });
+  return NextResponse.json({ leads: leadsOut, page, pageSize, total, totalPages, masked });
 }
 
 export async function POST(req: NextRequest) {

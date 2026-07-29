@@ -323,6 +323,13 @@
 			"when": 1784990779437,
 			"tag": "0045_lead_distributor_role",
 			"breakpoints": true
+		},
+		{
+			"idx": 46,
+			"version": "7",
+			"when": 1785077179437,
+			"tag": "0046_manager_privacy_mode",
+			"breakpoints": true
 		}
 	]
 }

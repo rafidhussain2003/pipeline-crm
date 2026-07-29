@@ -283,7 +283,14 @@ export default function LeadsPage() {
       .then(async (r) => {
         if (!r.ok) return;
         const data = await r.json();
-        setRole(data.user?.role || "");
+        const r0 = data.user?.role || "";
+        // The Lead Distribution Manager doesn't use the normal CRM workspace —
+        // bounce them to their dedicated console if they reach /leads directly.
+        if (r0 === "lead_distributor") {
+          window.location.replace("/manager/fresh-leads");
+          return;
+        }
+        setRole(r0);
       })
       .catch(() => {});
   }, []);

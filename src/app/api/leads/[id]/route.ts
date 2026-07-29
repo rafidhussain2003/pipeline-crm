@@ -4,7 +4,7 @@ import { leads, assignmentLog, dispositionOptions, users } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { isUuid } from "@/lib/url";
 import { hasPermission } from "@/lib/permissions";
-import { shouldMaskLeadPII } from "@/lib/leads/pii";
+import { leadPIIMaskedFor } from "@/lib/leads/pii";
 import { and, eq, isNull } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { transitionLifecycle } from "@/lib/lifecycle/service";
@@ -35,11 +35,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if ("isBlacklisted" in body && !hasPermission(session.role, "leads:supervise")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  // Lead Distribution Manager: assignment ONLY. They can't see customer fields,
-  // so they can't edit them either — a crafted PATCH touching disposition,
-  // name, phone, email, state, priority, blacklist or follow-up is rejected.
-  // The one thing they may change is ownerId (distribute the lead).
-  if (shouldMaskLeadPII(session.role)) {
+  // Lead Distribution Manager under Privacy Mode: assignment ONLY. They can't
+  // see customer fields, so they can't edit them either — a crafted PATCH
+  // touching disposition, name, phone, email, state, priority, blacklist or
+  // follow-up is rejected. The one thing they may change is ownerId. With
+  // Privacy Mode OFF the check returns false and they edit like a normal member.
+  if (await leadPIIMaskedFor(session.role, session.companyId)) {
     const forbiddenEdit = Object.keys(body).some(
       (k) => k !== "ownerId" && ["disposition", "followUpAt", "name", "phone", "email", "state", "priority", "isBlacklisted", "duplicateOfLeadId"].includes(k)
     );

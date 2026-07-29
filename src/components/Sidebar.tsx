@@ -289,6 +289,31 @@ export default function Sidebar({
           simply unreachable — flex children don't shrink below content height
           by default, so the list must be its own scroll container. */}
       <nav className="flex-1 min-h-0 overflow-y-auto px-3 py-4 space-y-1">
+        {/* Manager Console — the Lead Distribution Manager gets a DEDICATED,
+            minimal navigation (Fresh Leads, Auto Assignment) plus Profile + Sign
+            out in the footer below. They never see the normal CRM/settings nav. */}
+        {role === "lead_distributor" && (
+          <>
+            <Link
+              href="/manager/fresh-leads"
+              className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                pathname.startsWith("/manager/fresh-leads") ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              Fresh Leads
+            </Link>
+            <Link
+              href="/manager/auto-assignment"
+              className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                pathname.startsWith("/manager/auto-assignment") ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              Auto Assignment
+            </Link>
+          </>
+        )}
+        {role !== "lead_distributor" && (
+          <>
         {/* Enterprise Workspaces: inside /hr or /finance the sidebar IS that
             workspace's navigation. The CRM nav below renders only outside. */}
         {workspace === "hr" && (
@@ -552,6 +577,8 @@ export default function Sidebar({
             >
               Security
             </Link>
+          </>
+        )}
           </>
         )}
           </>

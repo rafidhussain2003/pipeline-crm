@@ -3,13 +3,13 @@ import { db } from "@/db";
 import { leadTags } from "@/db/schema";
 import { getSession, type CompanySession } from "@/lib/auth";
 import { canAccessLead } from "@/lib/leads/access";
-import { shouldMaskLeadPII } from "@/lib/leads/pii";
+import { leadPIIMaskedFor } from "@/lib/leads/pii";
 import { and, eq } from "drizzle-orm";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (shouldMaskLeadPII(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (await leadPIIMaskedFor(session.role, session.companyId)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const { id } = await params;
 
   // Agent Portal: agents reach only their own leads (see lib/leads/access).

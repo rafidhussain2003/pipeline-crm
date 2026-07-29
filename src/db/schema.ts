@@ -181,6 +181,12 @@ export const companies = pgTable(
     // Phase 13: first-run setup wizard completion (company profile → invite →
     // Meta → import → dashboard). Nulls/false show the wizard on next login.
     onboardingCompleted: boolean("onboarding_completed").notNull().default(false),
+    // Manager Privacy Mode — when true (the default), a Lead Distribution
+    // Manager sees leads with customer PII masked (Fresh/Assigned Lead, last-4
+    // phone, no email/notes/etc.); when an admin turns it off, that role sees
+    // full lead details like a trusted operational manager. Admin-controlled
+    // only. Enforced on the backend (see src/lib/leads/pii.ts).
+    managerPrivacyMode: boolean("manager_privacy_mode").notNull().default(true),
     // Phase 13 company settings (localization + business hours as minutes since
     // midnight in the company timezone). Language is future-ready (en today).
     dateFormat: varchar("date_format", { length: 20 }).notNull().default("MM/DD/YYYY"),

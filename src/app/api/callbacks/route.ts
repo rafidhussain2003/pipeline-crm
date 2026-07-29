@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { shouldMaskLeadPII } from "@/lib/leads/pii";
+import { leadPIIMaskedFor } from "@/lib/leads/pii";
 import { CallbackError, callbackCounts, listCallbacks, listCallbacksForLead, scheduleCallback, type CallbackTab } from "@/lib/callbacks";
 
 const TABS = ["today", "upcoming", "overdue", "completed"];
@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   if (!session?.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   // Callbacks carry the customer's name and number — a Lead Distribution
   // Manager (non-agent) would otherwise get the whole company's, unmasked.
-  if (shouldMaskLeadPII(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (await leadPIIMaskedFor(session.role, session.companyId)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const p = req.nextUrl.searchParams;
 
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session?.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (shouldMaskLeadPII(session.role)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (await leadPIIMaskedFor(session.role, session.companyId)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await req.json().catch(() => ({}));
   if (!body?.leadId || typeof body.leadId !== "string") return NextResponse.json({ error: "leadId is required" }, { status: 400 });
