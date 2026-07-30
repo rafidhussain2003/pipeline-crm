@@ -326,6 +326,12 @@ export const refreshTokens = pgTable(
     revokedAt: timestamp("revoked_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     userAgent: varchar("user_agent", { length: 255 }),
+    // Whether the login that minted this token chose "Remember Me". Carried on
+    // the token (not just the initial cookie) so a refresh re-issues the
+    // session with the SAME horizon (30 days) instead of silently reverting to
+    // the 7-day default — the "cookie says 30d but the renewed session is 7d"
+    // inconsistency this table is the durable record for.
+    rememberMe: boolean("remember_me").notNull().default(false),
   },
   (t) => ({
     userIdx: index("refresh_tokens_user_idx").on(t.userId),

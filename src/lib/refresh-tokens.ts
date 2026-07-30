@@ -9,8 +9,13 @@ function hashToken(token: string) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-export async function issueRefreshToken(userId: string, userAgent?: string) {
+export async function issueRefreshToken(userId: string, userAgent?: string, rememberMe = false) {
   const rawToken = crypto.randomBytes(32).toString("hex");
+  // The token itself lives the full 30 days regardless (it's the revocable
+  // ceiling and is always >= the access session, so it can never be the thing
+  // that expires "overnight" under a live cookie). What `rememberMe` controls
+  // is the horizon of the SESSION a refresh re-mints from it — see the refresh
+  // route.
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
 
   await db.insert(refreshTokens).values({
@@ -18,6 +23,7 @@ export async function issueRefreshToken(userId: string, userAgent?: string) {
     tokenHash: hashToken(rawToken),
     expiresAt,
     userAgent: userAgent?.slice(0, 255),
+    rememberMe,
   });
 
   return { rawToken, expiresAt };

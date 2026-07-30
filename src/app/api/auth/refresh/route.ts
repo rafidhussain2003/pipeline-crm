@@ -42,9 +42,14 @@ export async function POST() {
   }
 
   // Rotate: revoke the used token, issue a fresh one. This limits the blast
-  // radius if a refresh token is ever leaked (it's single-use).
+  // radius if a refresh token is ever leaked (it's single-use). The rememberMe
+  // horizon rides along so the rotated token — and the session cookie minted
+  // below — keep the ORIGINAL 30-day lifetime instead of silently reverting to
+  // the 7-day default (the bug where a "Remember Me" session quietly became a
+  // short one that then expired while the user was away).
+  const rememberMe = record.rememberMe;
   await revokeRefreshToken(rawToken);
-  const { rawToken: newToken, expiresAt } = await issueRefreshToken(user.id);
+  const { rawToken: newToken, expiresAt } = await issueRefreshToken(user.id, undefined, rememberMe);
   await setRefreshCookie(newToken, expiresAt);
 
   // Single-device security: a refresh continues the ONE active session, so
@@ -74,6 +79,8 @@ export async function POST() {
     role: user.role,
     email: user.email,
     sessionId,
+    // Preserve the horizon — setSessionCookie derives 30 vs 7 days from this.
+    rememberMe,
   });
 
   return NextResponse.json({ ok: true });

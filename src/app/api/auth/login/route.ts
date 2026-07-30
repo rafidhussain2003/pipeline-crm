@@ -305,11 +305,13 @@ export async function POST(req: NextRequest) {
         role: user.role,
         email: user.email,
         sessionId,
+        // Persisted on the token so a later refresh keeps this exact horizon.
+        rememberMe: !!rememberMe,
       },
       sessionDays
     );
 
-    const { rawToken, expiresAt } = await issueRefreshToken(user.id, req.headers.get("user-agent") || undefined);
+    const { rawToken, expiresAt } = await issueRefreshToken(user.id, req.headers.get("user-agent") || undefined, !!rememberMe);
     await setRefreshCookie(rawToken, expiresAt);
 
     await recordAudit({

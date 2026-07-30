@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Footer } from "@/components/Footer";
@@ -10,6 +10,16 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
+  // When single-device security signed this browser out because the account
+  // was used to sign in somewhere else, the app sends us here with
+  // ?reason=elsewhere so we can say WHY instead of a blank login screen. Read
+  // from location (not useSearchParams) to avoid a Suspense boundary.
+  const [signedOutElsewhere, setSignedOutElsewhere] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("reason") === "elsewhere") {
+      setSignedOutElsewhere(true);
+    }
+  }, []);
   // Two-step device verification: when the server answers { otpRequired }
   // the form switches to the code step. Email/password are kept in state and
   // re-sent together with the code.
@@ -83,6 +93,12 @@ export default function LoginPage() {
             <p className="text-sm text-slate-500 mt-1">Sign in to your account</p>
           </div>
           <form onSubmit={submit} className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+            {signedOutElsewhere && (
+              <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2.5 text-sm text-amber-900">
+                You were signed out because your account signed in on another device. For security, only one device
+                stays signed in at a time — sign in again to continue here.
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
               <input

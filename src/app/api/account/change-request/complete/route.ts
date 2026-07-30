@@ -83,11 +83,13 @@ export async function POST(req: NextRequest) {
       metadata: { via: "admin_approval", adminUserId: admin.id },
     });
 
-    // Refresh the session cookie so its email claim matches the account.
+    // Refresh the session cookie so its email claim matches the account —
+    // preserving this session's Remember Me horizon (don't shrink a 30-day
+    // session to 7 just because the agent changed their email).
     const sessionId = await activateSession(session.userId);
-    await setSessionCookie({ userId: me.id, companyId: me.companyId, role: me.role, email: newEmail, sessionId });
+    await setSessionCookie({ userId: me.id, companyId: me.companyId, role: me.role, email: newEmail, sessionId, rememberMe: session.rememberMe });
     await revokeAllRefreshTokensForUser(me.id);
-    const { rawToken, expiresAt } = await issueRefreshToken(me.id, req.headers.get("user-agent") || undefined);
+    const { rawToken, expiresAt } = await issueRefreshToken(me.id, req.headers.get("user-agent") || undefined, !!session.rememberMe);
     await setRefreshCookie(rawToken, expiresAt);
 
     return NextResponse.json({ ok: true, message: "Your login email has been changed." });
@@ -105,11 +107,12 @@ export async function POST(req: NextRequest) {
     .where(eq(users.id, session.userId));
 
   // Single-device discipline on a credential change: everything else dies,
-  // THIS device stays signed in on a freshly rotated session.
+  // THIS device stays signed in on a freshly rotated session — keeping its
+  // Remember Me horizon rather than dropping to the 7-day default.
   await revokeAllRefreshTokensForUser(me.id);
   const sessionId = await activateSession(me.id);
-  await setSessionCookie({ userId: me.id, companyId: me.companyId, role: me.role, email: me.email, sessionId });
-  const { rawToken, expiresAt } = await issueRefreshToken(me.id, req.headers.get("user-agent") || undefined);
+  await setSessionCookie({ userId: me.id, companyId: me.companyId, role: me.role, email: me.email, sessionId, rememberMe: session.rememberMe });
+  const { rawToken, expiresAt } = await issueRefreshToken(me.id, req.headers.get("user-agent") || undefined, !!session.rememberMe);
   await setRefreshCookie(rawToken, expiresAt);
 
   await recordAudit({

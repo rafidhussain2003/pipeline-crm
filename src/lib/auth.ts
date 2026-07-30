@@ -42,6 +42,13 @@ export type SessionPayload = {
   // tokens issued before the rollout carry no claim — they're honored only
   // until the user's next login stamps a real id.
   sessionId?: string;
+  // Whether the login chose "Remember Me" (30 days) vs the default (7). Carried
+  // ON the token so EVERY re-issue of the session cookie (a refresh, an email
+  // or password change) keeps the same horizon instead of silently reverting
+  // to 7 days — the root cause of a "30-day" session quietly becoming a
+  // shorter one that then expires while the user is away. Optional/absent =
+  // the default 7-day horizon (pre-rollout tokens and non-remember logins).
+  rememberMe?: boolean;
 };
 
 export async function hashPassword(password: string) {
@@ -55,8 +62,19 @@ export async function verifyPassword(password: string, hash: string) {
 const DEFAULT_SESSION_DAYS = 7;
 const REMEMBER_ME_SESSION_DAYS = 30;
 
-export function signSession(payload: SessionPayload, maxAgeDays: number = DEFAULT_SESSION_DAYS) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: `${maxAgeDays}d` as jwt.SignOptions["expiresIn"] });
+// The single source of truth for a session's length. An explicit override wins
+// (the login route passes it); otherwise it's derived from the token's own
+// rememberMe claim. This is what keeps the JWT `exp`, the cookie lifetime, and
+// every re-issue consistent — they all flow through here, so none of them can
+// drift apart (e.g. a 30-day cookie wrapping a 7-day token).
+function sessionDaysFor(payload: SessionPayload, override?: number): number {
+  if (override !== undefined) return override;
+  return payload.rememberMe ? REMEMBER_ME_SESSION_DAYS : DEFAULT_SESSION_DAYS;
+}
+
+export function signSession(payload: SessionPayload, maxAgeDays?: number) {
+  const days = sessionDaysFor(payload, maxAgeDays);
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: `${days}d` as jwt.SignOptions["expiresIn"] });
 }
 
 export function verifySession(token: string): SessionPayload | null {
@@ -115,14 +133,24 @@ export async function requireSuperAdmin(): Promise<
   return { ok: true, session };
 }
 
-export async function setSessionCookie(payload: SessionPayload, maxAgeDays: number = DEFAULT_SESSION_DAYS) {
+export async function setSessionCookie(payload: SessionPayload, maxAgeDays?: number) {
+  const days = sessionDaysFor(payload, maxAgeDays);
+  const maxAgeSeconds = 60 * 60 * 24 * days;
   const store = await cookies();
-  store.set(COOKIE_NAME, signSession(payload, maxAgeDays), {
+  store.set(COOKIE_NAME, signSession(payload, days), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * maxAgeDays,
+    // BOTH attributes, deliberately: `maxAge` (relative) and an explicit
+    // absolute `expires`. Either one alone makes a *persistent* cookie (not a
+    // session cookie that dies when the browser fully closes), but setting the
+    // absolute date too makes the persistence unmistakable to every browser
+    // and intermediary, and matches the app's other auth cookies (refresh,
+    // device-trust) which already use `expires`. The JWT `exp` above uses the
+    // SAME `days`, so cookie and token always expire together.
+    maxAge: maxAgeSeconds,
+    expires: new Date(Date.now() + maxAgeSeconds * 1000),
   });
 }
 

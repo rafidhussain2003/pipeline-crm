@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
+import { cookies } from "next/headers";
+import { getSession, verifySession, COOKIE_KEY } from "@/lib/auth";
 import { db } from "@/db";
 import { companies, users } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -15,7 +16,17 @@ import { getEffectiveModuleAccess, type ModuleAccessMap } from "@/lib/module-acc
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
-  if (!session) redirect("/login");
+  if (!session) {
+    // getSession() returns null for BOTH "no/expired cookie" and "the JWT is
+    // still valid but single-device security retired this session because the
+    // account signed in elsewhere". Distinguish them: if the token itself still
+    // verifies, it's the latter — send a reason so the login screen explains it
+    // instead of leaving the user to wonder why "Remember Me" dropped them.
+    // (The token was already verified once inside getSession; this is only on
+    // the redirect path, so it costs nothing on the hot path.)
+    const token = (await cookies()).get(COOKIE_KEY)?.value;
+    redirect(token && verifySession(token) ? "/login?reason=elsewhere" : "/login");
+  }
 
   // The three lookups below are independent (user gate, company row, feature
   // map) but ran serially. Against the production database a round trip is
