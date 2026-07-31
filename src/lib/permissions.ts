@@ -70,6 +70,10 @@ const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   // are granted by explicit role checks on those specific routes, not by a
   // broad permission here — keeping this set as small as the role's purpose.
   lead_distributor: new Set(["leads:assign"]),
+  // Finance Employee — a Finance-workspace-only user. It holds NO CRM/company
+  // permission whatsoever; everything it can do lives in the Finance capability
+  // model (see lib/finance/permissions.ts), granted per person by the admin.
+  finance_employee: new Set(),
 };
 
 export function hasPermission(role: Role, permission: Permission): boolean {

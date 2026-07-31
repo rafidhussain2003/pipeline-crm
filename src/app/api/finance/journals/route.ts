@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireFinance, financeErrorResponse } from "@/lib/finance/guard";
+import { requireFinance, requireFinanceCapability, financeErrorResponse } from "@/lib/finance/guard";
 import { createDraft, listJournals } from "@/lib/finance";
 
+// Journal entries are full accounting history — reading needs view_reports.
 export async function GET(req: NextRequest) {
-  const auth = await requireFinance("finance:view");
+  const auth = await requireFinanceCapability("view_reports");
   if (!auth.ok) return auth.response;
   const p = req.nextUrl.searchParams;
   const rawStatus = p.get("status");

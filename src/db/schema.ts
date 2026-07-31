@@ -29,7 +29,7 @@ import { relations, sql } from "drizzle-orm";
 // sees all company leads with customer PII hidden and distributes them to
 // agents. NOT an admin. See src/lib/leads/pii.ts for the masking and
 // src/lib/permissions.ts for its (narrow) permission set.
-export const roleEnum = pgEnum("role", ["super_admin", "admin", "manager", "agent", "lead_distributor"]);
+export const roleEnum = pgEnum("role", ["super_admin", "admin", "manager", "agent", "lead_distributor", "finance_employee"]);
 // Tiers are a configurable priority band, not hardcoded logic — the ORDER/
 // weight of each tier comes from assignment_rules + the AI tier factor's
 // config, never from the enum values themselves. "senior"/"supervisor" (Phase
@@ -298,6 +298,14 @@ export const users = pgTable(
     // Written only via lib/module-access.ts (validated + audited); read
     // through its short-TTL cache by the module guards and the proxy.
     moduleAccess: jsonb("module_access"),
+    // Finance Employees: a per-user finance capability set, e.g.
+    // { record_expense: true, record_payout: false, record_income: true,
+    //   view_balances: false, view_reports: true, manage: false }. Only
+    // meaningful for the finance_employee role (the admin picks exactly what
+    // each one can do inside the Finance workspace); NULL = no capabilities.
+    // Written only via lib/finance/permissions.ts + the Finance Team routes;
+    // read through the finance capability resolver. See finance/permissions.ts.
+    financeCapabilities: jsonb("finance_capabilities"),
     // Phase 5 per-agent routing profile: capacity limits (max active leads,
     // daily assignments, concurrent conversations, queue size, recycled) and a
     // working schedule (days, start/end, timezone, lunch, vacation ranges).
@@ -2377,6 +2385,12 @@ export const financeExpenses = pgTable(
     entryDate: date("entry_date").notNull(),
     vendorName: varchar("vendor_name", { length: 160 }).notNull(),
     category: varchar("category", { length: 80 }),
+    // The kind of money-out document: "expense" (business expense), "payout"
+    // (customer payout) or "salary" (salary payment). All post the same kind of
+    // journal; this distinguishes them for the per-capability gate (a finance
+    // employee may be allowed to record expenses but not payouts) and for
+    // clearer statements. Existing rows default to "expense".
+    docType: varchar("doc_type", { length: 20 }).notNull().default("expense"),
     paymentMethod: varchar("payment_method", { length: 20 }).notNull().default("cash"), // "cash" | "bank" | "card" | "other"
     receiptRef: varchar("receipt_ref", { length: 160 }), // placeholder — receipt uploads are a future module
     expenseAccountId: uuid("expense_account_id").references(() => financeAccounts.id).notNull(),

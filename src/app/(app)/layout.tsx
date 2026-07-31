@@ -13,6 +13,7 @@ import LeadAssignedAlerts from "@/components/leads/LeadAssignedAlerts";
 import { billingBlockReason, daysRemaining, isBillingBlocked } from "@/lib/billing";
 import { getEnabledFeatures, type FeatureMap } from "@/lib/features";
 import { getEffectiveModuleAccess, type ModuleAccessMap } from "@/lib/module-access";
+import { resolveFinanceCapabilities } from "@/lib/finance/permissions";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
@@ -63,6 +64,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // before doing anything else — a hard gate that blocks the whole app.
   if (me?.mustChange) return <ForcePasswordChange />;
 
+  // Finance Employees: their granted capabilities drive which Finance nav items
+  // the sidebar shows. Only resolved for that role (one cached read); every
+  // other role ignores it, so an empty list is fine.
+  const financeCaps =
+    session.role === "finance_employee" ? [...(await resolveFinanceCapabilities(session.userId, session.role))] : [];
+
   let companyName = "Super Admin";
   let billing: { subscriptionStatus: "trial" | "active" | "past_due" | "cancelled"; daysRemaining: number } | null =
     null;
@@ -87,7 +94,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       {/* Presence heartbeat is rendered inside Sidebar (role-gated there) —
           only company members take leads and need presence tracked;
           super_admin has no companyId and doesn't participate in routing. */}
-      <Sidebar companyName={companyName} role={session.role} features={features} modules={modules} />
+      <Sidebar companyName={companyName} role={session.role} features={features} modules={modules} financeCaps={financeCaps} />
       {/* pt-14 clears the fixed mobile top bar that Sidebar renders below `lg`;
           on `lg` the sidebar is back in flow and there is no bar to clear. */}
       <div className="flex-1 min-w-0 flex flex-col pt-14 lg:pt-0">

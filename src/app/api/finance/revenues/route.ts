@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireFinance, financeErrorResponse } from "@/lib/finance/guard";
+import { requireFinance, requireFinanceCapability, financeErrorResponse } from "@/lib/finance/guard";
 import { createRevenue, listRevenues } from "@/lib/finance";
 
 export async function GET(req: NextRequest) {
@@ -10,9 +10,11 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ revenues });
 }
 
-// Record revenue — posts its balanced journal automatically.
+// Record revenue (client payments / other income) — posts its balanced journal
+// automatically. Requires record_income; admins/managers hold it, so their
+// behavior is unchanged.
 export async function POST(req: NextRequest) {
-  const auth = await requireFinance("finance:post");
+  const auth = await requireFinanceCapability("record_income");
   if (!auth.ok) return auth.response;
   const body = await req.json().catch(() => ({}));
   try {

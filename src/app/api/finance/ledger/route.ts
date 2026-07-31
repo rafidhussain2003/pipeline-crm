@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireFinance, financeErrorResponse } from "@/lib/finance/guard";
+import { requireFinanceCapability, financeErrorResponse } from "@/lib/finance/guard";
 import { getAccountLedger } from "@/lib/finance";
 
-// The General Ledger view for one account: entries + running balance.
+// The General Ledger view for one account: entries + running balance. This is
+// full transaction history, so it needs view_reports (admins/managers hold it;
+// a Finance Employee sees it only if the admin granted "View ledger & reports").
 export async function GET(req: NextRequest) {
-  const auth = await requireFinance("finance:view");
+  const auth = await requireFinanceCapability("view_reports");
   if (!auth.ok) return auth.response;
   const p = req.nextUrl.searchParams;
   const accountId = p.get("accountId");

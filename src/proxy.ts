@@ -144,6 +144,18 @@ export async function proxy(req: NextRequest) {
     }
   }
 
+  // Finance Employee — a Finance-workspace-only account. Every non-Finance app
+  // PAGE redirects to /finance as if it didn't exist (their /profile stays
+  // reachable; it's outside this proxy's matcher). API routes are deliberately
+  // left to their own guards — /api/finance/* enforces the fine capabilities,
+  // and other APIs already 403 a finance_employee — so this never interferes
+  // with the data calls the Finance pages make.
+  if (session?.role === "finance_employee" && !isApiRoute) {
+    if (pathname !== "/finance" && !pathname.startsWith("/finance/")) {
+      return NextResponse.redirect(new URL("/finance", getPublicAppUrl()));
+    }
+  }
+
   // Subscription gate — the single chokepoint every company-scoped API
   // route passes through, so no individual route (there are ~60 of them)
   // needs its own copy of this check. Only applies to sessions that

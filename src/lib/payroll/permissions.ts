@@ -22,6 +22,8 @@ const PAYROLL_ROLE_PERMISSIONS: Record<Role, ReadonlySet<PayrollPermission>> = {
   agent: new Set(["payroll:view_own"]),
   // Lead Distribution Manager: no Payroll access.
   lead_distributor: new Set(),
+  // Finance Employee: no Payroll access.
+  finance_employee: new Set(),
 };
 
 export function hasPayrollPermission(role: Role, permission: PayrollPermission): boolean {

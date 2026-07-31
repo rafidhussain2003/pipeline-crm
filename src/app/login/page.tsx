@@ -56,7 +56,9 @@ export default function LoginPage() {
         ? "/super-admin"
         : data.role === "lead_distributor"
           ? "/manager/fresh-leads"
-          : "/leads"
+          : data.role === "finance_employee"
+            ? "/finance"
+            : "/leads"
     );
     router.refresh();
   }

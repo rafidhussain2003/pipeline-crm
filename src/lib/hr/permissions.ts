@@ -20,6 +20,8 @@ const HR_ROLE_PERMISSIONS: Record<Role, ReadonlySet<HRPermission>> = {
   agent: new Set(["hr:view_own"]),
   // Lead Distribution Manager: no HR access.
   lead_distributor: new Set(),
+  // Finance Employee: no HR access.
+  finance_employee: new Set(),
 };
 
 export function hasHRPermission(role: Role, permission: HRPermission): boolean {

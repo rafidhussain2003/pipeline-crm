@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { users, companies } from "@/db/schema";
 import { hashPassword } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
-import { and, eq, isNull, ilike, or, asc } from "drizzle-orm";
+import { and, eq, ne, isNull, ilike, or, asc } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 import { checkAgentQuota } from "@/lib/tenant/limits";
@@ -34,7 +34,9 @@ export async function GET(req: NextRequest) {
   const status = searchParams.get("status"); // "active" | "disabled"
   const roleFilter = searchParams.get("role"); // "owner" | "admin" | "manager" | "agent"
 
-  const conditions = [eq(users.companyId, session.companyId), isNull(users.deletedAt)];
+  // Finance Employees are managed in their own Finance → Team console and must
+  // never appear among the CRM's people — exclude them from this roster.
+  const conditions = [eq(users.companyId, session.companyId), isNull(users.deletedAt), ne(users.role, "finance_employee")];
   if (status === "active") conditions.push(eq(users.active, true));
   if (status === "disabled") conditions.push(eq(users.active, false));
   // "owner" isn't a stored role — filtered client-side below via isOwner,

@@ -68,19 +68,34 @@ const AUTOMATION_ITEMS: { href: string; label: string }[] = [
   { href: "/automation/settings", label: "Settings" },
 ];
 
-const FINANCE_ITEMS: { href: string; label: string }[] = [
+// `requires` = for a finance_employee, show this item only if they hold ANY of
+// these capabilities (admins/managers see everything, so it's ignored for
+// them). `adminOnly` = Finance Team management, admin-only for every role.
+const FINANCE_ITEMS: { href: string; label: string; requires?: string[]; adminOnly?: boolean }[] = [
   { href: "/finance", label: "Dashboard" },
-  { href: "/finance/accounts", label: "Chart of Accounts" },
-  { href: "/finance/revenue", label: "Revenue" },
-  { href: "/finance/expenses", label: "Expenses" },
-  { href: "/finance/investments", label: "Investments" },
-  { href: "/finance/journal", label: "Journal Entries" },
-  { href: "/finance/ledger", label: "General Ledger" },
-  { href: "/finance/cash", label: "Cash Accounts" },
-  { href: "/finance/banks", label: "Bank Accounts" },
-  { href: "/finance/years", label: "Financial Year" },
-  { href: "/finance/settings", label: "Settings" },
+  { href: "/finance/accounts", label: "Chart of Accounts", requires: ["view_reports", "manage"] },
+  { href: "/finance/revenue", label: "Revenue", requires: ["record_income", "view_reports"] },
+  { href: "/finance/expenses", label: "Expenses", requires: ["record_expense", "record_payout", "view_reports"] },
+  { href: "/finance/investments", label: "Investments", requires: ["manage"] },
+  { href: "/finance/journal", label: "Journal Entries", requires: ["view_reports"] },
+  { href: "/finance/ledger", label: "General Ledger", requires: ["view_reports"] },
+  { href: "/finance/cash", label: "Cash Accounts", requires: ["view_balances", "manage"] },
+  { href: "/finance/banks", label: "Bank Accounts", requires: ["view_balances", "manage"] },
+  { href: "/finance/years", label: "Financial Year", requires: ["manage"] },
+  { href: "/finance/settings", label: "Settings", requires: ["manage"] },
+  { href: "/finance/team", label: "Team", adminOnly: true },
 ];
+
+// Which FINANCE_ITEMS to show for a given viewer. Admins/managers see all
+// (minus admin-only for managers); a finance_employee is filtered to the items
+// their capabilities unlock.
+function financeItemsFor(role: string, financeCaps: string[]): typeof FINANCE_ITEMS {
+  return FINANCE_ITEMS.filter((item) => {
+    if (item.adminOnly && role !== "admin") return false;
+    if (role === "finance_employee" && item.requires && !item.requires.some((c) => financeCaps.includes(c))) return false;
+    return true;
+  });
+}
 
 // Phase 18: items tagged with a `feature` render only when the company's
 // feature profile has that module enabled (see lib/features). Untagged items
@@ -140,6 +155,7 @@ export default function Sidebar({
   role,
   features,
   modules,
+  financeCaps = [],
 }: {
   companyName: string;
   role: string;
@@ -150,6 +166,9 @@ export default function Sidebar({
   // entitlement ∧ admin's per-user assignment), resolved server-side in the
   // layout. Null = no company context.
   modules?: Record<string, boolean> | null;
+  // Finance Employees: the viewer's granted finance capabilities, resolved in
+  // the layout — drives which Finance nav items appear for a finance_employee.
+  financeCaps?: string[];
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -312,7 +331,29 @@ export default function Sidebar({
             </Link>
           </>
         )}
-        {role !== "lead_distributor" && (
+        {/* Finance Employee — a DEDICATED Finance-only navigation (no CRM, no
+            Back-to-CRM), filtered to the capabilities the admin granted them.
+            Rendered regardless of path so they are always workspace-locked. */}
+        {role === "finance_employee" && (
+          <>
+            <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Finance Workspace</div>
+            {financeItemsFor(role, financeCaps).map((item) => {
+              const active = pathname === item.href;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                    active ? "bg-emerald-50 text-emerald-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </>
+        )}
+        {role !== "lead_distributor" && role !== "finance_employee" && (
           <>
         {/* Enterprise Workspaces: inside /hr or /finance the sidebar IS that
             workspace's navigation. The CRM nav below renders only outside. */}
@@ -348,7 +389,7 @@ export default function Sidebar({
               </Link>
             )}
             <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Finance Workspace</div>
-            {FINANCE_ITEMS.map((item) => {
+            {financeItemsFor(role, financeCaps).map((item) => {
               const active = pathname === item.href;
               return (
                 <Link
@@ -584,9 +625,11 @@ export default function Sidebar({
           </>
         )}
       </nav>
-      {role !== "super_admin" && <PresenceHeartbeat />}
+      {/* Presence is a lead-taking concept — super_admin and finance employees
+          don't participate, so no heartbeat/status is tracked for them. */}
+      {role !== "super_admin" && role !== "finance_employee" && <PresenceHeartbeat />}
       <div className="px-3 py-4 border-t border-slate-100 space-y-1">
-        {role !== "super_admin" && role !== "agent" && role !== "lead_distributor" && (
+        {role !== "super_admin" && role !== "agent" && role !== "lead_distributor" && role !== "finance_employee" && (
           <Link
             href="/subscription"
             className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${

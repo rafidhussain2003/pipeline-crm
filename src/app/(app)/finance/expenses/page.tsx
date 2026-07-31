@@ -15,13 +15,15 @@ export default function ExpensesPage() {
   const [rows, setRows] = useState<Expense[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState("");
-  // Workspace quick actions land here with ?category=Customer%20Payout /
-  // Salary — open the form pre-filled so a payout/salary is one click away.
+  // Workspace quick actions land here with ?docType=payout / salary (or the
+  // legacy ?category=…) — open the form pre-filled so a payout/salary is one
+  // click away. docType drives the capability gate + the document label.
   const searchParams = useSearchParams();
   const presetCategory = searchParams.get("category") || "";
+  const presetDocType = searchParams.get("docType") || "expense";
   useEffect(() => {
-    if (presetCategory) setShowForm(true);
-  }, [presetCategory]);
+    if (presetCategory || searchParams.get("docType")) setShowForm(true);
+  }, [presetCategory, searchParams]);
 
   const load = async () => {
     const res = await fetch("/api/finance/expenses");
@@ -71,12 +73,14 @@ export default function ExpensesPage() {
         {rows.length === 0 && <p className="text-sm text-slate-400 px-4 py-8 text-center">No expenses recorded yet.</p>}
       </div>
 
-      {showForm && <ExpenseModal accounts={accounts} presetCategory={presetCategory} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />}
+      {showForm && <ExpenseModal accounts={accounts} presetCategory={presetCategory} docType={presetDocType} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />}
     </div>
   );
 }
 
-function ExpenseModal({ accounts, presetCategory, onClose, onSaved }: { accounts: ReturnType<typeof useAccounts>["accounts"]; presetCategory?: string; onClose: () => void; onSaved: () => void }) {
+const DOC_TYPE_TITLE: Record<string, string> = { expense: "Record expense", payout: "Record customer payout", salary: "Record salary payment" };
+
+function ExpenseModal({ accounts, presetCategory, docType = "expense", onClose, onSaved }: { accounts: ReturnType<typeof useAccounts>["accounts"]; presetCategory?: string; docType?: string; onClose: () => void; onSaved: () => void }) {
   const [entryDate, setEntryDate] = useState(todayInput());
   const [vendorName, setVendorName] = useState("");
   const [category, setCategory] = useState(presetCategory || "");
@@ -96,7 +100,7 @@ function ExpenseModal({ accounts, presetCategory, onClose, onSaved }: { accounts
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        entryDate, vendorName, category: category || null, paymentMethod, receiptRef: receiptRef || null,
+        entryDate, vendorName, category: category || null, docType, paymentMethod, receiptRef: receiptRef || null,
         amount: Number(amount), expenseAccountId, paymentAccountId, notes: notes || null,
       }),
     });
@@ -111,7 +115,7 @@ function ExpenseModal({ accounts, presetCategory, onClose, onSaved }: { accounts
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
       <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-base font-semibold text-slate-900 mb-4">Record expense</h2>
+        <h2 className="text-base font-semibold text-slate-900 mb-4">{DOC_TYPE_TITLE[docType] || "Record expense"}</h2>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>

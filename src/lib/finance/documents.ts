@@ -105,10 +105,22 @@ export async function listRevenues(companyId: string, opts: { limit?: number; of
 }
 
 // ── Expenses ────────────────────────────────────────────────────────────────
+// The money-out document kind. All post the same journal shape; the type only
+// labels the document and drives the per-capability gate (record_expense vs
+// record_payout).
+export const EXPENSE_DOC_TYPES = ["expense", "payout", "salary"] as const;
+export type ExpenseDocType = (typeof EXPENSE_DOC_TYPES)[number];
+const DOC_TYPE_LABEL: Record<ExpenseDocType, string> = {
+  expense: "Expense",
+  payout: "Customer payout",
+  salary: "Salary payment",
+};
+
 export interface CreateExpenseInput {
   entryDate: string;
   vendorName: string;
   category?: string | null;
+  docType?: string | null;
   paymentMethod: string;
   receiptRef?: string | null;
   expenseAccountId: string;
@@ -124,6 +136,10 @@ export async function createExpense(companyId: string, actorUserId: string, inpu
   const cents = toCents(input.amount);
   if (cents <= 0) throw new FinanceError("Amount must be greater than zero");
 
+  const docType: ExpenseDocType = (EXPENSE_DOC_TYPES as readonly string[]).includes(input.docType ?? "")
+    ? (input.docType as ExpenseDocType)
+    : "expense";
+
   const expense = await getAccount(companyId, input.expenseAccountId);
   if (!expense || expense.type !== "expense") throw new FinanceError("Choose an expense account");
   const payment = await getAccount(companyId, input.paymentAccountId);
@@ -131,7 +147,7 @@ export async function createExpense(companyId: string, actorUserId: string, inpu
 
   const journal = await createAndPost(companyId, actorUserId, {
     entryDate: input.entryDate,
-    memo: `Expense — ${input.vendorName.trim()}`,
+    memo: `${DOC_TYPE_LABEL[docType]} — ${input.vendorName.trim()}`,
     sourceType: "expense",
     lines: [
       { accountId: expense.id, debit: cents / 100, description: input.category?.trim() || null },
@@ -148,6 +164,7 @@ export async function createExpense(companyId: string, actorUserId: string, inpu
       entryDate: input.entryDate,
       vendorName: input.vendorName.trim(),
       category: input.category?.trim() || null,
+      docType,
       paymentMethod: input.paymentMethod,
       receiptRef: input.receiptRef?.trim() || null,
       expenseAccountId: expense.id,

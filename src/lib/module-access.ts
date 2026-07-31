@@ -57,6 +57,9 @@ const ROLE_DEFAULTS: Record<Role, Record<ModuleKey, boolean>> = {
   // Lead Distribution Manager: CRM only (the masked Leads page); no back-office
   // modules whatsoever.
   lead_distributor: { crm: true, hr: false, finance: false, attendance: false, payroll: false, workflow: false },
+  // Finance Employee: the Finance workspace ONLY — never CRM or any other
+  // back-office module. This is what keeps them out of the CRM entirely.
+  finance_employee: { crm: false, hr: false, finance: true, attendance: false, payroll: false, workflow: false },
 };
 
 export type ModuleAccessMap = Record<ModuleKey, boolean>;

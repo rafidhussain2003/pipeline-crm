@@ -21,6 +21,8 @@ const ATTENDANCE_ROLE_PERMISSIONS: Record<Role, ReadonlySet<AttendancePermission
   agent: new Set(["attendance:self"]),
   // Lead Distribution Manager: no Attendance access.
   lead_distributor: new Set(),
+  // Finance Employee: no Attendance access.
+  finance_employee: new Set(),
 };
 
 export function hasAttendancePermission(role: Role, permission: AttendancePermission): boolean {
