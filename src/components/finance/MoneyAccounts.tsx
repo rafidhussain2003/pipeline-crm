@@ -45,7 +45,7 @@ export default function MoneyAccounts({ subtype }: { subtype: "cash" | "bank" })
                 </div>
                 {subtype === "bank" && <span className="text-[10px] font-semibold uppercase text-slate-300 shrink-0">Reconcile — soon</span>}
               </div>
-              <div className="text-xl font-semibold text-slate-900 mt-3">{money(a.balanceCents)}</div>
+              <div className="text-xl font-semibold text-slate-900 mt-3">{a.balanceCents === null ? "—" : money(a.balanceCents)}</div>
               <div className="text-[11px] text-slate-400 mt-0.5">Current balance</div>
               {opening && !opening.locked && (
                 <button onClick={() => setModal({ kind: "opening", account: a })} className="mt-3 text-[11px] font-medium text-blue-600">

@@ -14,7 +14,9 @@ export type UiAccount = {
   isSystem: boolean;
   active: boolean;
   description: string | null;
-  balanceCents: number;
+  // null when the viewer isn't permitted to see balances (a Finance Employee
+  // without the View balances capability) — render as "—", never as 0.
+  balanceCents: number | null;
 };
 
 // Base-currency display (Enterprise Finance Workspace). The company's

@@ -125,14 +125,33 @@ export async function listJournals(companyId: string, opts: { status?: "draft" |
       sourceType: financeJournals.sourceType,
       reversalOfId: financeJournals.reversalOfId,
       createdAt: financeJournals.createdAt,
-      total: sql<string>`(select coalesce(sum(l.debit), 0) from finance_journal_lines l where l.journal_id = ${financeJournals.id})`,
     })
     .from(financeJournals)
     .where(where)
     .orderBy(desc(financeJournals.entryDate), desc(financeJournals.createdAt))
     .limit(limit)
     .offset(offset);
-  return rows;
+
+  // Each journal's total = the sum of its debit lines (debits == credits for a
+  // posted entry). This was a correlated subquery embedded in the SELECT above,
+  // which returned 0 for EVERY row (so every entry showed as 0.00 on the
+  // dashboard and Journal Entries list). Compute it here with the same plain
+  // grouped query the balance/ledger code uses — one extra round trip, correct
+  // numbers.
+  const ids = rows.map((r) => r.id);
+  const sums = ids.length
+    ? await db
+        .select({
+          journalId: financeJournalLines.journalId,
+          total: sql<string>`coalesce(sum(${financeJournalLines.debit}), 0)`,
+        })
+        .from(financeJournalLines)
+        .where(inArray(financeJournalLines.journalId, ids))
+        .groupBy(financeJournalLines.journalId)
+    : [];
+  const totalByJournal = new Map(sums.map((s) => [s.journalId, s.total]));
+
+  return rows.map((r) => ({ ...r, total: totalByJournal.get(r.id) ?? "0" }));
 }
 
 export interface CreateJournalInput {

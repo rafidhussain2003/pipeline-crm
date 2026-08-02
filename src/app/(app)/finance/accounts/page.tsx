@@ -52,7 +52,7 @@ export default function ChartOfAccountsPage() {
               {a.isSystem && <span className="ml-1.5 text-[10px] font-semibold uppercase text-slate-400">System</span>}
               {!a.active && <span className="ml-1.5 text-[10px] font-semibold uppercase text-amber-600">Inactive</span>}
             </span>
-            <span className="text-sm font-medium text-slate-900 w-28 text-right">{money(a.balanceCents)}</span>
+            <span className="text-sm font-medium text-slate-900 w-28 text-right">{a.balanceCents === null ? "—" : money(a.balanceCents)}</span>
             <div className="flex gap-1 shrink-0">
               <button onClick={() => setModal({ edit: a })} className="text-[11px] font-medium text-slate-500 bg-slate-100 rounded px-2 py-1">Edit</button>
               {!a.isSystem && (
