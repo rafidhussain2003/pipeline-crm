@@ -200,6 +200,28 @@ export async function proxy(req: NextRequest) {
     }
   }
 
+  // Per-user CRM module access on the CRM DATA apis (leads, tasks, callbacks).
+  // The back-office modules (finance/hr/payroll/…) enforce module access inside
+  // their own route guards, but the CRM data routes check only session + company
+  // — so without this a user whose CRM access is OFF (a finance_employee by
+  // default, or anyone an admin explicitly denied) could read customer leads
+  // with full PII, tasks and callbacks by calling the API directly, even though
+  // every CRM *page* redirects them away. Admins are never module-gated.
+  if (
+    isApiRoute &&
+    session?.companyId &&
+    session.role !== "admin" &&
+    (pathname.startsWith("/api/leads") ||
+      pathname.startsWith("/api/tasks") ||
+      pathname.startsWith("/api/callbacks") ||
+      pathname.startsWith("/api/analytics"))
+  ) {
+    const access = await getEffectiveModuleAccess(session.userId, session.role);
+    if (!access.crm) {
+      return NextResponse.json({ error: "You do not have access to this module." }, { status: 403 });
+    }
+  }
+
   // Enterprise Workspaces gate — the admin's per-user module assignment,
   // enforced on the PAGE surface here (each module's API routes enforce it
   // again in their own guards). Admins are never overridden; a denied
