@@ -16,6 +16,24 @@ const securityHeaders = [
   { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
 ];
 
+// The PUBLIC marketing pages carry zero personalization — the same bytes for
+// every visitor, no session, no cookies. Marking them CDN-cacheable lets a CDN
+// (Cloudflare/Render edge) serve them from a nearby PoP instead of round-
+// tripping to the single origin region on every request — which is what makes
+// the public site slow/timeout-prone from far-away countries (e.g. India) while
+// staying fast near the origin (US). `s-maxage` is SHARED-cache only (CDNs),
+// never the browser, so a deploy still propagates quickly; `stale-while-
+// revalidate` keeps the edge instant while it refreshes in the background.
+//
+// SAFETY: this is scoped to an EXPLICIT allow-list of public routes below.
+// Authenticated/app/API routes are NEVER given a shared-cache header (that
+// would risk serving one user's page to another) — they keep the default
+// no-store behavior.
+const publicCacheHeaders = [
+  { key: "Cache-Control", value: "public, s-maxage=600, stale-while-revalidate=86400" },
+];
+const PUBLIC_MARKETING_PATHS = ["/", "/pricing", "/contact", "/privacy", "/terms", "/data-deletion"];
+
 const nextConfig: NextConfig = {
   output: "standalone",
   // The boot migrator (src/instrumentation.ts) reads ./drizzle at runtime.
@@ -32,6 +50,8 @@ const nextConfig: NextConfig = {
         source: "/:path*",
         headers: securityHeaders,
       },
+      // Edge-cacheable ONLY for the explicit public marketing pages.
+      ...PUBLIC_MARKETING_PATHS.map((source) => ({ source, headers: publicCacheHeaders })),
     ];
   },
 };
