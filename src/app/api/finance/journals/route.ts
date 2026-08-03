@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireFinance, requireFinanceCapability, financeErrorResponse } from "@/lib/finance/guard";
+import { requireFinanceAdvanced, requireFinanceCapability, financeErrorResponse } from "@/lib/finance/guard";
 import { createDraft, listJournals } from "@/lib/finance";
 
 // Journal entries are full accounting history — reading needs view_reports.
@@ -18,8 +18,9 @@ export async function GET(req: NextRequest) {
 }
 
 // Create a DRAFT manual journal entry (posting is an explicit second action).
+// Manual journals are advanced — a Finance Employee needs the Manage capability.
 export async function POST(req: NextRequest) {
-  const auth = await requireFinance("finance:post");
+  const auth = await requireFinanceAdvanced("finance:post");
   if (!auth.ok) return auth.response;
   const body = await req.json().catch(() => ({}));
   try {

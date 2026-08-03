@@ -134,8 +134,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ sou
     // A plain <form> POST (no JS) gets a redirect back to a thank-you/referrer
     // so the visitor never sees raw JSON; the embed.js fetch gets JSON.
     if (isForm) {
-      const target = redirectTo || req.headers.get("referer") || "/";
-      return NextResponse.redirect(new URL(target, req.url), { status: 303, headers: CORS });
+      // Open-redirect guard: `_redirect` comes from the submitted form and was
+      // otherwise sent verbatim to Location — an attacker could set it to
+      // https://evil.com and bounce a victim off Ziplod's domain (phishing).
+      // Resolve it against the SUBMITTING origin (already checked against this
+      // form's allow-list above) and only honor it when it stays on that same
+      // host and uses http(s); otherwise fall back to that origin's root. This
+      // keeps the legitimate "return to the embedding site's thank-you page"
+      // working while making an off-site redirect impossible.
+      const originHeader = req.headers.get("origin") || req.headers.get("referer") || req.url;
+      let base: URL;
+      try {
+        base = new URL(originHeader);
+      } catch {
+        base = new URL(req.url);
+      }
+      let target: URL;
+      try {
+        target = new URL(redirectTo || req.headers.get("referer") || base.origin, base);
+      } catch {
+        target = base;
+      }
+      const safe = (target.protocol === "http:" || target.protocol === "https:") && target.host === base.host;
+      return NextResponse.redirect(safe ? target : base, { status: 303, headers: CORS });
     }
     return NextResponse.json(ok ? { ok: true } : { ok: false }, { status: 200, headers: CORS });
   };

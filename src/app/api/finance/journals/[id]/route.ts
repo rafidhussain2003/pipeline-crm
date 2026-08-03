@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireFinance, financeErrorResponse } from "@/lib/finance/guard";
+import { requireFinance, requireFinanceAdvanced, requireFinanceCapability, financeErrorResponse } from "@/lib/finance/guard";
 import { deleteDraft, getJournal, postJournal, updateDraft, voidJournal, guardOpeningVoid } from "@/lib/finance";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireFinance("finance:view");
+  // Reading a journal's double-entry detail is report data — view_reports.
+  const auth = await requireFinanceCapability("view_reports");
   if (!auth.ok) return auth.response;
   const { id } = await params;
   const journal = await getJournal(auth.session.companyId, id);
@@ -13,7 +14,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 // Edit a DRAFT (posted/voided entries are immutable — the service enforces it).
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireFinance("finance:post");
+  const auth = await requireFinanceAdvanced("finance:post");
   if (!auth.ok) return auth.response;
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const action = body?.action;
   try {
     if (action === "post") {
-      const auth = await requireFinance("finance:post");
+      const auth = await requireFinanceAdvanced("finance:post");
       if (!auth.ok) return auth.response;
       const journal = await postJournal(auth.session.companyId, auth.session.userId, id);
       return NextResponse.json({ journal });
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
 // Discard a DRAFT (never a posted entry).
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireFinance("finance:post");
+  const auth = await requireFinanceAdvanced("finance:post");
   if (!auth.ok) return auth.response;
   const { id } = await params;
   try {

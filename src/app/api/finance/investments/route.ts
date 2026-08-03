@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireFinance, financeErrorResponse } from "@/lib/finance/guard";
+import { requireFinanceAdvanced, financeErrorResponse } from "@/lib/finance/guard";
 import { ensureFinanceSetup, listInvestments, createInvestment } from "@/lib/finance";
 import { isSchemaLagError } from "@/lib/db-errors";
 
 export async function GET() {
-  const auth = await requireFinance("finance:view");
+  const auth = await requireFinanceAdvanced("finance:view");
   if (!auth.ok) return auth.response;
   await ensureFinanceSetup(auth.session.companyId);
   try {
@@ -21,7 +21,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireFinance("finance:post");
+  const auth = await requireFinanceAdvanced("finance:post");
   if (!auth.ok) return auth.response;
   await ensureFinanceSetup(auth.session.companyId);
   const body = await req.json().catch(() => ({}));

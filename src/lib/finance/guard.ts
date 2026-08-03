@@ -66,6 +66,24 @@ export async function requireFinanceCapability(capability: FinanceCapability): P
   return { ok: true, session: ctx.session };
 }
 
+// Advanced finance areas — investments and free-form (manual) journal entries.
+// Same coarse gate as before for admins, managers and Enterprise-Workspace
+// grantees (so their behavior is unchanged), but a Finance Employee needs the
+// Manage capability here: their record_* capabilities are meant for the guided
+// expense/income/payout forms, NOT arbitrary ledger or investment tooling.
+// Without this, an employee granted only "record expenses" could reach these
+// routes directly (they map to the coarse finance:post the record capability
+// implies) even though the UI never offers them.
+export async function requireFinanceAdvanced(permission: FinancePermission): Promise<Ok | Fail> {
+  const ctx = await financeContext();
+  if (!ctx.ok) return ctx;
+  if (!coarseFromCapabilities(ctx.caps).has(permission)) return forbidden();
+  if (ctx.session.role === "finance_employee" && !ctx.caps.has("manage")) {
+    return forbidden("This action needs the Manage capability.");
+  }
+  return { ok: true, session: ctx.session };
+}
+
 // Read-only helper: the caller's capability set (for routes that must branch on
 // a capability, e.g. the dashboard hiding balances, rather than hard-gating).
 export async function getFinanceCapabilities(): Promise<

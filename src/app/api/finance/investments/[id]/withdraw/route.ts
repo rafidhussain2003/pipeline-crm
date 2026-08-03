@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireFinance, financeErrorResponse } from "@/lib/finance/guard";
+import { requireFinanceAdvanced, financeErrorResponse } from "@/lib/finance/guard";
 import { withdrawInvestment } from "@/lib/finance";
 import { isUuid } from "@/lib/url";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireFinance("finance:post");
+  const auth = await requireFinanceAdvanced("finance:post");
   if (!auth.ok) return auth.response;
   const { id } = await params;
   if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
