@@ -351,6 +351,13 @@
 			"when": 1785336379437,
 			"tag": "0049_finance_employees",
 			"breakpoints": true
+		},
+		{
+			"idx": 50,
+			"version": "7",
+			"when": 1785422779437,
+			"tag": "0050_sales_ledger",
+			"breakpoints": true
 		}
 	]
 }

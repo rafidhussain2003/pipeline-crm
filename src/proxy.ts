@@ -88,6 +88,7 @@ export async function proxy(req: NextRequest) {
   const isAppRoute =
     pathname.startsWith("/leads") ||
     pathname.startsWith("/tasks") ||
+    pathname.startsWith("/sales") ||
     pathname.startsWith("/settings") ||
     pathname.startsWith("/callbacks") ||
     pathname.startsWith("/operations") ||
@@ -257,6 +258,7 @@ export async function proxy(req: NextRequest) {
 export const config = {
   matcher: [
     "/leads/:path*",
+    "/sales/:path*",
     "/settings/:path*",
     "/callbacks/:path*",
     "/operations/:path*",

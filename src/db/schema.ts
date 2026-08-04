@@ -3250,3 +3250,67 @@ export const workflowSettings = pgTable("workflow_settings", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// Sales Ledger — the live, spreadsheet-style sales record that replaces the
+// external Excel sheet. One row per sale, owned by the agent who made it.
+//
+//   • saleMonth ('YYYY-MM') is the grouping + agent-visibility key. It is set
+//     to the company-current month when the sale is created; the free-text
+//     installationDate (values like "Delivery", "Stream", "TBD") can NOT be
+//     relied on as a date, so it never drives grouping.
+//   • Every view is scoped to ONE month, so the indexed working set stays small
+//     even with hundreds of thousands of total rows.
+//   • Soft delete (deletedAt) so an admin can delete then restore a row.
+export const sales = pgTable(
+  "sales",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    // The agent who owns this sale (agents are only ever soft-deleted, so a
+    // plain reference is safe and keeps the owner intact).
+    agentId: uuid("agent_id").references(() => users.id).notNull(),
+    saleMonth: varchar("sale_month", { length: 7 }).notNull(), // 'YYYY-MM'
+    // The 8 spreadsheet columns. installationDate is intentionally free text.
+    installationDate: varchar("installation_date", { length: 120 }),
+    customerName: varchar("customer_name", { length: 200 }),
+    phone: varchar("phone", { length: 60 }),
+    product: varchar("product", { length: 160 }),
+    autopay: boolean("autopay").notNull().default(false),
+    // active | pending | cancelled | follow_up — drives the row color. A varchar
+    // (not a pg enum) so admins can add custom statuses later without a migration.
+    activationStatus: varchar("activation_status", { length: 20 }).notNull().default("pending"),
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    deletedAt: timestamp("deleted_at"),
+  },
+  (t) => ({
+    companyMonthIdx: index("sales_company_month_idx").on(t.companyId, t.saleMonth),
+    companyAgentMonthIdx: index("sales_company_agent_month_idx").on(t.companyId, t.agentId, t.saleMonth),
+    companyStatusIdx: index("sales_company_status_idx").on(t.companyId, t.activationStatus),
+  })
+);
+
+// Per-month agent visibility. An admin sets, for a given month, the date after
+// which AGENTS can no longer see that month's detailed rows (customer name,
+// phone, notes, product) — only the summary counts. Admins always see detail.
+// No row / null agentVisibleUntil (or now <= it) ⇒ agents still see detail.
+export const salesPeriodSettings = pgTable(
+  "sales_period_settings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    month: varchar("month", { length: 7 }).notNull(), // 'YYYY-MM'
+    agentVisibleUntil: timestamp("agent_visible_until"),
+    updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyMonthUniq: uniqueIndex("sales_period_company_month_uniq").on(t.companyId, t.month),
+  })
+);
