@@ -44,7 +44,9 @@ export type SalesScope = {
   canEdit: boolean;
   // admin-only: delete/restore, set the month's visibility cutoff.
   canManage: boolean;
-  // admin + manager: export/print the sheet.
+  // admin ONLY: export/download the sheet (CSV/Excel) + Print. A bulk export is
+  // the whole customer database in one file — the prime data-theft vector — so
+  // it is withheld from managers and agents even though they can view the rows.
   canExport: boolean;
 };
 
@@ -55,8 +57,9 @@ export async function resolveSalesScope(session: CompanySession, month: string):
   }
   if (session.role === "manager") {
     // Supervisor: sees + edits everyone, never subject to the agent cutoff, but
-    // no destructive/config powers (delete/restore/visibility) — those are admin.
-    return { viewAll: true, canSeeDetail: true, canEdit: true, canManage: false, canExport: true };
+    // no destructive/config powers (delete/restore/visibility) — those are admin
+    // — and NO export/download either (bulk data leaves only through an admin).
+    return { viewAll: true, canSeeDetail: true, canEdit: true, canManage: false, canExport: false };
   }
   // agent: own rows only; detail until the admin-set cutoff for this month.
   const { agentVisibleUntilMs } = await getPeriodSetting(session.companyId, month);
