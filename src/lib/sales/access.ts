@@ -6,6 +6,7 @@
 // a role check, no per-user module assignment).
 import { NextResponse } from "next/server";
 import { requireCompanySession, type CompanySession } from "@/lib/auth";
+import { featureService, FEATURE_DISABLED_MESSAGE } from "@/lib/features";
 import { getPeriodSetting } from "./periods";
 
 type Ok = { ok: true; session: CompanySession };
@@ -14,6 +15,12 @@ type Fail = { ok: false; response: NextResponse };
 export async function requireSales(): Promise<Ok | Fail> {
   const auth = await requireCompanySession();
   if (!auth.ok) return auth;
+  // Optional module: the Platform Owner must have Sales Ledger enabled for this
+  // company. The proxy gates it too; this is the in-route backstop (same pattern
+  // as requireFinance) so no /api/sales endpoint can be reached when it's off.
+  if (!(await featureService.isEnabled(auth.session.companyId, "sales_ledger"))) {
+    return { ok: false, response: NextResponse.json({ error: FEATURE_DISABLED_MESSAGE }, { status: 403 }) };
+  }
   const r = auth.session.role;
   if (r !== "admin" && r !== "manager" && r !== "agent") {
     return { ok: false, response: NextResponse.json({ error: "You do not have access to the Sales Ledger." }, { status: 403 }) };

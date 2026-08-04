@@ -22,6 +22,9 @@ const FEATURE_RULES: { feature: string; match: (p: string) => boolean }[] = [
   // Finance (Phase 19) — the whole bounded context behind one rule. Note the
   // trailing slash / exact match so the public form path "/f/…" never collides.
   { feature: "finance", match: (p) => p === "/finance" || p.startsWith("/finance/") || p.startsWith("/api/finance") },
+  // Sales Ledger — optional module. When the company's feature is off, the page
+  // redirects home and every /api/sales endpoint returns "feature disabled".
+  { feature: "sales_ledger", match: (p) => p === "/sales" || p.startsWith("/sales/") || p.startsWith("/api/sales") },
   // Attendance (Phase 20) — same shape.
   { feature: "attendance", match: (p) => p === "/attendance" || p.startsWith("/attendance/") || p.startsWith("/api/attendance") },
   // Payroll (Phase 21) — same shape.

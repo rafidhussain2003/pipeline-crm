@@ -121,8 +121,9 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   { href: "/tasks", label: "My Tasks", roles: ["admin", "manager", "agent"] },
   // Sales Ledger — the live spreadsheet that replaces external Excel. Every
   // agent records their own sales; admins/managers see the company master.
+  // Optional module: hidden unless the Platform Owner enabled sales_ledger.
   // (This nav block already excludes finance_employee / lead_distributor.)
-  { href: "/sales", label: "Sales Ledger", roles: ["admin", "manager", "agent"] },
+  { href: "/sales", label: "Sales Ledger", feature: "sales_ledger", roles: ["admin", "manager", "agent"] },
   // Callbacks (Phase 15) is every role's tool — an agent works their own list,
   // a manager/admin sees the whole company's. Scope is decided server-side.
   // Also hidden from the Lead Distribution Manager (a customer-PII surface).

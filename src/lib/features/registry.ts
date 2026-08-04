@@ -35,6 +35,12 @@ export const FEATURES: readonly FeatureDef[] = [
   // Still defaultEnabled: false — it's an optional paid module the Platform
   // Owner switches on per company.
   { key: "finance", label: "Finance", description: "Bookkeeping foundation: chart of accounts, general ledger, journals, revenue & expenses.", defaultEnabled: false },
+  // Sales Ledger — the live, spreadsheet-style sales sheet. A real module, but
+  // optional: defaultEnabled false so it does NOT exist for a company until the
+  // Platform Owner (or a future plan) switches it on. Existing sales data is
+  // never touched by the toggle — flipping it off only gates access, flipping
+  // it back on restores the module instantly.
+  { key: "sales_ledger", label: "Sales Ledger", description: "Live spreadsheet-style sales tracking that replaces external Excel — per-agent entry, monthly cutoff, exports.", defaultEnabled: false },
   // ── Optional future modules — registered only (no pages, no entities). ────
   // Attendance (Phase 20): a real module now — check-in/out, breaks, shifts,
   // leave, holidays, logs. Optional paid module, owner-enabled per company.
