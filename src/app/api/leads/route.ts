@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
   // Agent Portal: agents are hard-scoped to their OWN leads server-side —
   // leadVisibilityConditions adds ownerId = session.userId for them, and the
   // client's ?ownerId= filter is ignored so it can't widen the scope.
-  const conditions = [...leadVisibilityConditions(session as CompanySession), isNull(leads.deletedAt)];
+  const conditions = [...(await leadVisibilityConditions(session as CompanySession)), isNull(leads.deletedAt)];
   if (disposition) conditions.push(eq(leads.disposition, disposition));
   if (ownerId && session.role !== "agent") conditions.push(eq(leads.ownerId, ownerId));
   // Source — a uuid FK. Validate first: a non-uuid reaching the uuid column

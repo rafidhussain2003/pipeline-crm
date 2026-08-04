@@ -358,6 +358,13 @@
 			"when": 1785422779437,
 			"tag": "0050_sales_ledger",
 			"breakpoints": true
+		},
+		{
+			"idx": 51,
+			"version": "7",
+			"when": 1785509179437,
+			"tag": "0051_platform_settings",
+			"breakpoints": true
 		}
 	]
 }

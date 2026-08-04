@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { leads, assignmentLog, dispositionOptions, users } from "@/db/schema";
-import { getSession } from "@/lib/auth";
+import { getSession, type CompanySession } from "@/lib/auth";
 import { isUuid } from "@/lib/url";
 import { hasPermission } from "@/lib/permissions";
 import { leadPIIMaskedFor } from "@/lib/leads/pii";
+import { canAccessLead } from "@/lib/leads/access";
 import { and, eq, isNull } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { transitionLifecycle } from "@/lib/lifecycle/service";
@@ -56,6 +57,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // nonexistent lead produces — the existence of other people's leads is not
   // revealed. Admin/manager behavior is unchanged.
   if (session.role === "agent" && before.ownerId !== session.userId) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+  // Lead-protection: an agent may also only touch leads inside their latest-N
+  // visibility window. An owned-but-aged-out lead (e.g. an id kept from before
+  // it dropped off their CRM) 404s exactly like a nonexistent one — closing
+  // the same window the list/detail routes enforce, so editing can't reach a
+  // lead reading can't. canAccessLead records the out-of-window attempt.
+  if (session.role === "agent" && !(await canAccessLead(session as CompanySession, id))) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 

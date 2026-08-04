@@ -52,7 +52,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       .leftJoin(leadSources, eq(leads.sourceId, leadSources.id))
       // Agent Portal: leadVisibilityConditions scopes agents to their own
       // leads — another agent's lead 404s exactly like a nonexistent one.
-      .where(and(eq(leads.id, id), ...leadVisibilityConditions(session as CompanySession), isNull(leads.deletedAt)))
+      .where(and(eq(leads.id, id), ...(await leadVisibilityConditions(session as CompanySession)), isNull(leads.deletedAt)))
       .limit(1),
     // Follow-up engine input: the earliest still-open callback (indexed on
     // leadId). One small query; the engine itself is pure computation.

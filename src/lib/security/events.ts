@@ -18,7 +18,12 @@ export type SecurityEventName =
   | "bot.detected"
   | "credential_stuffing.detected"
   | "account.locked"
-  | "ip.blocked";
+  | "ip.blocked"
+  // Lead-protection (agent data-exfiltration guardrails): an agent reached for
+  // a lead outside their permitted visibility window, or a blocked attempt to
+  // bulk-copy the lead table.
+  | "lead.access_denied"
+  | "lead.bulk_copy_blocked";
 
 export type RiskLevel = "low" | "medium" | "high";
 

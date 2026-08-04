@@ -20,7 +20,7 @@ export async function GET() {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const base = [...leadVisibilityConditions(session as CompanySession), isNull(leads.deletedAt)];
+  const base = [...(await leadVisibilityConditions(session as CompanySession)), isNull(leads.deletedAt)];
 
   try {
     const [sourceRows, stateRows, formRows] = await Promise.all([

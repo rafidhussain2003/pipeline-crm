@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { subscribeLeadStream } from "@/lib/leads/stream-client";
+import AgentCopyGuard from "./AgentCopyGuard";
 
 type Lead = {
   id: string;
@@ -656,6 +657,10 @@ export default function LeadsPage() {
 
   return (
     <div className="p-6">
+      {/* Agents only: blocks bulk copy of the leads table (single-field copy
+          still works). No layout/workflow change — renders nothing until it
+          intercepts a multi-lead copy. */}
+      {isAgent && <AgentCopyGuard />}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-semibold text-slate-900">

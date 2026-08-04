@@ -3314,3 +3314,17 @@ export const salesPeriodSettings = pgTable(
     companyMonthUniq: uniqueIndex("sales_period_company_month_uniq").on(t.companyId, t.month),
   })
 );
+
+// Platform Settings — a tiny GLOBAL key/value store for platform-owner knobs
+// that are NOT scoped to a company (contrast with the per-company feature
+// flags). One row per setting key. First use: the agent lead-visibility cap
+// (how many of their most-recently-assigned leads an agent may see). Future
+// platform-wide numbers live here too, with no new table each time. The value
+// is stored as text and parsed by the reader, so a key can hold a number,
+// flag or short string without a schema change.
+export const platformSettings = pgTable("platform_settings", {
+  key: varchar("key", { length: 100 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
