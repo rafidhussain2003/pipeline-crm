@@ -4,6 +4,7 @@ import { sales } from "@/db/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { requireSales, resolveSalesScope } from "@/lib/sales/access";
 import { EDITABLE_FIELDS, isSaleStatus } from "@/lib/sales/types";
+import { parseInstallationDate, syncSaleReminders } from "@/lib/sales/reminders";
 import { recordAudit } from "@/lib/audit";
 import { isUuid } from "@/lib/url";
 
@@ -66,6 +67,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     after[key] = value;
   }
   if (Object.keys(set).length === 0) return NextResponse.json({ error: "No editable fields provided." }, { status: 400 });
+  // Editing the free-text installation date re-derives the parsed timestamp the
+  // reminders + dashboard key off (server-set, never client-supplied).
+  if ("installationDate" in set) {
+    set.installationAt = parseInstallationDate(typeof set.installationDate === "string" ? set.installationDate : null);
+  }
   set.updatedAt = new Date();
 
   const [updated] = await db
@@ -76,6 +82,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   await recordAudit({ companyId: session.companyId, userId: session.userId, action: "sale.updated", entityType: "sale", entityId: id, before, after });
+
+  // Installation date changed → reconcile this sale's reminders to it.
+  if ("installationDate" in set) {
+    await syncSaleReminders({
+      saleId: updated.id,
+      companyId: session.companyId,
+      agentId: updated.agentId,
+      installationAt: updated.installationAt,
+      actorUserId: session.userId,
+    });
+  }
   return NextResponse.json({ sale: updated });
 }
 

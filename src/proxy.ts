@@ -89,6 +89,8 @@ export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   const isAppRoute =
+    pathname === "/home" ||
+    pathname.startsWith("/home/") ||
     pathname.startsWith("/leads") ||
     pathname.startsWith("/tasks") ||
     pathname.startsWith("/sales") ||
@@ -290,6 +292,7 @@ export async function proxy(req: NextRequest) {
 
 export const config = {
   matcher: [
+    "/home/:path*",
     "/leads/:path*",
     "/sales/:path*",
     "/settings/:path*",

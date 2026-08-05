@@ -113,6 +113,9 @@ function financeItemsFor(role: string, financeCaps: string[]): typeof FINANCE_IT
 // only; the proxy redirects agents off these PAGES and the APIs enforce
 // their own permissions, so a typed URL gets the same answer.
 const navItems: { href: string; label: string; feature?: string; roles?: string[] }[] = [
+  // Daily dashboard (Sales Ledger V2) — today's/upcoming installations + due
+  // reminder calls. Only shown when the Sales Ledger module is enabled.
+  { href: "/home", label: "Home", feature: "sales_ledger", roles: ["admin", "manager", "agent"] },
   { href: "/leads", label: "All Leads" },
   // My Tasks (Follow-up & Pipeline) — every role's daily queue, agents
   // included; scope is decided server-side (personal for everyone, plus the

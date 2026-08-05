@@ -4,6 +4,7 @@ import { sales, users } from "@/db/schema";
 import { and, asc, count, desc, eq, ilike, isNull, or } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isValidSaleMonth, isSaleStatus } from "@/lib/sales/types";
+import { parseInstallationDate, syncSaleReminders } from "@/lib/sales/reminders";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 import { isUuid } from "@/lib/url";
@@ -156,6 +157,8 @@ export async function POST(req: NextRequest) {
       saleMonth,
       orderDate: typeof body?.orderDate === "string" ? body.orderDate.slice(0, 120) : null,
       installationDate: typeof body?.installationDate === "string" ? body.installationDate.slice(0, 120) : null,
+      // Derived from the free-text installationDate — drives reminders/dashboard.
+      installationAt: parseInstallationDate(typeof body?.installationDate === "string" ? body.installationDate : null),
       customerName: typeof body?.customerName === "string" ? body.customerName.slice(0, 200) : null,
       phone: typeof body?.phone === "string" ? body.phone.slice(0, 60) : null,
       product: typeof body?.product === "string" ? body.product.slice(0, 160) : null,
@@ -173,6 +176,15 @@ export async function POST(req: NextRequest) {
     entityType: "sale",
     entityId: row.id,
     after: { saleMonth, customerName: row.customerName, product: row.product, activationStatus: row.activationStatus },
+  });
+
+  // Auto-generate installation reminders (only if the installation date parsed).
+  await syncSaleReminders({
+    saleId: row.id,
+    companyId: session.companyId,
+    agentId: row.agentId,
+    installationAt: row.installationAt,
+    actorUserId: session.userId,
   });
 
   return NextResponse.json({ sale: row }, { status: 201 });

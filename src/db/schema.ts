@@ -3285,6 +3285,11 @@ export const sales = pgTable(
     // Morning") or a non-date ("TBD"). Neither drives grouping — saleMonth does.
     orderDate: varchar("order_date", { length: 120 }),
     installationDate: varchar("installation_date", { length: 120 }),
+    // Derived (server-set, NOT user-editable): the PARSED installation datetime
+    // when installationDate holds a real date, else NULL. Drives the installation
+    // reminders + the daily dashboard. Kept separate so the free-text column
+    // stays flexible while reminders/dashboard have a real timestamp to index.
+    installationAt: timestamp("installation_at"),
     customerName: varchar("customer_name", { length: 200 }),
     phone: varchar("phone", { length: 60 }),
     product: varchar("product", { length: 160 }),
@@ -3302,6 +3307,50 @@ export const sales = pgTable(
     companyMonthIdx: index("sales_company_month_idx").on(t.companyId, t.saleMonth),
     companyAgentMonthIdx: index("sales_company_agent_month_idx").on(t.companyId, t.agentId, t.saleMonth),
     companyStatusIdx: index("sales_company_status_idx").on(t.companyId, t.activationStatus),
+    // Dashboard "Today's / Upcoming installations" — indexed range scan on the
+    // parsed installation datetime, never a full-table scan.
+    companyInstallIdx: index("sales_company_installation_idx").on(t.companyId, t.installationAt),
+  })
+);
+
+// Installation reminders (Sales Ledger V2). Auto-generated from a sale's parsed
+// installationAt: one two days before, one on the day. Precomputed dueAt rows
+// (event-driven at write time, not a per-minute table scan). The assigned agent
+// works them off the daily dashboard; "Reminder Done" completes them; a cron
+// backstop turns a due reminder into an in-app notification. Kept lean on
+// purpose — in-app only, no multi-channel delivery queue.
+export const salesReminders = pgTable(
+  "sales_reminders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    saleId: uuid("sale_id")
+      .references(() => sales.id, { onDelete: "cascade" })
+      .notNull(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    // The agent to remind (the sale's owner). Cascade: if the agent is hard-
+    // deleted their reminders go too (agents are normally only soft-deleted).
+    agentId: uuid("agent_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    kind: varchar("kind", { length: 20 }).notNull(), // 'before_2d' | 'day_of'
+    dueAt: timestamp("due_at").notNull(),
+    // pending | completed | dismissed. A varchar (not a pg enum) to match the
+    // rest of the Sales Ledger and avoid an enum migration.
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    notifiedAt: timestamp("notified_at"), // set once the cron has pushed the in-app notification
+    completedAt: timestamp("completed_at"),
+    completedBy: uuid("completed_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    // Dashboard: an agent's due/pending reminders by time.
+    companyAgentDueIdx: index("sales_reminders_company_agent_due_idx").on(t.companyId, t.agentId, t.dueAt),
+    // Cron hot path: due, un-notified rows first (indexed, not a scan).
+    statusDueIdx: index("sales_reminders_status_due_idx").on(t.status, t.dueAt),
+    saleIdx: index("sales_reminders_sale_idx").on(t.saleId),
   })
 );
 
