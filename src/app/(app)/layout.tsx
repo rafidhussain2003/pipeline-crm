@@ -8,6 +8,9 @@ import Sidebar from "@/components/Sidebar";
 import BillingBanner from "@/components/billing/BillingBanner";
 import BillingBlockScreen from "@/components/billing/BillingBlockScreen";
 import ForcePasswordChange from "@/components/auth/ForcePasswordChange";
+import PinGate from "@/components/auth/PinGate";
+import { PinKeepAlive } from "@/components/auth/PinKeepAlive";
+import { isPinUnlocked } from "@/lib/auth/pin";
 import CallbackReminders from "@/components/callbacks/CallbackReminders";
 import LeadAssignedAlerts from "@/components/leads/LeadAssignedAlerts";
 import { billingBlockReason, daysRemaining, isBillingBlocked } from "@/lib/billing";
@@ -36,7 +39,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // render waits for the slowest one instead of the sum (Phase 5 baseline:
   // ~815ms of layout latency per page → ~420ms after).
   const [[me], company, features, access] = await Promise.all([
-    db.select({ mustChange: users.mustChangePassword }).from(users).where(eq(users.id, session.userId)).limit(1),
+    db.select({ mustChange: users.mustChangePassword, pinHash: users.pinHash }).from(users).where(eq(users.id, session.userId)).limit(1),
     session.companyId
       ? db.select().from(companies).where(eq(companies.id, session.companyId)).limit(1).then((r) => r[0] ?? null)
       : Promise.resolve(null),
@@ -63,6 +66,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Phase 13: an invited user with a temporary password must create their own
   // before doing anything else — a hard gate that blocks the whole app.
   if (me?.mustChange) return <ForcePasswordChange />;
+
+  // Login PIN (Sales Ledger V2) — a SECOND unlock layer that never touches the
+  // session cookie or Remember-Me. If the company requires agents to have a PIN
+  // and this agent hasn't set one, force setup; if the user has a PIN and this
+  // session isn't unlocked (fresh login / ~1h inactivity), ask for it.
+  const hasPin = !!me?.pinHash;
+  if (session.role === "agent" && company?.requireAgentPin === true && !hasPin) {
+    return <PinGate mode="setup" />;
+  }
+  if (hasPin && !(await isPinUnlocked(session))) {
+    return <PinGate mode="unlock" />;
+  }
 
   // Finance Employees: their granted capabilities drive which Finance nav items
   // the sidebar shows. Only resolved for that role (one cached read); every
@@ -112,6 +127,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           super_admin has no companyId and schedules no callbacks. Phase 18: not
           mounted at all when the Callback Engine module is disabled, so the
           stream is never even opened. */}
+      {/* Slides the PIN unlock window forward on activity — only for users who
+          have a PIN (reaching this render means their session is unlocked). */}
+      {hasPin && <PinKeepAlive />}
       {session.companyId && features?.callback_engine && <CallbackReminders />}
       {/* New-lead alert (sound + floating toast) — mounted once here for the
           same reason as CallbackReminders: an assignment must reach its agent

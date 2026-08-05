@@ -19,6 +19,10 @@ export type SecurityEventName =
   | "credential_stuffing.detected"
   | "account.locked"
   | "ip.blocked"
+  // Login PIN (the optional second unlock layer).
+  | "pin.set"
+  | "pin.unlock_failed"
+  | "pin.reset"
   // Lead-protection (agent data-exfiltration guardrails): an agent reached for
   // a lead outside their permitted visibility window, or a blocked attempt to
   // bulk-copy the lead table.

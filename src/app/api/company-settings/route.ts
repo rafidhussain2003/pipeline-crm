@@ -35,6 +35,8 @@ export async function GET() {
       managerPrivacyMode: companies.managerPrivacyMode,
       // Agent lead-visibility limit — null when the company uses the default.
       agentLeadVisibilityLimit: companies.agentLeadVisibilityLimit,
+      // Whether agents are required to set a login PIN.
+      requireAgentPin: companies.requireAgentPin,
     })
     .from(companies)
     .where(eq(companies.id, session.companyId))
@@ -73,6 +75,8 @@ export async function PATCH(req: NextRequest) {
   // loop above (false would become null). Admin-only (this whole PATCH is
   // gated by company_settings:edit) — managers/distributors can never reach it.
   if (typeof body.managerPrivacyMode === "boolean") allowed.managerPrivacyMode = body.managerPrivacyMode;
+  // Require agents to set a login PIN — admin-only (same gate).
+  if (typeof body.requireAgentPin === "boolean") allowed.requireAgentPin = body.requireAgentPin;
   // Agent lead-visibility limit — admin-only (same gate). null resets to the
   // built-in default; a number must be within the guardrails (a raw out-of-
   // range value is rejected rather than silently clamped, so the admin sees

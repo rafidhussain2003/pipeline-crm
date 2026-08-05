@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import PinSettings from "@/components/auth/PinSettings";
 
 type Tab = "company" | "account" | "notifications" | "security";
 
@@ -89,6 +90,8 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
   // Agent lead-visibility limit — a string so the field can be blank (= use
   // the default). Admin-controlled.
   const [agentLeadLimit, setAgentLeadLimit] = useState("");
+  // Require agents to set a login PIN — admin-controlled boolean.
+  const [requirePin, setRequirePin] = useState(false);
 
   useEffect(() => {
     fetch("/api/company-settings")
@@ -105,6 +108,7 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
         });
         setPrivacyMode(d.company?.managerPrivacyMode ?? true);
         setAgentLeadLimit(d.company?.agentLeadVisibilityLimit != null ? String(d.company.agentLeadVisibilityLimit) : "");
+        setRequirePin(!!d.company?.requireAgentPin);
       });
   }, []);
 
@@ -123,6 +127,7 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
         // API parses + range-checks (so a typo surfaces as an error, not a
         // silent reset).
         agentLeadVisibilityLimit: agentLeadLimit.trim() === "" ? null : agentLeadLimit.trim(),
+        requireAgentPin: requirePin,
       }),
     });
     setSaving(false);
@@ -218,6 +223,35 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
             onChange={(e) => setAgentLeadLimit(e.target.value)}
             className="shrink-0 w-28 rounded-md border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+        </div>
+      </div>
+
+      {/* Require agents to set a login PIN — admin-only. Admins/managers may
+          still opt in individually from Profile > Security. */}
+      <div className="pt-2 border-t border-slate-100">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-sm font-medium text-slate-900">Require Agents to Set a Login PIN</div>
+            <div className="text-xs text-slate-500 mt-0.5 max-w-md">
+              When on, every agent must create a 4-digit PIN — asked after a fresh sign-in or ~1 hour of inactivity.
+              Admins and managers can still opt in from Profile → Security.
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={requirePin}
+            aria-label="Require agents to set a login PIN"
+            disabled={!canEdit}
+            onClick={() => setRequirePin((v) => !v)}
+            className={`shrink-0 text-xs font-semibold rounded-full px-4 py-2 border transition-colors disabled:opacity-50 ${
+              requirePin
+                ? "text-emerald-800 bg-emerald-50 border-emerald-200 hover:bg-emerald-100"
+                : "text-slate-600 bg-slate-100 border-slate-300 hover:bg-slate-200"
+            }`}
+          >
+            {requirePin ? "ON" : "OFF"}
+          </button>
         </div>
       </div>
 
@@ -719,6 +753,7 @@ function SecurityTab() {
 
   return (
     <div className="space-y-6">
+      <PinSettings />
       <div className="bg-white border border-slate-200 rounded-lg p-5">
         <div className="grid grid-cols-2 gap-4">
           <div>

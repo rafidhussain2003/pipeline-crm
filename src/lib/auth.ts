@@ -207,3 +207,35 @@ export function verifyShortLived<T>(token: string): T | null {
     return null;
   }
 }
+
+// --- PIN unlock cookie (Sales Ledger V2) ---
+// A SEPARATE, short-lived cookie that represents "this session has passed the
+// 4-digit PIN recently". Kept apart from crm_session on purpose: the session
+// (and Remember-Me's 30-day horizon) is never touched by the PIN, and the
+// unlock can slide/expire on its own ~1h inactivity window. The token is bound
+// to { user, session } so a rotated session invalidates it (fresh login → PIN).
+const PIN_UNLOCK_COOKIE_NAME = "crm_pin_unlock";
+export const PIN_UNLOCK_TTL_SEC = 60 * 60; // 1 hour (slid forward on activity)
+
+export async function setPinUnlockCookie(userId: string, sessionId: string | undefined) {
+  const store = await cookies();
+  const token = signShortLived({ u: userId, s: sessionId ?? null, k: "pin" }, `${PIN_UNLOCK_TTL_SEC}s`);
+  store.set(PIN_UNLOCK_COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: PIN_UNLOCK_TTL_SEC,
+    expires: new Date(Date.now() + PIN_UNLOCK_TTL_SEC * 1000),
+  });
+}
+
+export async function getPinUnlockToken(): Promise<string | null> {
+  const store = await cookies();
+  return store.get(PIN_UNLOCK_COOKIE_NAME)?.value || null;
+}
+
+export async function clearPinUnlockCookie() {
+  const store = await cookies();
+  store.delete(PIN_UNLOCK_COOKIE_NAME);
+}

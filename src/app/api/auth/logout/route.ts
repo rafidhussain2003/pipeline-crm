@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { clearSessionCookie, clearRefreshCookie, getRefreshCookie, getSession } from "@/lib/auth";
+import { clearSessionCookie, clearRefreshCookie, clearPinUnlockCookie, getRefreshCookie, getSession } from "@/lib/auth";
 import { revokeRefreshToken } from "@/lib/refresh-tokens";
 import { invalidateAllSessions } from "@/lib/auth/session-registry";
 import { recordAudit } from "@/lib/audit";
@@ -12,6 +12,7 @@ export async function POST() {
   }
   await clearSessionCookie();
   await clearRefreshCookie();
+  await clearPinUnlockCookie();
   // Single-device security: retire the session id so the JWT itself is dead
   // server-side, not merely deleted from this browser's cookie jar. Device
   // trust is deliberately kept — logging out and back in on a trusted

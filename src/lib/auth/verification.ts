@@ -16,7 +16,9 @@ export type VerificationPurpose =
   | "agent_email_change"
   | "agent_password_change"
   // New-device login OTP, emailed to the signing-in user themselves.
-  | "device_otp";
+  | "device_otp"
+  // Reset a forgotten login PIN — code emailed to the user themselves.
+  | "pin_reset";
 
 const CODE_TTL_MS = 10 * 60_000; // 10 minutes
 const RESEND_COOLDOWN_MS = 60_000; // 60 seconds

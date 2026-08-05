@@ -85,6 +85,15 @@ export async function sendPasswordResetEmail(email: string, code: string): Promi
   return res.ok;
 }
 
+export async function sendPinResetEmail(email: string, code: string): Promise<boolean> {
+  const html = shell(
+    "Reset your login PIN",
+    `<p style="font-size:14px;color:#475569">Use this code to reset your Ziplod login PIN. It expires in 10 minutes.</p>${codeBlock(code)}<p style="font-size:12px;color:#94a3b8">If you didn't request this, ignore this email — your PIN won't change.</p>`
+  );
+  const res = await sendViaResend({ from: FROM, to: [email], subject: `${code} is your Ziplod PIN reset code`, html, text: `Your Ziplod PIN reset code is ${code}. It expires in 10 minutes.` });
+  return res.ok;
+}
+
 export async function sendInvitationEmail(params: { email: string; name: string; companyName: string; tempPassword: string }): Promise<boolean> {
   const loginUrl = `${getPublicAppUrl()}/login`;
   const html = shell(

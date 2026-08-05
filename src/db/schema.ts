@@ -194,6 +194,10 @@ export const companies = pgTable(
     // deleted; admins/managers are never capped. Enforced at the database in
     // src/lib/leads/access.ts.
     agentLeadVisibilityLimit: integer("agent_lead_visibility_limit"),
+    // Sales Ledger V2 — when ON, agents must set a 4-digit login PIN (admins and
+    // managers may still opt in individually). Admin-controlled (Profile >
+    // Company). Default OFF: the PIN stays purely opt-in for everyone.
+    requireAgentPin: boolean("require_agent_pin").notNull().default(false),
     // Phase 13 company settings (localization + business hours as minutes since
     // midnight in the company timezone). Language is future-ready (en today).
     dateFormat: varchar("date_format", { length: 20 }).notNull().default("MM/DD/YYYY"),
@@ -291,6 +295,13 @@ export const users = pgTable(
     // is forced to create their own password on first login (temp passwords can
     // never become permanent). Cleared the moment they set a real password.
     mustChangePassword: boolean("must_change_password").notNull().default(false),
+    // Sales Ledger V2 — optional 4-digit login PIN (a SECOND unlock layer after
+    // inactivity / a fresh login, NOT a replacement for the password session).
+    // bcrypt-hashed, same as passwordHash. NULL = the user has no PIN (feature
+    // off for them). Remember-Me is unaffected — the unlock lives in a separate
+    // short-lived cookie, never in the session JWT.
+    pinHash: text("pin_hash"),
+    pinUpdatedAt: timestamp("pin_updated_at"),
     // Enterprise single-device security: the ONE session allowed to be alive
     // for this user. Every login rotates it (and stamps it into the JWT), so
     // any previously issued session token stops validating immediately. Null
@@ -2005,6 +2016,8 @@ export const verificationPurposeEnum = pgEnum("verification_purpose", [
   "agent_password_change",
   // New-device login OTP, sent to the signing-in user's own email.
   "device_otp",
+  // Reset a forgotten login PIN — code emailed to the user themselves.
+  "pin_reset",
 ]);
 
 export const emailVerifications = pgTable(
