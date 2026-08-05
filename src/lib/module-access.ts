@@ -44,16 +44,15 @@ export function isModuleKey(key: string): key is ModuleKey {
 }
 
 // Role defaults — what each role gets with NO explicit assignment.
-// Agents deliberately get NO workspaces by default: the HR workspace (even
-// its self-serve My Profile page) is opt-in per agent — an admin grants it
-// from the employee's System Permissions card when wanted. Attendance and
-// Payroll keep their pre-workspace company-wide behavior (agents check in
-// and read their own payslips) unless explicitly denied.
+// Agents are pure CRM users: NO back-office workspaces by default. HR,
+// Attendance and Payroll are all opt-in per agent — an admin grants them from
+// the employee's System Permissions card when genuinely wanted; nothing is
+// forced on the agent's sidebar.
 const ROLE_DEFAULTS: Record<Role, Record<ModuleKey, boolean>> = {
   super_admin: { crm: true, hr: false, finance: false, attendance: false, payroll: false, workflow: false },
   admin: { crm: true, hr: true, finance: true, attendance: true, payroll: true, workflow: true },
   manager: { crm: true, hr: true, finance: true, attendance: true, payroll: true, workflow: true },
-  agent: { crm: true, hr: false, finance: false, attendance: true, payroll: true, workflow: false },
+  agent: { crm: true, hr: false, finance: false, attendance: false, payroll: false, workflow: false },
   // Lead Distribution Manager: CRM only (the masked Leads page); no back-office
   // modules whatsoever.
   lead_distributor: { crm: true, hr: false, finance: false, attendance: false, payroll: false, workflow: false },

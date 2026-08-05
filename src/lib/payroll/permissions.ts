@@ -19,7 +19,9 @@ const PAYROLL_ROLE_PERMISSIONS: Record<Role, ReadonlySet<PayrollPermission>> = {
   super_admin: new Set(),
   admin: new Set(["payroll:view_own", "payroll:view", "payroll:manage", "payroll:approve", "payroll:admin"]),
   manager: new Set(["payroll:view_own", "payroll:view", "payroll:manage"]),
-  agent: new Set(["payroll:view_own"]),
+  // Agents are CRM-only — no Payroll access (an admin can still grant it per
+  // agent via the Enterprise Workspaces module assignment).
+  agent: new Set(),
   // Lead Distribution Manager: no Payroll access.
   lead_distributor: new Set(),
   // Finance Employee: no Payroll access.

@@ -18,7 +18,9 @@ const ATTENDANCE_ROLE_PERMISSIONS: Record<Role, ReadonlySet<AttendancePermission
   super_admin: new Set(),
   admin: new Set(["attendance:self", "attendance:view", "attendance:manage", "attendance:admin"]),
   manager: new Set(["attendance:self", "attendance:view", "attendance:manage"]),
-  agent: new Set(["attendance:self"]),
+  // Agents are CRM-only — no Attendance access (an admin can still grant it
+  // per agent via the Enterprise Workspaces module assignment).
+  agent: new Set(),
   // Lead Distribution Manager: no Attendance access.
   lead_distributor: new Set(),
   // Finance Employee: no Attendance access.
