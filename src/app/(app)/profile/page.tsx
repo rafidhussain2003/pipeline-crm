@@ -86,6 +86,9 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
   // Manager Privacy Mode — kept separate from the text CompanyForm (it's a
   // boolean). Admin-controlled; defaults ON.
   const [privacyMode, setPrivacyMode] = useState(true);
+  // Agent lead-visibility limit — a string so the field can be blank (= use
+  // the default). Admin-controlled.
+  const [agentLeadLimit, setAgentLeadLimit] = useState("");
 
   useEffect(() => {
     fetch("/api/company-settings")
@@ -101,6 +104,7 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
           businessPhone: d.company?.businessPhone || "",
         });
         setPrivacyMode(d.company?.managerPrivacyMode ?? true);
+        setAgentLeadLimit(d.company?.agentLeadVisibilityLimit != null ? String(d.company.agentLeadVisibilityLimit) : "");
       });
   }, []);
 
@@ -112,7 +116,14 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
     const res = await fetch("/api/company-settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, managerPrivacyMode: privacyMode }),
+      body: JSON.stringify({
+        ...form,
+        managerPrivacyMode: privacyMode,
+        // Blank → null (reset to default); otherwise the raw string, which the
+        // API parses + range-checks (so a typo surfaces as an error, not a
+        // silent reset).
+        agentLeadVisibilityLimit: agentLeadLimit.trim() === "" ? null : agentLeadLimit.trim(),
+      }),
     });
     setSaving(false);
     if (res.ok) {
@@ -180,6 +191,33 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
           >
             {privacyMode ? "ON" : "OFF"}
           </button>
+        </div>
+      </div>
+
+      {/* Agent Lead Visibility Limit — how many of their most-recently-assigned
+          leads an agent can see. Admin-only (disabled when !canEdit); blank =
+          the default. Enforced at the database (see src/lib/leads/access.ts). */}
+      <div className="pt-2 border-t border-slate-100">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-sm font-medium text-slate-900">Agent Lead Visibility Limit</div>
+            <div className="text-xs text-slate-500 mt-0.5 max-w-md">
+              The most recent leads an agent can see in their CRM. Older assigned leads are hidden from the agent (never
+              deleted — admins and managers still see the full history). Leave blank for the default (400). Allowed 50–100000.
+            </div>
+          </div>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={50}
+            max={100000}
+            value={agentLeadLimit}
+            disabled={!canEdit}
+            placeholder="400"
+            aria-label="Agent lead visibility limit"
+            onChange={(e) => setAgentLeadLimit(e.target.value)}
+            className="shrink-0 w-28 rounded-md border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
         </div>
       </div>
 

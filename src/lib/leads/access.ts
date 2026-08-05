@@ -19,7 +19,7 @@
 import { and, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import { leads } from "@/db/schema";
-import { getAgentLeadVisibilityCap } from "@/lib/platform/settings";
+import { getAgentLeadVisibilityCap } from "@/lib/leads/visibility-limit";
 import { recordSecurityEvent } from "@/lib/security/events";
 
 export type LeadSessionScope = { userId: string; companyId: string; role: string };
@@ -38,7 +38,7 @@ export async function leadVisibilityConditions(session: LeadSessionScope): Promi
     // constrained to that id set. Uncorrelated + aliased ("w") so there is no
     // ambiguity with the outer `leads`; the (company_id, owner_id) index makes
     // fetching the agent's own set cheap, and the LIMIT bounds the sort.
-    const cap = await getAgentLeadVisibilityCap();
+    const cap = await getAgentLeadVisibilityCap(session.companyId);
     conditions.push(
       sql`${leads.id} in (
         select w.id from ${leads} as w

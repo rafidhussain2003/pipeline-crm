@@ -365,6 +365,13 @@
 			"when": 1785509179437,
 			"tag": "0051_platform_settings",
 			"breakpoints": true
+		},
+		{
+			"idx": 52,
+			"version": "7",
+			"when": 1785595579437,
+			"tag": "0052_agent_lead_limit_company",
+			"breakpoints": true
 		}
 	]
 }

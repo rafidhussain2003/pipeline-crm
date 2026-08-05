@@ -7,6 +7,12 @@ import { eq } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 import { cache } from "@/lib/infra/cache";
+import {
+  clampAgentLeadCap,
+  agentLeadCapCacheKey,
+  MIN_AGENT_LEAD_CAP,
+  MAX_AGENT_LEAD_CAP,
+} from "@/lib/leads/visibility-limit";
 
 // Profile > Company tab. Read is available to any company member (agents
 // can see their company's info, e.g. support email, on their own profile
@@ -27,6 +33,8 @@ export async function GET() {
       businessPhone: companies.businessPhone,
       // Manager Privacy Mode — read by the admin Company settings toggle.
       managerPrivacyMode: companies.managerPrivacyMode,
+      // Agent lead-visibility limit — null when the company uses the default.
+      agentLeadVisibilityLimit: companies.agentLeadVisibilityLimit,
     })
     .from(companies)
     .where(eq(companies.id, session.companyId))
@@ -65,6 +73,25 @@ export async function PATCH(req: NextRequest) {
   // loop above (false would become null). Admin-only (this whole PATCH is
   // gated by company_settings:edit) — managers/distributors can never reach it.
   if (typeof body.managerPrivacyMode === "boolean") allowed.managerPrivacyMode = body.managerPrivacyMode;
+  // Agent lead-visibility limit — admin-only (same gate). null resets to the
+  // built-in default; a number must be within the guardrails (a raw out-of-
+  // range value is rejected rather than silently clamped, so the admin sees
+  // what happened). Any other type is ignored — a partial PATCH must not wipe it.
+  if ("agentLeadVisibilityLimit" in body) {
+    const raw = body.agentLeadVisibilityLimit;
+    if (raw === null || raw === "") {
+      allowed.agentLeadVisibilityLimit = null;
+    } else {
+      const n = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+      if (!Number.isFinite(n) || n < MIN_AGENT_LEAD_CAP || n > MAX_AGENT_LEAD_CAP) {
+        return NextResponse.json(
+          { error: `Agent lead visibility limit must be a number between ${MIN_AGENT_LEAD_CAP} and ${MAX_AGENT_LEAD_CAP}, or blank for the default.` },
+          { status: 400 }
+        );
+      }
+      allowed.agentLeadVisibilityLimit = clampAgentLeadCap(n);
+    }
+  }
   if (Object.keys(allowed).length === 0) {
     return NextResponse.json({ error: "No valid fields to update." }, { status: 400 });
   }
@@ -81,6 +108,8 @@ export async function PATCH(req: NextRequest) {
   // If Manager Privacy Mode changed, invalidate its cache so masking flips for
   // the Lead Distribution Manager immediately, not after the 30s TTL.
   if ("managerPrivacyMode" in allowed) await cache.delete(`manager-privacy-mode:${session.companyId}`);
+  // Same for the agent lead-visibility cap — flip it for agents immediately.
+  if ("agentLeadVisibilityLimit" in allowed) await cache.delete(agentLeadCapCacheKey(session.companyId));
 
   await recordAudit({
     companyId: session.companyId,
@@ -97,6 +126,7 @@ export async function PATCH(req: NextRequest) {
           timezone: beforeRow.timezone,
           supportEmail: beforeRow.supportEmail,
           businessPhone: beforeRow.businessPhone,
+          agentLeadVisibilityLimit: beforeRow.agentLeadVisibilityLimit,
         }
       : null,
     after: {
@@ -107,6 +137,7 @@ export async function PATCH(req: NextRequest) {
       timezone: updated.timezone,
       supportEmail: updated.supportEmail,
       businessPhone: updated.businessPhone,
+      agentLeadVisibilityLimit: updated.agentLeadVisibilityLimit,
     },
   });
 

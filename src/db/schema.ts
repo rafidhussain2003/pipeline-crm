@@ -187,6 +187,13 @@ export const companies = pgTable(
     // full lead details like a trusted operational manager. Admin-controlled
     // only. Enforced on the backend (see src/lib/leads/pii.ts).
     managerPrivacyMode: boolean("manager_privacy_mode").notNull().default(true),
+    // Agent lead-visibility limit — how many of their most-recently-assigned
+    // leads an agent may see in the CRM. Per company, admin-controlled (Profile
+    // > Company). NULL = use the built-in default (see src/lib/leads/
+    // visibility-limit.ts). Older assigned leads are hidden from the agent, not
+    // deleted; admins/managers are never capped. Enforced at the database in
+    // src/lib/leads/access.ts.
+    agentLeadVisibilityLimit: integer("agent_lead_visibility_limit"),
     // Phase 13 company settings (localization + business hours as minutes since
     // midnight in the company timezone). Language is future-ready (en today).
     dateFormat: varchar("date_format", { length: 20 }).notNull().default("MM/DD/YYYY"),
@@ -3314,17 +3321,3 @@ export const salesPeriodSettings = pgTable(
     companyMonthUniq: uniqueIndex("sales_period_company_month_uniq").on(t.companyId, t.month),
   })
 );
-
-// Platform Settings — a tiny GLOBAL key/value store for platform-owner knobs
-// that are NOT scoped to a company (contrast with the per-company feature
-// flags). One row per setting key. First use: the agent lead-visibility cap
-// (how many of their most-recently-assigned leads an agent may see). Future
-// platform-wide numbers live here too, with no new table each time. The value
-// is stored as text and parsed by the reader, so a key can hold a number,
-// flag or short string without a schema change.
-export const platformSettings = pgTable("platform_settings", {
-  key: varchar("key", { length: 100 }).primaryKey(),
-  value: text("value").notNull(),
-  updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});

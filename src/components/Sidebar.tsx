@@ -600,14 +600,6 @@ export default function Sidebar({
               Feature Management
             </Link>
             <Link
-              href="/super-admin/settings"
-              className={`block px-3 py-2 rounded-md text-sm font-medium ${
-                pathname.startsWith("/super-admin/settings") ? "bg-purple-50 text-purple-700" : "text-purple-700 hover:bg-purple-50"
-              }`}
-            >
-              Platform Settings
-            </Link>
-            <Link
               href="/super-admin/mailbox"
               className={`block px-3 py-2 rounded-md text-sm font-medium ${
                 pathname.startsWith("/super-admin/mailbox") ? "bg-purple-50 text-purple-700" : "text-purple-700 hover:bg-purple-50"
