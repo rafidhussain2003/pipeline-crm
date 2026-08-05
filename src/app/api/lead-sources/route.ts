@@ -45,7 +45,11 @@ export async function GET() {
         webhookStatus: leadSources.webhookStatus,
         lastError: leadSources.lastError,
         tokenExpiresAt: leadSources.tokenExpiresAt,
-        webhookSecret: leadSources.webhookSecret,
+        // webhookSecret is deliberately NOT returned — a webhook secret is a
+        // platform-owner credential and must never reach a tenant client (the
+        // connector page doesn't render it; only the platform owner provisions
+        // webhook sources). Keeping it out of the payload closes the "read it
+        // from the raw JSON" gap.
         fieldMapping: leadSources.fieldMapping,
         lastSyncedAt: leadSources.lastSyncedAt,
         createdAt: leadSources.createdAt,
@@ -81,6 +85,14 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session || !session.companyId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Creating a webhook-based source MINTS a webhook secret — a platform-owner
+  // capability now, not a tenant one. Tenants connect leads through the OAuth
+  // Meta onboarding (which never uses this path); custom/website sources are
+  // provisioned by the Platform Owner. Meta is already excluded below; this
+  // additionally forbids the generic/website secret-generation to tenants.
+  if (session.role !== "super_admin") {
+    return NextResponse.json({ error: "This is a platform-owner setting and isn't available on your account." }, { status: 403 });
+  }
 
   const { platform, name, fieldMapping } = await req.json();
   if (!platform || getProvider(platform)) {

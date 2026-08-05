@@ -160,6 +160,36 @@ export async function proxy(req: NextRequest) {
     }
   }
 
+  // Platform infrastructure gate — the Facebook/Meta backend + developer
+  // surfaces belong to the Platform Owner, never a tenant company. A tenant's
+  // Facebook experience is only the simple onboarding (connect → pick pages/
+  // forms → save) on /settings/connector; everything technical is ours:
+  //   • Conversions API (pixels, tokens, overrides)  → /api/capi, /settings/conversions
+  //   • Website-form secret keys + webhook config     → /api/website, /settings/website-forms
+  //   • Developer API keys                            → /api/api-keys
+  // Any non-super_admin (admin/manager/distributor/etc.) is blocked here: the
+  // config APIs 403, the config PAGES bounce back to the onboarding. super_admin
+  // passes. This changes only who can CONFIGURE — the inbound lead webhooks and
+  // the CAPI send pipeline are webhook-authenticated, live under other paths,
+  // and are untouched, so existing lead imports keep flowing.
+  if (session && session.role !== "super_admin") {
+    const platformOwnerApi =
+      pathname.startsWith("/api/capi") ||
+      pathname.startsWith("/api/website") ||
+      pathname.startsWith("/api/api-keys");
+    if (platformOwnerApi) {
+      return NextResponse.json({ error: "This is a platform-owner setting and isn't available on your account." }, { status: 403 });
+    }
+    const platformOwnerPage =
+      pathname === "/settings/conversions" ||
+      pathname.startsWith("/settings/conversions/") ||
+      pathname === "/settings/website-forms" ||
+      pathname.startsWith("/settings/website-forms/");
+    if (platformOwnerPage) {
+      return NextResponse.redirect(new URL("/settings/connector", getPublicAppUrl()));
+    }
+  }
+
   // Subscription gate — the single chokepoint every company-scoped API
   // route passes through, so no individual route (there are ~60 of them)
   // needs its own copy of this check. Only applies to sessions that

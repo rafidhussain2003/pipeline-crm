@@ -132,8 +132,9 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   // Facebook Forms alias management — admin only (the page shows real Meta form
   // names, which managers/agents must never see).
   { href: "/settings/facebook-forms", label: "Facebook Forms", feature: "meta_integration", roles: ["admin"] },
-  { href: "/settings/website-forms", label: "Website Forms", feature: "website_forms", roles: ["admin"] },
-  { href: "/settings/conversions", label: "Conversions API", feature: "meta_integration", roles: ["admin", "manager"] },
+  // Website Forms + Conversions API are PLATFORM-OWNER-only now (secret keys,
+  // CAPI tokens/overrides — backend integration). Tenants get the simple Meta
+  // onboarding above; the proxy blocks these pages/APIs for non-super_admin.
   { href: "/settings/delivery-log", label: "Delivery Log", roles: ["admin", "manager"] },
   { href: "/settings/pipeline", label: "Pipeline Settings", roles: ["admin", "manager"] },
   { href: "/settings/automation", label: "Automation", feature: "ai_assignment", roles: ["admin", "manager"] },

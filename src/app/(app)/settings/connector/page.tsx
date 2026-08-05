@@ -20,7 +20,6 @@ type Source = {
   webhookStatus: "active" | "inactive";
   lastError: string | null;
   tokenExpiresAt: string | null;
-  webhookSecret: string | null;
   fieldMapping: Record<string, string> | null;
   lastSyncedAt: string | null;
   createdAt: string;
@@ -126,16 +125,6 @@ function ConnectorContent() {
   const [healthByAccount, setHealthByAccount] = useState<Record<string, Health>>({});
   const [testLeadBySource, setTestLeadBySource] = useState<Record<string, TestLeadState>>({});
 
-  const [showGeneric, setShowGeneric] = useState(false);
-  const [genericName, setGenericName] = useState("");
-  const [genericPlatform, setGenericPlatform] = useState<"generic" | "google">("generic");
-  const [submitting, setSubmitting] = useState(false);
-  const [newSource, setNewSource] = useState<{ id: string; webhookSecret: string; webhookUrl: string } | null>(null);
-
-  const [showWebsite, setShowWebsite] = useState(false);
-  const [websiteName, setWebsiteName] = useState("");
-  const [newWebsiteForm, setNewWebsiteForm] = useState<{ id: string; name: string } | null>(null);
-
   const oauthError = searchParams.get("error");
   const justConnected = searchParams.get("connected");
   const justReconnected = searchParams.get("reconnected");
@@ -171,7 +160,6 @@ function ConnectorContent() {
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function pickPage(pageId: string) {
@@ -256,7 +244,7 @@ function ConnectorContent() {
   }
 
   function reconnectAccount(account: Account) {
-    window.location.href = `/api/oauth/facebook/start?reconnectAccount=${account.id}`;
+    window.location.assign(`/api/oauth/facebook/start?reconnectAccount=${account.id}`);
   }
 
   async function toggleAccountDetails(account: Account) {
@@ -349,7 +337,7 @@ function ConnectorContent() {
   }
 
   function reconnectSource(source: Source) {
-    window.location.href = `/api/oauth/facebook/start?reconnect=${source.id}`;
+    window.location.assign(`/api/oauth/facebook/start?reconnect=${source.id}`);
   }
 
   // Opens Meta's own Lead Ads Testing Tool in a new tab, then polls this
@@ -380,44 +368,11 @@ function ConnectorContent() {
     setTimeout(poll, 3000);
   }
 
-  async function createGenericSource() {
-    setSubmitting(true);
-    const res = await fetch("/api/lead-sources", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ platform: genericPlatform, name: genericName || undefined }),
-    });
-    const data = await res.json();
-    setSubmitting(false);
-    if (res.ok) {
-      setNewSource(data.source);
-      setGenericName("");
-      load();
-    }
-  }
-
-  async function createWebsiteForm() {
-    setSubmitting(true);
-    const res = await fetch("/api/lead-sources", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ platform: "website", name: websiteName || undefined }),
-    });
-    const data = await res.json();
-    setSubmitting(false);
-    if (res.ok) {
-      setNewWebsiteForm({ id: data.source.id, name: data.source.pageName });
-      setWebsiteName("");
-      load();
-    }
-  }
-
   async function retryLog(id: string) {
     await fetch(`/api/webhook-logs/${id}/retry`, { method: "POST" });
     load();
   }
 
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
   // Sources with no accountId (Universal Webhook) render as a flat list,
   // unchanged. Every OAuth-based source belongs to exactly one connected
   // account — see accountId in db/schema.ts — so grouping by it is what
@@ -479,32 +434,6 @@ function ConnectorContent() {
           >
             {accountBlocks.length > 0 ? "Connect another Account" : "Connect Meta"}
           </a>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm font-semibold text-slate-900">Website Forms</span>
-          </div>
-          <p className="text-xs text-slate-500 mb-3">Paste one snippet on any site — every form submission becomes a lead.</p>
-          <button
-            onClick={() => setShowWebsite((v) => !v)}
-            className="text-xs font-medium text-white bg-slate-900 rounded-md px-3 py-2 hover:bg-slate-800"
-          >
-            {showWebsite ? "Hide" : "Add a Website Form"}
-          </button>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-sm font-semibold text-slate-900">Custom Integration</span>
-          </div>
-          <p className="text-xs text-slate-500 mb-3">For Google Lead Forms (via Zapier/Pabbly), custom forms, or another CRM.</p>
-          <button
-            onClick={() => setShowGeneric((v) => !v)}
-            className="text-xs font-medium text-slate-700 bg-slate-100 rounded-md px-3 py-2 hover:bg-slate-200"
-          >
-            {showGeneric ? "Hide" : "Add a Connection"}
-          </button>
         </div>
 
         {[
@@ -589,99 +518,6 @@ function ConnectorContent() {
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {showWebsite && (
-        <div className="mb-8 bg-white border border-slate-200 rounded-lg p-4">
-          <p className="text-xs text-slate-500 mb-3">
-            Create a form connection, then paste the snippet on any site (WordPress, Shopify, Webflow, plain HTML,
-            React, anything). Every submission of a tagged form becomes a lead and enters assignment automatically —
-            with spam protection built in.
-          </p>
-          <div className="flex gap-2 mb-3">
-            <input
-              value={websiteName}
-              onChange={(e) => setWebsiteName(e.target.value)}
-              placeholder="Form name (e.g. Homepage Contact)"
-              className="flex-1 rounded-md border border-slate-200 px-3 py-2 text-sm"
-            />
-            <button
-              onClick={createWebsiteForm}
-              disabled={submitting}
-              className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-40"
-            >
-              Create
-            </button>
-          </div>
-          {newWebsiteForm && (
-            <div className="bg-blue-50 border border-blue-100 rounded-md p-3 text-xs text-blue-900 space-y-2">
-              <div className="font-semibold">“{newWebsiteForm.name}” is ready. Paste this on your site:</div>
-              <div>
-                <div className="text-[11px] text-blue-800 mb-0.5">1. Add the loader once (before &lt;/body&gt;):</div>
-                <pre className="bg-white rounded p-2 overflow-x-auto font-mono text-[11px]">{`<script src="${origin}/embed.js"></script>`}</pre>
-              </div>
-              <div>
-                <div className="text-[11px] text-blue-800 mb-0.5">2. Tag your form with this ID:</div>
-                <pre className="bg-white rounded p-2 overflow-x-auto font-mono text-[11px]">{`<form data-ziplod-form="${newWebsiteForm.id}">
-  <input name="name" placeholder="Name" />
-  <input name="email" type="email" placeholder="Email" />
-  <input name="phone" placeholder="Phone" />
-  <button type="submit">Send</button>
-</form>`}</pre>
-              </div>
-              <div className="text-[11px] text-blue-800">
-                Prefer no JavaScript? Point your form at{" "}
-                <span className="font-mono break-all">{origin}/api/forms/{newWebsiteForm.id}</span> with a POST. The
-                loader also captures UTM tags, referrer, landing page, device, and timezone automatically.
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {showGeneric && (
-        <div className="mb-8 bg-white border border-slate-200 rounded-lg p-4">
-          <p className="text-xs text-slate-500 mb-3">
-            Creates a webhook URL that any tool (Google Lead Forms via a relay like Zapier, a custom form builder,
-            another CRM) can POST leads to. It expects JSON with <code>name</code>, <code>phone</code>,{" "}
-            <code>email</code> fields by default — the field mapping can be customized later via the API if your
-            tool sends a different shape.
-          </p>
-          <div className="flex gap-2 mb-3">
-            <select
-              value={genericPlatform}
-              onChange={(e) => setGenericPlatform(e.target.value as "generic" | "google")}
-              className="rounded-md border border-slate-200 px-3 py-2 text-sm"
-            >
-              <option value="generic">Generic Connection</option>
-              <option value="google">Google Lead Forms</option>
-            </select>
-            <input
-              value={genericName}
-              onChange={(e) => setGenericName(e.target.value)}
-              placeholder="Name (optional)"
-              className="flex-1 rounded-md border border-slate-200 px-3 py-2 text-sm"
-            />
-            <button
-              onClick={createGenericSource}
-              disabled={submitting}
-              className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-40"
-            >
-              Create
-            </button>
-          </div>
-          {newSource && (
-            <div className="bg-blue-50 border border-blue-100 rounded-md p-3 text-xs text-blue-900 space-y-1">
-              <div>
-                <strong>Connection URL:</strong> <span className="font-mono break-all">{origin}{newSource.webhookUrl}</span>
-              </div>
-              <div>
-                <strong>Header required:</strong> <span className="font-mono">X-Webhook-Secret: {newSource.webhookSecret}</span>
-              </div>
-              <div>Save this secret now — it won&apos;t be shown again in full.</div>
-            </div>
-          )}
         </div>
       )}
 
