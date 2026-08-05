@@ -47,7 +47,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (key === "autopay") value = value === true;
     else if (key === "activationStatus") {
       if (!isSaleStatus(value)) return NextResponse.json({ error: "Invalid activation status." }, { status: 400 });
-    } else value = value === null ? null : String(value).slice(0, key === "notes" ? 5000 : key === "customerName" ? 200 : 160);
+    } else
+      value =
+        value === null
+          ? null
+          : String(value).slice(
+              0,
+              key === "notes"
+                ? 5000
+                : key === "customerName"
+                ? 200
+                : key === "orderDate" || key === "installationDate"
+                ? 120
+                : 160
+            );
     set[key] = value;
     before[key] = (row as Record<string, unknown>)[key];
     after[key] = value;

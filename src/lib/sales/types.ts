@@ -12,6 +12,7 @@ export function isSaleStatus(s: unknown): s is SaleStatus {
 // The columns an agent/admin may edit inline (never id/companyId/agentId/
 // saleMonth via the cell editor — those are set by the server / dedicated flows).
 export const EDITABLE_FIELDS = [
+  "orderDate",
   "installationDate",
   "customerName",
   "phone",

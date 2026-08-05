@@ -5,7 +5,7 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isValidSaleMonth } from "@/lib/sales/types";
 
-const HEADERS = ["Installation Date", "Customer Name", "Phone", "Product", "Autopay", "Activation Status", "Notes", "Agent"];
+const HEADERS = ["Order Date", "Installation Date", "Customer Name", "Phone", "Product", "Autopay", "Activation Status", "Notes", "Agent"];
 // Same palette as the on-screen rows, so the exported Excel sheet looks familiar.
 const ROW_BG: Record<string, string> = { active: "#dcfce7", pending: "#ffedd5", cancelled: "#fee2e2", follow_up: "#fef9c3" };
 
@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
 
   const rows = await db
     .select({
+      orderDate: sales.orderDate,
       installationDate: sales.installationDate,
       customerName: sales.customerName,
       phone: sales.phone,
@@ -44,6 +45,7 @@ export async function GET(req: NextRequest) {
     .limit(100_000);
 
   const cells = (r: (typeof rows)[number]) => [
+    r.orderDate,
     r.installationDate,
     r.customerName,
     r.phone,

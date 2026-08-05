@@ -25,6 +25,7 @@ type Row = {
   id: string;
   agentId: string;
   agentName: string | null;
+  orderDate: string | null;
   installationDate: string | null;
   customerName: string | null;
   phone: string | null;
@@ -299,9 +300,13 @@ export default function SalesLedgerPage() {
 
           {/* The sheet */}
           <div className="bg-white border border-slate-200 rounded-lg overflow-x-auto print:border-0">
-            <table className="w-full text-sm">
+            {/* Excel-style grid: light, clean gridlines on every cell via the
+                border-collapse + per-th/td border utilities (not heavy). */}
+            <table className="w-full text-sm border-collapse [&_th]:border [&_td]:border [&_th]:border-slate-200 [&_td]:border-slate-200">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+                  <th className="px-2 py-2.5 w-10 text-center">#</th>
+                  <th className="px-2 py-2.5">Order Date</th>
                   <th className="px-2 py-2.5">Installation Date</th>
                   <th className="px-2 py-2.5">Customer Name</th>
                   <th className="px-2 py-2.5">Phone</th>
@@ -316,18 +321,21 @@ export default function SalesLedgerPage() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-slate-400">Loading…</td>
+                    <td colSpan={11} className="px-4 py-8 text-center text-slate-400">Loading…</td>
                   </tr>
                 )}
                 {!loading && rows.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-slate-400">No sales yet{canAdd ? " — click “+ Add sale”." : "."}</td>
+                    <td colSpan={11} className="px-4 py-8 text-center text-slate-400">No sales yet{canAdd ? " — click “+ Add sale”." : "."}</td>
                   </tr>
                 )}
-                {rows.map((r) => {
+                {rows.map((r, i) => {
                   const deleted = !!r.deletedAt;
                   return (
                     <tr key={r.id} className={`border-b border-slate-100 ${deleted ? "opacity-50" : STATUS_ROW[r.activationStatus] || ""}`}>
+                      {/* Serial number — follows the current filtered/sorted, paginated view. */}
+                      <Td className="text-center text-slate-400 tabular-nums">{(page - 1) * 100 + i + 1}</Td>
+                      <Td><Cell value={r.orderDate} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "orderDate", v)} /></Td>
                       <Td><Cell value={r.installationDate} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "installationDate", v)} /></Td>
                       <Td><Cell value={r.customerName} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "customerName", v)} /></Td>
                       <Td><Cell value={r.phone} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "phone", v)} /></Td>

@@ -3279,7 +3279,11 @@ export const sales = pgTable(
     // plain reference is safe and keeps the owner intact).
     agentId: uuid("agent_id").references(() => users.id).notNull(),
     saleMonth: varchar("sale_month", { length: 7 }).notNull(), // 'YYYY-MM'
-    // The 8 spreadsheet columns. installationDate is intentionally free text.
+    // The spreadsheet columns. Both date columns are intentionally FREE TEXT so
+    // the sheet stays as flexible as Excel: orderDate is when the sale was made
+    // ("05 Aug 2026"); installationDate can carry a qualifier ("10 Aug 2026
+    // Morning") or a non-date ("TBD"). Neither drives grouping — saleMonth does.
+    orderDate: varchar("order_date", { length: 120 }),
     installationDate: varchar("installation_date", { length: 120 }),
     customerName: varchar("customer_name", { length: 200 }),
     phone: varchar("phone", { length: 60 }),
