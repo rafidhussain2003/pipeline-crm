@@ -10,7 +10,11 @@ import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 import { isUuid } from "@/lib/url";
 
-const PAGE_SIZE = 100;
+// Each month is its own sheet, sized for up to 500 sales — the whole month
+// shows as ONE continuous sheet (like a spreadsheet tab) rather than paging
+// every 100 rows. A month that somehow exceeds 500 still paginates beyond
+// that, so no sale is ever hidden or lost.
+const PAGE_SIZE = 500;
 
 // Status counts for a month/scope — one grouped scan. Used for the header
 // totals AND as the ENTIRE payload an agent gets once a month is past its

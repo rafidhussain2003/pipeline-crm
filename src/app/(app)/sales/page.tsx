@@ -51,6 +51,7 @@ type Meta = {
   summary: Summary;
   agents: { id: string; name: string }[];
   productCounts?: ProductCount[];
+  pageSize?: number;
 };
 
 function currentMonth(): string {
@@ -189,7 +190,9 @@ export default function SalesLedgerPage() {
 
   const canAdd = meta?.canEdit && (meta.viewAll || month === currentMonth());
   const summary = meta?.summary;
-  const totalPages = Math.max(1, Math.ceil(total / 100));
+  // The monthly sheet holds up to this many rows before a second page appears.
+  const pageSize = meta?.pageSize ?? 500;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div className="p-6">
@@ -362,7 +365,7 @@ export default function SalesLedgerPage() {
                     <tr key={r.id} className={`border-b border-slate-100 ${deleted ? "opacity-50" : STATUS_ROW[r.activationStatus] || ""}`}>
                       {/* Serial number — always a yellow box (like a spreadsheet
                           row gutter); follows the current filtered/sorted, paginated view. */}
-                      <Td className="text-center tabular-nums bg-yellow-200 text-slate-700 font-medium">{(page - 1) * 100 + i + 1}</Td>
+                      <Td className="text-center tabular-nums bg-yellow-200 text-slate-700 font-medium">{(page - 1) * pageSize + i + 1}</Td>
                       <Td><Cell value={r.orderDate} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "orderDate", v)} /></Td>
                       <Td><Cell value={r.installationDate} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "installationDate", v)} /></Td>
                       <Td><Cell value={r.customerName} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "customerName", v)} /></Td>
