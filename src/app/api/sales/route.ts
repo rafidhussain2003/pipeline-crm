@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { sales, users } from "@/db/schema";
-import { and, asc, count, desc, eq, ilike, isNull, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isValidSaleMonth, isSaleStatus } from "@/lib/sales/types";
+import { classifyProduct, productCategoryLabel } from "@/lib/sales/products";
 import { parseInstallationDate, syncSaleReminders } from "@/lib/sales/reminders";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
@@ -66,8 +67,40 @@ export async function GET(req: NextRequest) {
 
   const search = p.get("search")?.trim();
   const status = p.get("status");
+  const productFilter = p.get("product")?.trim() || null;
   const showDeleted = scope.canManage && p.get("deleted") === "1";
   const page = Math.max(1, parseInt(p.get("page") || "1", 10));
+
+  // Product-family chips — count sales per product family for this month + agent
+  // scope, independent of the status/search/product filters so the breakdown is
+  // always the full picture. ONE grouped scan over the distinct product strings
+  // (a small set), classified in JS; the exact strings per family are kept so
+  // the product FILTER below matches the SAME rows the count reflects.
+  const productScope = [eq(sales.companyId, session.companyId), eq(sales.saleMonth, month), isNull(sales.deletedAt)];
+  if (!scope.viewAll) productScope.push(eq(sales.agentId, session.userId));
+  else if (ownerId) productScope.push(eq(sales.agentId, ownerId));
+  const productGroups = await db
+    .select({ product: sales.product, value: count() })
+    .from(sales)
+    .where(and(...productScope))
+    .groupBy(sales.product);
+  const countByCat = new Map<string, number>();
+  const membersByCat = new Map<string, string[]>();
+  let otherHasNull = false;
+  for (const g of productGroups) {
+    const cat = classifyProduct(g.product);
+    countByCat.set(cat, (countByCat.get(cat) || 0) + Number(g.value));
+    if (g.product) {
+      const arr = membersByCat.get(cat) || [];
+      arr.push(g.product);
+      membersByCat.set(cat, arr);
+    } else if (cat === "other") {
+      otherHasNull = true;
+    }
+  }
+  const productCounts = [...countByCat.entries()]
+    .map(([key, cnt]) => ({ key, label: productCategoryLabel(key), count: cnt }))
+    .sort((a, b) => b.count - a.count);
 
   const conditions = [eq(sales.companyId, session.companyId), eq(sales.saleMonth, month)];
   // Deleted rows are hidden unless an admin explicitly asks to see them (to restore).
@@ -79,6 +112,15 @@ export async function GET(req: NextRequest) {
     const like = `%${search}%`;
     const c = or(ilike(sales.customerName, like), ilike(sales.phone, like), ilike(sales.product, like), ilike(sales.notes, like));
     if (c) conditions.push(c);
+  }
+  // Product-family filter — the exact product strings for the chosen family
+  // (+ null/blank for "other"), so it matches the chip's count exactly. An
+  // unknown/empty family matches nothing.
+  if (productFilter) {
+    const members = membersByCat.get(productFilter) || [];
+    const inMembers = members.length ? inArray(sales.product, members) : null;
+    const includeNull = productFilter === "other" && otherHasNull ? isNull(sales.product) : null;
+    conditions.push(inMembers && includeNull ? or(inMembers, includeNull)! : inMembers ?? includeNull ?? sql`false`);
   }
 
   const [rows, [{ total }], agents] = await Promise.all([
@@ -116,7 +158,7 @@ export async function GET(req: NextRequest) {
       : Promise.resolve([] as { id: string; name: string }[]),
   ]);
 
-  return NextResponse.json({ ...meta, rows, total, page, pageSize: PAGE_SIZE, agents });
+  return NextResponse.json({ ...meta, rows, total, productCounts, page, pageSize: PAGE_SIZE, agents });
 }
 
 // Record a new sale. Agents create their own in the current month; admins and

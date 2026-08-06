@@ -14,11 +14,15 @@ const STATUSES = [
   { value: "follow_up", label: "Follow-up" },
 ] as const;
 const STATUS_LABEL: Record<string, string> = Object.fromEntries(STATUSES.map((s) => [s.value, s.label]));
+// Whole-row color by activation status: active → green, cancelled → red,
+// follow-up → yellow, pending → a neutral light amber (the default "not yet
+// actioned" state). Kept at the 100 shade so the color clearly reads while the
+// dark cell text stays legible.
 const STATUS_ROW: Record<string, string> = {
-  active: "bg-emerald-50",
+  active: "bg-emerald-100",
   pending: "bg-amber-50",
-  cancelled: "bg-red-50",
-  follow_up: "bg-yellow-50",
+  cancelled: "bg-red-100",
+  follow_up: "bg-yellow-100",
 };
 
 type Row = {
@@ -36,6 +40,7 @@ type Row = {
   deletedAt: string | null;
 };
 type Summary = { total: number; active: number; pending: number; cancelled: number; follow_up: number };
+type ProductCount = { key: string; label: string; count: number };
 type Meta = {
   month: string;
   viewAll: boolean;
@@ -45,6 +50,7 @@ type Meta = {
   summaryOnly: boolean;
   summary: Summary;
   agents: { id: string; name: string }[];
+  productCounts?: ProductCount[];
 };
 
 function currentMonth(): string {
@@ -68,6 +74,7 @@ export default function SalesLedgerPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [agentId, setAgentId] = useState("");
+  const [product, setProduct] = useState("");
   const [showDeleted, setShowDeleted] = useState(false);
   const [visibleUntil, setVisibleUntil] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
@@ -80,6 +87,7 @@ export default function SalesLedgerPage() {
       if (search) p.set("search", search);
       if (status) p.set("status", status);
       if (agentId) p.set("agentId", agentId);
+      if (product) p.set("product", product);
       if (showDeleted) p.set("deleted", "1");
       try {
         const res = await fetch(`/api/sales?${p}`);
@@ -98,7 +106,7 @@ export default function SalesLedgerPage() {
         setLoading(false);
       }
     },
-    [month, page, search, status, agentId, showDeleted]
+    [month, page, search, status, agentId, product, showDeleted]
   );
 
   // Debounced reload on any query change (search feels instant, no page reload).
@@ -119,7 +127,7 @@ export default function SalesLedgerPage() {
   // Reset page + load the admin visibility control when the month changes.
   useEffect(() => {
     setPage(1);
-  }, [month, search, status, agentId, showDeleted]);
+  }, [month, search, status, agentId, product, showDeleted]);
   useEffect(() => {
     if (!meta?.canManage) return;
     fetch(`/api/sales/period?month=${month}`)
@@ -209,6 +217,25 @@ export default function SalesLedgerPage() {
           <Stat label="Pending" value={summary.pending} tone="text-amber-800 bg-amber-100" />
           <Stat label="Cancelled" value={summary.cancelled} tone="text-red-800 bg-red-100" />
           <Stat label="Follow-up" value={summary.follow_up} tone="text-yellow-800 bg-yellow-100" />
+        </div>
+      )}
+
+      {/* Product-family filter chips — click one to filter the sheet to that
+          product (Dish, AT&T, Frontier, Xfinity, …); each shows its total for
+          the month. Click again (or "All") to clear. */}
+      {meta?.productCounts && meta.productCounts.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-4">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mr-1">Products</span>
+          <ProductChip label="All" count={summary?.total ?? 0} active={product === ""} onClick={() => setProduct("")} />
+          {meta.productCounts.map((pc) => (
+            <ProductChip
+              key={pc.key}
+              label={pc.label}
+              count={pc.count}
+              active={product === pc.key}
+              onClick={() => setProduct(product === pc.key ? "" : pc.key)}
+            />
+          ))}
         </div>
       )}
 
@@ -305,7 +332,7 @@ export default function SalesLedgerPage() {
             <table className="w-full text-sm border-collapse [&_th]:border [&_td]:border [&_th]:border-slate-200 [&_td]:border-slate-200">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-                  <th className="px-2 py-2.5 w-10 text-center">#</th>
+                  <th className="px-2 py-2.5 w-10 text-center bg-yellow-100">#</th>
                   <th className="px-2 py-2.5">Order Date</th>
                   <th className="px-2 py-2.5">Installation Date</th>
                   <th className="px-2 py-2.5">Customer Name</th>
@@ -333,8 +360,9 @@ export default function SalesLedgerPage() {
                   const deleted = !!r.deletedAt;
                   return (
                     <tr key={r.id} className={`border-b border-slate-100 ${deleted ? "opacity-50" : STATUS_ROW[r.activationStatus] || ""}`}>
-                      {/* Serial number — follows the current filtered/sorted, paginated view. */}
-                      <Td className="text-center text-slate-400 tabular-nums">{(page - 1) * 100 + i + 1}</Td>
+                      {/* Serial number — always a yellow box (like a spreadsheet
+                          row gutter); follows the current filtered/sorted, paginated view. */}
+                      <Td className="text-center tabular-nums bg-yellow-200 text-slate-700 font-medium">{(page - 1) * 100 + i + 1}</Td>
                       <Td><Cell value={r.orderDate} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "orderDate", v)} /></Td>
                       <Td><Cell value={r.installationDate} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "installationDate", v)} /></Td>
                       <Td><Cell value={r.customerName} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "customerName", v)} /></Td>
@@ -403,6 +431,20 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: stri
     <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-medium ${tone}`}>
       {label} <span className="font-bold">{value}</span>
     </span>
+  );
+}
+
+function ProductChip({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium border transition-colors ${
+        active ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+      }`}
+    >
+      {label} <span className={`font-bold ${active ? "text-white" : "text-slate-500"}`}>{count}</span>
+    </button>
   );
 }
 
