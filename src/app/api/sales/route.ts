@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { sales, users } from "@/db/schema";
-import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isValidSaleMonth, isSaleStatus } from "@/lib/sales/types";
 import { classifyProduct, productCategoryLabel } from "@/lib/sales/products";
@@ -144,7 +144,12 @@ export async function GET(req: NextRequest) {
       .from(sales)
       .leftJoin(users, eq(users.id, sales.agentId))
       .where(and(...conditions))
-      .orderBy(desc(sales.createdAt))
+      // Oldest first, so a newly added sale appends at the BOTTOM of the sheet
+      // (row N+1) instead of jumping to the top — the ledger stays in
+      // chronological entry order (matching the export), and the serial column
+      // reads 1→N top-to-bottom. id is the stable tiebreaker so rows created in
+      // the same instant never shuffle across pages.
+      .orderBy(asc(sales.createdAt), asc(sales.id))
       .limit(PAGE_SIZE)
       .offset((page - 1) * PAGE_SIZE),
     db.select({ total: count() }).from(sales).where(and(...conditions)),
