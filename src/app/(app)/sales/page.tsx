@@ -14,15 +14,15 @@ const STATUSES = [
   { value: "follow_up", label: "Follow-up" },
 ] as const;
 const STATUS_LABEL: Record<string, string> = Object.fromEntries(STATUSES.map((s) => [s.value, s.label]));
-// Whole-row color by activation status: active → green, cancelled → red,
-// follow-up → yellow, pending → a neutral light amber (the default "not yet
-// actioned" state). Kept at the 100 shade so the color clearly reads while the
-// dark cell text stays legible.
+// Whole-row color by activation status, at a strong, saturated Excel-like
+// strength: active → dark green, cancelled → dark red, follow-up → vivid
+// yellow; pending stays a neutral light amber (the default "not yet actioned"
+// state). Dark cell text stays legible on all of these.
 const STATUS_ROW: Record<string, string> = {
-  active: "bg-emerald-100",
+  active: "bg-green-500",
   pending: "bg-amber-50",
-  cancelled: "bg-red-100",
-  follow_up: "bg-yellow-100",
+  cancelled: "bg-red-500",
+  follow_up: "bg-yellow-300",
 };
 
 type Row = {
@@ -393,7 +393,7 @@ export default function SalesLedgerPage() {
                         </select>
                       </Td>
                       <Td><Cell value={r.notes} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "notes", v)} /></Td>
-                      {meta?.viewAll && <Td><span className="text-slate-600">{r.agentName || "—"}</span></Td>}
+                      {meta?.viewAll && <Td><span className="text-slate-800">{r.agentName || "—"}</span></Td>}
                       {meta?.canManage && (
                         <Td className="print:hidden text-right">
                           {deleted ? (
