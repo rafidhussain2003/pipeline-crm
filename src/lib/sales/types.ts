@@ -18,6 +18,7 @@ export const EDITABLE_FIELDS = [
   "phone",
   "product",
   "autopay",
+  "isCommercial",
   "activationStatus",
   "notes",
 ] as const;

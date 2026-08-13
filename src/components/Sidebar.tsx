@@ -127,6 +127,9 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   // Optional module: hidden unless the Platform Owner enabled sales_ledger.
   // (This nav block already excludes finance_employee / lead_distributor.)
   { href: "/sales", label: "Sales Ledger", feature: "sales_ledger", roles: ["admin", "manager", "agent"] },
+  // Commercial Sales — the admin-only sheet of sales marked "Commercial" on
+  // the main ledger. Strictly admin (the API 403s everyone else too).
+  { href: "/sales/commercial", label: "Commercial Sales", feature: "sales_ledger", roles: ["admin"] },
   // Callbacks (Phase 15) is every role's tool — an agent works their own list,
   // a manager/admin sees the whole company's. Scope is decided server-side.
   // Also hidden from the Lead Distribution Manager (a customer-PII surface).

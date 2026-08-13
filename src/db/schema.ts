@@ -3307,6 +3307,10 @@ export const sales = pgTable(
     phone: varchar("phone", { length: 60 }),
     product: varchar("product", { length: 160 }),
     autopay: boolean("autopay").notNull().default(false),
+    // Marked "commercial" by the agent while posting (business-account sale).
+    // Marking catches the sale into the admin-only Commercial Sales sheet
+    // (commercial_sales link table); unmarking releases it.
+    isCommercial: boolean("is_commercial").notNull().default(false),
     // active | pending | cancelled | follow_up — drives the row color. A varchar
     // (not a pg enum) so admins can add custom statuses later without a migration.
     activationStatus: varchar("activation_status", { length: 20 }).notNull().default("pending"),
@@ -3385,5 +3389,34 @@ export const salesPeriodSettings = pgTable(
   },
   (t) => ({
     companyMonthUniq: uniqueIndex("sales_period_company_month_uniq").on(t.companyId, t.month),
+  })
+);
+
+// Commercial Sales — the admin-only sheet of sales marked "commercial" on the
+// main ledger. A LINK row per caught sale (sale_id unique), NOT a copy: the
+// sheet joins the live sale for customer/date/product/status so it can never
+// drift from the ledger, and carries only the admin-format extras of its own
+// (Add ons, Funds Status — per the reference sheet). Marking a sale commercial
+// inserts the link; unmarking (or deleting the sale) removes it via cascade.
+export const commercialSales = pgTable(
+  "commercial_sales",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    saleId: uuid("sale_id")
+      .references(() => sales.id, { onDelete: "cascade" })
+      .notNull(),
+    // Admin-only columns of the commercial format ("Elite", "STANDARD", "Plus" /
+    // "6-12", "6-19" in the reference sheet). Free text.
+    addOns: varchar("add_ons", { length: 160 }),
+    fundsStatus: varchar("funds_status", { length: 60 }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    saleUniq: uniqueIndex("commercial_sales_sale_uniq").on(t.saleId),
+    companyIdx: index("commercial_sales_company_idx").on(t.companyId, t.createdAt),
   })
 );

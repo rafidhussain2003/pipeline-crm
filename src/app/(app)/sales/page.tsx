@@ -35,9 +35,11 @@ type Row = {
   phone: string | null;
   product: string | null;
   autopay: boolean;
+  isCommercial: boolean;
   activationStatus: string;
   notes: string | null;
   deletedAt: string | null;
+  createdAt: string;
 };
 type Summary = { total: number; active: number; pending: number; cancelled: number; follow_up: number };
 type ProductCount = { key: string; label: string; count: number };
@@ -58,6 +60,15 @@ function currentMonth(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
+// Was this row created today? Agents may adjust the two toggles (Autopay /
+// Commercial) only during the posting day; text fields lock the moment they
+// hold a value. Mirrors the server rule (which is authoritative).
+function createdToday(iso: string): boolean {
+  const c = new Date(iso);
+  const n = new Date();
+  return c.getFullYear() === n.getFullYear() && c.getMonth() === n.getMonth() && c.getDate() === n.getDate();
+}
+const filled = (v: string | null) => v !== null && v.trim() !== "";
 function monthLabel(m: string): string {
   const [y, mo] = m.split("-").map(Number);
   return new Date(y, mo - 1, 1).toLocaleString("en-US", { month: "long", year: "numeric" });
@@ -342,6 +353,7 @@ export default function SalesLedgerPage() {
                   <th className="px-2 py-2.5">Phone</th>
                   <th className="px-2 py-2.5">Product</th>
                   <th className="px-2 py-2.5">Autopay</th>
+                  <th className="px-2 py-2.5">Commercial</th>
                   <th className="px-2 py-2.5">Activation Status</th>
                   <th className="px-2 py-2.5 min-w-[220px]">Notes</th>
                   {meta?.viewAll && <th className="px-2 py-2.5">Agent</th>}
@@ -351,33 +363,50 @@ export default function SalesLedgerPage() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={11} className="px-4 py-8 text-center text-slate-400">Loading…</td>
+                    <td colSpan={12} className="px-4 py-8 text-center text-slate-400">Loading…</td>
                   </tr>
                 )}
                 {!loading && rows.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="px-4 py-8 text-center text-slate-400">No sales yet{canAdd ? " — click “+ Add sale”." : "."}</td>
+                    <td colSpan={12} className="px-4 py-8 text-center text-slate-400">No sales yet{canAdd ? " — click “+ Add sale”." : "."}</td>
                   </tr>
                 )}
                 {rows.map((r, i) => {
                   const deleted = !!r.deletedAt;
+                  // Agent field-lock (admin/manager are never locked): a text
+                  // cell is editable only while EMPTY — once saved it's fixed;
+                  // the two toggles are editable only on the posting day.
+                  // Activation Status stays editable for the life of the sale.
+                  const lockText = (v: string | null) => !meta?.canEdit || deleted || (!meta?.viewAll && filled(v));
+                  const lockToggle = !meta?.canEdit || deleted || (!meta?.viewAll && !createdToday(r.createdAt));
                   return (
                     <tr key={r.id} className={`border-b border-slate-100 ${deleted ? "opacity-50" : STATUS_ROW[r.activationStatus] || ""}`}>
                       {/* Serial number — always a yellow box (like a spreadsheet
                           row gutter); follows the current filtered/sorted, paginated view. */}
                       <Td className="text-center tabular-nums bg-yellow-200 text-slate-700 font-medium">{(page - 1) * pageSize + i + 1}</Td>
-                      <Td><Cell value={r.orderDate} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "orderDate", v)} /></Td>
-                      <Td><Cell value={r.installationDate} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "installationDate", v)} /></Td>
-                      <Td><Cell value={r.customerName} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "customerName", v)} /></Td>
-                      <Td><Cell value={r.phone} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "phone", v)} /></Td>
-                      <Td><Cell value={r.product} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "product", v)} /></Td>
+                      <Td><Cell value={r.orderDate} disabled={lockText(r.orderDate)} onSave={(v) => patchCell(r.id, "orderDate", v)} /></Td>
+                      <Td><Cell value={r.installationDate} disabled={lockText(r.installationDate)} onSave={(v) => patchCell(r.id, "installationDate", v)} /></Td>
+                      <Td><Cell value={r.customerName} disabled={lockText(r.customerName)} onSave={(v) => patchCell(r.id, "customerName", v)} /></Td>
+                      <Td><Cell value={r.phone} disabled={lockText(r.phone)} onSave={(v) => patchCell(r.id, "phone", v)} /></Td>
+                      <Td><Cell value={r.product} disabled={lockText(r.product)} onSave={(v) => patchCell(r.id, "product", v)} /></Td>
                       <Td>
                         <button
-                          disabled={!meta?.canEdit || deleted}
+                          disabled={lockToggle}
                           onClick={() => patchCell(r.id, "autopay", !r.autopay)}
                           className={`text-xs font-medium rounded px-2 py-0.5 ${r.autopay ? "text-emerald-800 bg-emerald-100" : "text-slate-500 bg-slate-100"} disabled:opacity-60`}
                         >
                           {r.autopay ? "Yes" : "No"}
+                        </button>
+                      </Td>
+                      <Td>
+                        {/* Mark as commercial while posting → the sale is caught
+                            into the admin-only Commercial Sales sheet. */}
+                        <button
+                          disabled={lockToggle}
+                          onClick={() => patchCell(r.id, "isCommercial", !r.isCommercial)}
+                          className={`text-xs font-medium rounded px-2 py-0.5 ${r.isCommercial ? "text-violet-800 bg-violet-100" : "text-slate-500 bg-slate-100"} disabled:opacity-60`}
+                        >
+                          {r.isCommercial ? "Yes" : "No"}
                         </button>
                       </Td>
                       <Td>
@@ -395,7 +424,7 @@ export default function SalesLedgerPage() {
                           {!STATUS_LABEL[r.activationStatus] && <option value={r.activationStatus}>{r.activationStatus}</option>}
                         </select>
                       </Td>
-                      <Td><Cell value={r.notes} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "notes", v)} /></Td>
+                      <Td><Cell value={r.notes} disabled={lockText(r.notes)} onSave={(v) => patchCell(r.id, "notes", v)} /></Td>
                       {meta?.viewAll && <Td><span className="text-slate-800">{r.agentName || "—"}</span></Td>}
                       {meta?.canManage && (
                         <Td className="print:hidden text-right">

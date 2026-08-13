@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { sales, users } from "@/db/schema";
+import { sales, users, commercialSales } from "@/db/schema";
 import { and, asc, count, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isValidSaleMonth, isSaleStatus } from "@/lib/sales/types";
@@ -140,6 +140,7 @@ export async function GET(req: NextRequest) {
         phone: sales.phone,
         product: sales.product,
         autopay: sales.autopay,
+        isCommercial: sales.isCommercial,
         activationStatus: sales.activationStatus,
         notes: sales.notes,
         deletedAt: sales.deletedAt,
@@ -214,6 +215,7 @@ export async function POST(req: NextRequest) {
       phone: typeof body?.phone === "string" ? body.phone.slice(0, 60) : null,
       product: typeof body?.product === "string" ? body.product.slice(0, 160) : null,
       autopay: body?.autopay === true,
+      isCommercial: body?.isCommercial === true,
       activationStatus: status,
       notes: typeof body?.notes === "string" ? body.notes : null,
       createdBy: session.userId,
@@ -228,6 +230,15 @@ export async function POST(req: NextRequest) {
     entityId: row.id,
     after: { saleMonth, customerName: row.customerName, product: row.product, activationStatus: row.activationStatus },
   });
+
+  // Created already marked commercial → catch it into the Commercial Sales
+  // sheet immediately (same link the PATCH toggle maintains).
+  if (row.isCommercial) {
+    await db
+      .insert(commercialSales)
+      .values({ companyId: session.companyId, saleId: row.id })
+      .onConflictDoNothing({ target: commercialSales.saleId });
+  }
 
   // Auto-generate installation reminders (only if the installation date parsed).
   await syncSaleReminders({

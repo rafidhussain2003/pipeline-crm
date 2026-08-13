@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { sales } from "@/db/schema";
+import { sales, commercialSales } from "@/db/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { requireSales, resolveSalesScope } from "@/lib/sales/access";
 import { EDITABLE_FIELDS, isSaleStatus } from "@/lib/sales/types";
@@ -39,13 +39,49 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!scope.canEdit) return NextResponse.json({ error: "This month is locked — editing is no longer allowed." }, { status: 403 });
 
   const body = await req.json().catch(() => ({}));
+
+  // AGENT FIELD-LOCK — a sale is written once. While an agent is POSTING a
+  // sale (the row starts blank and is filled cell by cell) they may FILL any
+  // still-empty field; once a field holds a value it is locked for them —
+  // no rewriting the package, name, number, dates or notes, and no clearing
+  // (which would be rewrite-in-two-steps). The two toggles (autopay,
+  // commercial) belong to the posting session: editable by the agent only on
+  // the day the sale was created. Activation Status is the ONE thing an agent
+  // keeps updating for the life of the sale. Admin/manager (viewAll) are
+  // never locked — corrections go through them.
+  const agentLocked = !scope.viewAll;
+  const now = new Date();
+  const createdToday =
+    row.createdAt.getFullYear() === now.getFullYear() &&
+    row.createdAt.getMonth() === now.getMonth() &&
+    row.createdAt.getDate() === now.getDate();
+
   const set: Record<string, unknown> = {};
   const before: Record<string, unknown> = {};
   const after: Record<string, unknown> = {};
   for (const key of EDITABLE_FIELDS) {
     if (!(key in body)) continue;
+    if (agentLocked && key !== "activationStatus") {
+      if (key === "autopay" || key === "isCommercial") {
+        if (!createdToday) {
+          return NextResponse.json(
+            { error: "This sale is saved — only its Activation Status can be changed. Ask an admin for corrections." },
+            { status: 403 }
+          );
+        }
+      } else {
+        const current = (row as Record<string, unknown>)[key];
+        const filled = current !== null && current !== undefined && String(current).trim() !== "";
+        if (filled) {
+          return NextResponse.json(
+            { error: "This field is already saved — only Activation Status can be changed. Ask an admin for corrections." },
+            { status: 403 }
+          );
+        }
+      }
+    }
     let value = body[key];
-    if (key === "autopay") value = value === true;
+    if (key === "autopay" || key === "isCommercial") value = value === true;
     else if (key === "activationStatus") {
       if (!isSaleStatus(value)) return NextResponse.json({ error: "Invalid activation status." }, { status: 400 });
     } else
@@ -82,6 +118,28 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   await recordAudit({ companyId: session.companyId, userId: session.userId, action: "sale.updated", entityType: "sale", entityId: id, before, after });
+
+  // Commercial mark changed → catch into / release from the admin-only
+  // Commercial Sales sheet. The sheet row is a LINK (sale_id unique) — the
+  // upsert is idempotent, and unmarking removes it (its addOns/fundsStatus go
+  // with it, which is correct: an unmarked sale is not a commercial sale).
+  if ("isCommercial" in set && updated.isCommercial !== row.isCommercial) {
+    if (updated.isCommercial) {
+      await db
+        .insert(commercialSales)
+        .values({ companyId: session.companyId, saleId: updated.id })
+        .onConflictDoNothing({ target: commercialSales.saleId });
+    } else {
+      await db.delete(commercialSales).where(and(eq(commercialSales.saleId, updated.id), eq(commercialSales.companyId, session.companyId)));
+    }
+    await recordAudit({
+      companyId: session.companyId,
+      userId: session.userId,
+      action: updated.isCommercial ? "sale.marked_commercial" : "sale.unmarked_commercial",
+      entityType: "sale",
+      entityId: id,
+    });
+  }
 
   // Installation date changed → reconcile this sale's reminders to it.
   if ("installationDate" in set) {
