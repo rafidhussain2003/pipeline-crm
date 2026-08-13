@@ -85,6 +85,23 @@ export default function CommercialSalesPage() {
     if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Could not save");
     load({ silent: true });
   }
+  // Admin adds a commercial sale directly from this sheet: creates a normal
+  // sale on the main ledger already marked Commercial (so it lives on both
+  // sheets, like every other commercial sale) and it appears here at the
+  // bottom immediately — fill the cells inline.
+  async function addSale() {
+    const res = await fetch("/api/sales", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isCommercial: true }),
+    });
+    if (!res.ok) {
+      setError((await res.json().catch(() => ({}))).error || "Could not add");
+      return;
+    }
+    load({ silent: true });
+  }
+
   // Remove from this sheet (unmarks the sale; the sale itself is untouched).
   async function removeRow(id: string) {
     if (!confirm("Remove this sale from Commercial Sales? The sale stays on the main ledger — it is only unmarked.")) return;
@@ -105,9 +122,14 @@ export default function CommercialSalesPage() {
             Every sale marked “Commercial” on the main ledger lands here automatically. Admin-only.
           </p>
         </div>
-        <span className="text-sm font-medium text-slate-600 bg-slate-100 rounded-full px-3 py-1.5">
-          {rows.length} commercial {rows.length === 1 ? "sale" : "sales"}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-slate-600 bg-slate-100 rounded-full px-3 py-1.5">
+            {rows.length} commercial {rows.length === 1 ? "sale" : "sales"}
+          </span>
+          <button onClick={addSale} className="text-sm font-semibold text-white bg-green-700 hover:bg-green-800 rounded-md px-3 py-2">
+            + Add sale
+          </button>
+        </div>
       </div>
 
       {error && (
