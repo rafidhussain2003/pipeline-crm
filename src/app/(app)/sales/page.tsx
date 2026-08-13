@@ -90,6 +90,14 @@ export default function SalesLedgerPage() {
   const [showDeleted, setShowDeleted] = useState(false);
   const [visibleUntil, setVisibleUntil] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
+  // Which row's ⋯ actions menu is open (admin). Any click elsewhere closes it.
+  const [menuId, setMenuId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!menuId) return;
+    const close = () => setMenuId(null);
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [menuId]);
 
   const load = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -332,10 +340,15 @@ export default function SalesLedgerPage() {
                   <button onClick={() => saveVisibility("")} className="text-slate-400 hover:text-slate-600" title="Always visible">clear</button>
                 )}
               </label>
-              <label className="flex items-center gap-1.5 cursor-pointer">
+              <label className="flex items-center gap-1.5 cursor-pointer" title="Deleted sales are kept here for 30 days, then removed permanently.">
                 <input type="checkbox" checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)} className="rounded border-slate-300" />
-                Show deleted
+                Trash
               </label>
+              {showDeleted && (
+                <span className="text-[11px] text-slate-400">
+                  Deleted sales stay here for 30 days and can be restored; after that they are removed permanently.
+                </span>
+              )}
             </div>
           )}
 
@@ -431,7 +444,35 @@ export default function SalesLedgerPage() {
                           {deleted ? (
                             <button onClick={() => restoreSale(r.id)} className="text-[11px] font-medium text-emerald-700 bg-emerald-50 rounded px-2 py-1">Restore</button>
                           ) : (
-                            <button onClick={() => removeSale(r.id)} className="text-[11px] font-medium text-red-600 bg-red-50 rounded px-2 py-1">Delete</button>
+                            /* ⋯ actions menu — delete is deliberately behind a
+                               second click so a stray tap can't trash a sale.
+                               Trashed sales are restorable for 30 days. */
+                            <div className="relative inline-block">
+                              <button
+                                aria-label="Row actions"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setMenuId(menuId === r.id ? null : r.id);
+                                }}
+                                className="text-slate-500 hover:text-slate-800 hover:bg-slate-200/70 rounded px-2 py-0.5 text-sm font-bold leading-none"
+                              >
+                                ⋯
+                              </button>
+                              {menuId === r.id && (
+                                <div className="absolute right-0 top-full mt-1 z-20 bg-white border border-slate-200 rounded-md shadow-lg py-1 min-w-[150px] text-left">
+                                  <button
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      removeSale(r.id);
+                                    }}
+                                    className="block w-full text-left px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                                  >
+                                    Move to Trash
+                                  </button>
+                                  <div className="px-3 pt-0.5 pb-1 text-[10px] text-slate-400">Restorable for 30 days</div>
+                                </div>
+                              )}
+                            </div>
                           )}
                         </Td>
                       )}

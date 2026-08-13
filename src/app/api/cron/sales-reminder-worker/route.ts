@@ -4,6 +4,7 @@ import { sales, salesReminders } from "@/db/schema";
 import { and, asc, eq, isNull, lte } from "drizzle-orm";
 import { sendNotification } from "@/lib/notifications/service";
 import { REMINDER_COPY, type ReminderKind } from "@/lib/sales/reminders";
+import { purgeExpiredSalesTrash } from "@/lib/sales/trash";
 
 // Sales-installation reminder worker. Same external scheduler + CRON_SECRET as
 // the callback worker. Reminders are date-triggered: when a precomputed dueAt
@@ -60,5 +61,10 @@ export async function POST(req: NextRequest) {
     await db.update(salesReminders).set({ notifiedAt: now, updatedAt: now }).where(eq(salesReminders.id, r.id));
   }
 
-  return NextResponse.json({ ok: true, due: due.length, notified });
+  // Trash retention sweep — hard-deletes sales trashed >30 days ago.
+  // Internally throttled to one real sweep per hour, so calling it on every
+  // worker tick costs nothing.
+  const purged = await purgeExpiredSalesTrash();
+
+  return NextResponse.json({ ok: true, due: due.length, notified, purged });
 }

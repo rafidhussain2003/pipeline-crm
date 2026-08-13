@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { sales, users, commercialSales } from "@/db/schema";
-import { and, asc, count, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, ilike, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isValidSaleMonth, isSaleStatus } from "@/lib/sales/types";
 import { classifyProduct, productCategoryLabel } from "@/lib/sales/products";
@@ -107,8 +107,10 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => b.count - a.count);
 
   const conditions = [eq(sales.companyId, session.companyId), eq(sales.saleMonth, month)];
-  // Deleted rows are hidden unless an admin explicitly asks to see them (to restore).
-  if (!showDeleted) conditions.push(isNull(sales.deletedAt));
+  // Trash bin (admin-only, showDeleted): ONLY the deleted rows — a real trash
+  // view, not deleted rows mixed into the live sheet. Deleted sales stay
+  // restorable for 30 days, then the cron purge removes them for good.
+  conditions.push(showDeleted ? isNotNull(sales.deletedAt) : isNull(sales.deletedAt));
   if (!scope.viewAll) conditions.push(eq(sales.agentId, session.userId));
   else if (ownerId) conditions.push(eq(sales.agentId, ownerId));
   if (status && isSaleStatus(status)) conditions.push(eq(sales.activationStatus, status));

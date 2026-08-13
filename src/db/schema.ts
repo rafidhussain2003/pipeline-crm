@@ -3327,6 +3327,9 @@ export const sales = pgTable(
     // Dashboard "Today's / Upcoming installations" — indexed range scan on the
     // parsed installation datetime, never a full-table scan.
     companyInstallIdx: index("sales_company_installation_idx").on(t.companyId, t.installationAt),
+    // Trash purge — the 30-day sweep deletes by deleted_at range; indexed so
+    // the hourly cron check never scans the live table.
+    deletedAtIdx: index("sales_deleted_at_idx").on(t.deletedAt),
   })
 );
 
