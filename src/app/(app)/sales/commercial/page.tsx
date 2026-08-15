@@ -24,14 +24,15 @@ const STATUS_ROW: Record<string, string> = {
 
 type Row = {
   id: string;
-  saleId: string;
+  // Set = caught from the main ledger (live-linked); null = standalone row the
+  // admin added directly on this sheet (never on the main ledger).
+  saleId: string | null;
   addOns: string | null;
   fundsStatus: string | null;
   orderDate: string | null;
   customerName: string | null;
   product: string | null;
   activationStatus: string;
-  saleMonth: string;
 };
 
 export default function CommercialSalesPage() {
@@ -63,18 +64,8 @@ export default function CommercialSalesPage() {
     load();
   }, [load]);
 
-  // Live-sale fields (customer/date/product/status) → main ledger PATCH.
-  async function patchSale(saleId: string, field: string, value: unknown) {
-    setRows((prev) => prev.map((r) => (r.saleId === saleId ? { ...r, [field]: value } : r)));
-    const res = await fetch(`/api/sales/${saleId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [field]: value }),
-    });
-    if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Could not save");
-    load({ silent: true });
-  }
-  // Sheet-own fields (addOns/fundsStatus) → commercial row PATCH.
+  // Sheet-own fields (addOns/fundsStatus, and ALL data fields on a standalone
+  // row) → commercial row PATCH.
   async function patchCommercial(id: string, field: string, value: unknown) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
     const res = await fetch(`/api/sales/commercial/${id}`, {
@@ -85,16 +76,24 @@ export default function CommercialSalesPage() {
     if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Could not save");
     load({ silent: true });
   }
-  // Admin adds a commercial sale directly from this sheet: creates a normal
-  // sale on the main ledger already marked Commercial (so it lives on both
-  // sheets, like every other commercial sale) and it appears here at the
-  // bottom immediately — fill the cells inline.
-  async function addSale() {
-    const res = await fetch("/api/sales", {
-      method: "POST",
+  // Data fields on a row: a LINKED row edits the live sale on the main ledger
+  // (this sheet reflects it); a STANDALONE row edits its own columns here.
+  async function patchData(r: Row, field: string, value: unknown) {
+    if (!r.saleId) return patchCommercial(r.id, field, value);
+    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, [field]: value } : x)));
+    const res = await fetch(`/api/sales/${r.saleId}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isCommercial: true }),
+      body: JSON.stringify({ [field]: value }),
     });
+    if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Could not save");
+    load({ silent: true });
+  }
+  // Admin adds a commercial sale directly ON this sheet: a STANDALONE row that
+  // exists only here — the main Sales Ledger never sees it. Appears at the
+  // bottom immediately; fill the cells inline.
+  async function addSale() {
+    const res = await fetch("/api/sales/commercial", { method: "POST" });
     if (!res.ok) {
       setError((await res.json().catch(() => ({}))).error || "Could not add");
       return;
@@ -102,10 +101,15 @@ export default function CommercialSalesPage() {
     load({ silent: true });
   }
 
-  // Remove from this sheet (unmarks the sale; the sale itself is untouched).
-  async function removeRow(id: string) {
-    if (!confirm("Remove this sale from Commercial Sales? The sale stays on the main ledger — it is only unmarked.")) return;
-    await fetch(`/api/sales/commercial/${id}`, { method: "DELETE" });
+  // Remove from this sheet. Linked row: unmarks the sale (the sale itself
+  // stays on the main ledger). Standalone row: deleted for good — it never
+  // existed anywhere else.
+  async function removeRow(r: Row) {
+    const msg = r.saleId
+      ? "Remove this sale from Commercial Sales? The sale stays on the main ledger — it is only unmarked."
+      : "Delete this commercial sale? It exists only on this sheet and will be removed permanently.";
+    if (!confirm(msg)) return;
+    await fetch(`/api/sales/commercial/${r.id}`, { method: "DELETE" });
     load({ silent: true });
   }
 
@@ -170,13 +174,13 @@ export default function CommercialSalesPage() {
             {rows.map((r, i) => (
               <tr key={r.id} className={`border-b border-slate-100 ${STATUS_ROW[r.activationStatus] || ""}`}>
                 <Td className="text-center tabular-nums bg-yellow-200 text-slate-700 font-medium">{i + 1}</Td>
-                <Td><Cell value={r.customerName} onSave={(v) => patchSale(r.saleId, "customerName", v)} /></Td>
-                <Td><Cell value={r.orderDate} onSave={(v) => patchSale(r.saleId, "orderDate", v)} /></Td>
-                <Td><Cell value={r.product} onSave={(v) => patchSale(r.saleId, "product", v)} /></Td>
+                <Td><Cell value={r.customerName} onSave={(v) => patchData(r, "customerName", v)} /></Td>
+                <Td><Cell value={r.orderDate} onSave={(v) => patchData(r, "orderDate", v)} /></Td>
+                <Td><Cell value={r.product} onSave={(v) => patchData(r, "product", v)} /></Td>
                 <Td>
                   <select
                     value={r.activationStatus}
-                    onChange={(e) => patchSale(r.saleId, "activationStatus", e.target.value)}
+                    onChange={(e) => patchData(r, "activationStatus", e.target.value)}
                     className="bg-transparent text-sm font-medium focus:outline-none"
                   >
                     {STATUSES.map((s) => (
@@ -190,7 +194,7 @@ export default function CommercialSalesPage() {
                 <Td><Cell value={r.addOns} onSave={(v) => patchCommercial(r.id, "addOns", v)} /></Td>
                 <Td><Cell value={r.fundsStatus} onSave={(v) => patchCommercial(r.id, "fundsStatus", v)} /></Td>
                 <Td className="print:hidden text-right">
-                  <button onClick={() => removeRow(r.id)} className="text-[11px] font-medium text-red-600 bg-red-50 rounded px-2 py-1">
+                  <button onClick={() => removeRow(r)} className="text-[11px] font-medium text-red-600 bg-red-50 rounded px-2 py-1">
                     Remove
                   </button>
                 </Td>

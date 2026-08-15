@@ -3395,12 +3395,22 @@ export const salesPeriodSettings = pgTable(
   })
 );
 
-// Commercial Sales — the admin-only sheet of sales marked "commercial" on the
-// main ledger. A LINK row per caught sale (sale_id unique), NOT a copy: the
-// sheet joins the live sale for customer/date/product/status so it can never
-// drift from the ledger, and carries only the admin-format extras of its own
-// (Add ons, Funds Status — per the reference sheet). Marking a sale commercial
-// inserts the link; unmarking (or deleting the sale) removes it via cascade.
+// Commercial Sales — the admin-only sheet. An INDEPENDENT, permanent record:
+// once a sale lands here (caught from the main ledger or added by the admin)
+// it is NEVER removed by anything that happens on the main ledger — trashing
+// or purging the sale leaves this row intact. Every row OWNS its data
+// (customer/date/product/status snapshot); the only main-ledger dependencies
+// are the catch itself and the write-through that keeps a linked row's data
+// (activation status above all) synced while the sale still exists.
+//   • LINKED (saleId set): caught from the main ledger; data snapshotted at
+//     catch and kept in sync by the sale PATCH write-through. If the sale is
+//     later hard-purged, saleId becomes NULL (SET NULL) and the row lives on
+//     with its last-known data.
+//   • STANDALONE (saleId null): added by the admin directly ON this sheet;
+//     never touches the main ledger (strictly one-directional: main → here).
+// Both kinds carry the sheet's admin-format extras (Add ons, Funds Status).
+// Only an explicit Remove on this sheet (or a same-day unmark of a freshly
+// posted sale) takes a row off it.
 export const commercialSales = pgTable(
   "commercial_sales",
   {
@@ -3408,9 +3418,17 @@ export const commercialSales = pgTable(
     companyId: uuid("company_id")
       .references(() => companies.id, { onDelete: "cascade" })
       .notNull(),
-    saleId: uuid("sale_id")
-      .references(() => sales.id, { onDelete: "cascade" })
-      .notNull(),
+    // Null = standalone admin row OR a caught row whose sale was purged. The
+    // unique index ignores NULLs, so any number coexist while a live sale is
+    // only ever caught once.
+    saleId: uuid("sale_id").references(() => sales.id, { onDelete: "set null" }),
+    // Every row's OWN data. Standalone rows: typed by the admin. Linked rows:
+    // snapshotted at catch time and write-through-synced from the sale while
+    // it exists — so the row still shows everything after the sale is gone.
+    customerName: varchar("customer_name", { length: 200 }),
+    orderDate: varchar("order_date", { length: 120 }),
+    product: varchar("product", { length: 160 }),
+    activationStatus: varchar("activation_status", { length: 20 }).notNull().default("pending"),
     // Admin-only columns of the commercial format ("Elite", "STANDARD", "Plus" /
     // "6-12", "6-19" in the reference sheet). Free text.
     addOns: varchar("add_ons", { length: 160 }),

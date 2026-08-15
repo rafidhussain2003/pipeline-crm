@@ -234,11 +234,20 @@ export async function POST(req: NextRequest) {
   });
 
   // Created already marked commercial → catch it into the Commercial Sales
-  // sheet immediately (same link the PATCH toggle maintains).
+  // sheet immediately (same link + snapshot the PATCH toggle maintains). The
+  // snapshot makes the commercial row self-sufficient: it keeps its data even
+  // if the sale is later trashed or purged on the main ledger.
   if (row.isCommercial) {
     await db
       .insert(commercialSales)
-      .values({ companyId: session.companyId, saleId: row.id })
+      .values({
+        companyId: session.companyId,
+        saleId: row.id,
+        customerName: row.customerName,
+        orderDate: row.orderDate,
+        product: row.product,
+        activationStatus: row.activationStatus,
+      })
       .onConflictDoNothing({ target: commercialSales.saleId });
   }
 

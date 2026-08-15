@@ -120,14 +120,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   await recordAudit({ companyId: session.companyId, userId: session.userId, action: "sale.updated", entityType: "sale", entityId: id, before, after });
 
   // Commercial mark changed → catch into / release from the admin-only
-  // Commercial Sales sheet. The sheet row is a LINK (sale_id unique) — the
-  // upsert is idempotent, and unmarking removes it (its addOns/fundsStatus go
-  // with it, which is correct: an unmarked sale is not a commercial sale).
+  // Commercial Sales sheet. Catching SNAPSHOTS the sale's data into the
+  // commercial row so the sheet stays whole even if the sale is later trashed
+  // or purged. Unmarking (the agent's same-day correction or an admin) removes
+  // the row — the deliberate opt-out, distinct from main-ledger deletion,
+  // which never touches this sheet.
   if ("isCommercial" in set && updated.isCommercial !== row.isCommercial) {
     if (updated.isCommercial) {
       await db
         .insert(commercialSales)
-        .values({ companyId: session.companyId, saleId: updated.id })
+        .values({
+          companyId: session.companyId,
+          saleId: updated.id,
+          customerName: updated.customerName,
+          orderDate: updated.orderDate,
+          product: updated.product,
+          activationStatus: updated.activationStatus,
+        })
         .onConflictDoNothing({ target: commercialSales.saleId });
     } else {
       await db.delete(commercialSales).where(and(eq(commercialSales.saleId, updated.id), eq(commercialSales.companyId, session.companyId)));
@@ -139,6 +148,21 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       entityType: "sale",
       entityId: id,
     });
+  } else if (updated.isCommercial) {
+    // Any other edit to a commercial sale → write-through to its sheet row's
+    // snapshot, so the Commercial sheet keeps extracting the latest data
+    // (activation status above all) while the sale exists. One cheap UPDATE;
+    // a no-op if the link row is gone.
+    await db
+      .update(commercialSales)
+      .set({
+        customerName: updated.customerName,
+        orderDate: updated.orderDate,
+        product: updated.product,
+        activationStatus: updated.activationStatus,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(commercialSales.saleId, updated.id), eq(commercialSales.companyId, session.companyId)));
   }
 
   // Installation date changed → reconcile this sale's reminders to it.
