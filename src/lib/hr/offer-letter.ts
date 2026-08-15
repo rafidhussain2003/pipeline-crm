@@ -190,25 +190,35 @@ const CSS = `
   .toolbar .hint { color: #cbd5e1; }
 `;
 
-function shell(title: string, bodyHtml: string, filename: string): string {
+function shell(bodyHtml: string, filename: string): string {
+  // The document <title> doubles as the default "Save as PDF" filename in the
+  // browser's print dialog, so it is the intended PDF name from the start.
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)}</title>
+<title>${esc(filename)}</title>
 <style>${CSS}</style>
 </head>
 <body>
   <div class="toolbar no-print">
-    <button onclick="document.title=${JSON.stringify(filename)};window.print()">&#11015; Download PDF / Print</button>
-    <span class="hint">In the print dialog choose “Save as PDF” (Destination) to download, or pick a printer.</span>
+    <button id="print-btn" type="button">&#11015; Download PDF / Print</button>
+    <span class="hint">In the print dialog choose “Save as PDF” (Destination) to download, or pick a printer. Shortcut: Ctrl+P / Cmd+P.</span>
   </div>
   <div class="sheet">
     ${letterhead()}
     ${bodyHtml}
     ${footer()}
   </div>
+  <script>
+    // Bound as a real listener (not an inline handler) so it runs in every
+    // browser context; Ctrl+P works too, and the title is the PDF filename.
+    (function () {
+      var btn = document.getElementById("print-btn");
+      if (btn) btn.addEventListener("click", function () { window.focus(); window.print(); });
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -295,7 +305,7 @@ export function buildOfferLetterHtml(input: OfferLetterInput): string {
       </div>
     </div>
   </section>`;
-  return shell(`Offer Letter — ${v.name}`, body, `Offer Letter - ${v.name}`);
+  return shell(body, `Offer Letter - ${v.name}`);
 }
 
 // ── Document 2: Employment & Data Protection Agreement (two pages) ───────────
@@ -484,5 +494,5 @@ export function buildAgreementHtml(input: OfferLetterInput): string {
     </div>
   </section>`;
 
-  return shell(`Employment & Data Protection Agreement — ${v.name}`, page1 + page2, `Employment Agreement - ${v.name}`);
+  return shell(page1 + page2, `Employment Agreement - ${v.name}`);
 }

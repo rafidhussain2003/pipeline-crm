@@ -91,14 +91,20 @@ export default function OfferLetterPage() {
     }));
   }
 
-  // Open a finished document in its own tab (about:blank + document.write keeps
-  // it same-origin so the page's own Print button works).
+  // Open a finished document in its own tab as a real Blob URL. (Writing the
+  // HTML into an about:blank window gives it an opaque origin, and Chrome then
+  // silently ignores window.print() from that page — the Download PDF button
+  // did nothing. A blob: URL has a proper origin, so printing works and the
+  // print dialog offers "Save as PDF" with the document title as filename.)
   function openDoc(html: string): boolean {
-    const w = window.open("", "_blank");
-    if (!w) return false;
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
+    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    const w = window.open(url, "_blank");
+    if (!w) {
+      URL.revokeObjectURL(url);
+      return false;
+    }
+    // Release the blob once the tab has had time to load it.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
     return true;
   }
 
