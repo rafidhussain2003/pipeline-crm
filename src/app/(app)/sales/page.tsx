@@ -87,6 +87,11 @@ export default function SalesLedgerPage() {
   const [status, setStatus] = useState("");
   const [agentId, setAgentId] = useState("");
   const [product, setProduct] = useState("");
+  // Incentive date range — see sales recorded between these dates (weekly
+  // commission counting). Admin/manager may span months; agents range within
+  // the selected month.
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [showDeleted, setShowDeleted] = useState(false);
   const [visibleUntil, setVisibleUntil] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
@@ -108,6 +113,8 @@ export default function SalesLedgerPage() {
       if (status) p.set("status", status);
       if (agentId) p.set("agentId", agentId);
       if (product) p.set("product", product);
+      if (from) p.set("from", from);
+      if (to) p.set("to", to);
       if (showDeleted) p.set("deleted", "1");
       try {
         const res = await fetch(`/api/sales?${p}`);
@@ -126,7 +133,7 @@ export default function SalesLedgerPage() {
         setLoading(false);
       }
     },
-    [month, page, search, status, agentId, product, showDeleted]
+    [month, page, search, status, agentId, product, from, to, showDeleted]
   );
 
   // Debounced reload on any query change (search feels instant, no page reload).
@@ -147,7 +154,7 @@ export default function SalesLedgerPage() {
   // Reset page + load the admin visibility control when the month changes.
   useEffect(() => {
     setPage(1);
-  }, [month, search, status, agentId, product, showDeleted]);
+  }, [month, search, status, agentId, product, from, to, showDeleted]);
   useEffect(() => {
     if (!meta?.canManage) return;
     fetch(`/api/sales/period?month=${month}`)
@@ -316,6 +323,28 @@ export default function SalesLedgerPage() {
                 ))}
               </select>
             )}
+            {/* Incentive date range — count sales recorded From..To (weekly
+                commission). All totals, chips and rows reflect the range. */}
+            <label className="flex items-center gap-1.5 text-xs text-slate-500">
+              From
+              <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="rounded-md border border-slate-200 px-2 py-1.5 text-sm text-slate-700" />
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-slate-500">
+              To
+              <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="rounded-md border border-slate-200 px-2 py-1.5 text-sm text-slate-700" />
+            </label>
+            {(from || to) && (
+              <button
+                onClick={() => {
+                  setFrom("");
+                  setTo("");
+                }}
+                className="text-xs font-medium text-slate-500 hover:text-slate-700 bg-slate-100 rounded-md px-2 py-1.5"
+                title="Clear date range"
+              >
+                Clear dates
+              </button>
+            )}
             {canAdd && (
               <button onClick={addSale} className="text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-md px-3 py-2">
                 + Add sale
@@ -389,7 +418,8 @@ export default function SalesLedgerPage() {
                   // Agent field-lock (admin/manager are never locked): a text
                   // cell is editable only while EMPTY — once saved it's fixed;
                   // the two toggles are editable only on the posting day.
-                  // Activation Status stays editable for the life of the sale.
+                  // Activation Status AND Notes stay editable for the life of
+                  // the sale (the fields an agent keeps working).
                   const lockText = (v: string | null) => !meta?.canEdit || deleted || (!meta?.viewAll && filled(v));
                   const lockToggle = !meta?.canEdit || deleted || (!meta?.viewAll && !createdToday(r.createdAt));
                   return (
@@ -437,7 +467,10 @@ export default function SalesLedgerPage() {
                           {!STATUS_LABEL[r.activationStatus] && <option value={r.activationStatus}>{r.activationStatus}</option>}
                         </select>
                       </Td>
-                      <Td><Cell value={r.notes} disabled={lockText(r.notes)} onSave={(v) => patchCell(r.id, "notes", v)} /></Td>
+                      {/* Notes — the agent's working log: always editable on
+                          their own sales (like Activation Status), never
+                          subject to the write-once lock. */}
+                      <Td><Cell value={r.notes} disabled={!meta?.canEdit || deleted} onSave={(v) => patchCell(r.id, "notes", v)} /></Td>
                       {meta?.viewAll && <Td><span className="text-slate-800">{r.agentName || "—"}</span></Td>}
                       {meta?.canManage && (
                         <Td className="print:hidden text-right">

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { sales, users, commercialSales } from "@/db/schema";
-import { and, asc, count, eq, ilike, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, ilike, inArray, isNotNull, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isValidSaleMonth, isSaleStatus } from "@/lib/sales/types";
 import { classifyProduct, productCategoryLabel } from "@/lib/sales/products";
@@ -16,17 +16,19 @@ import { isUuid } from "@/lib/url";
 // that, so no sale is ever hidden or lost.
 const PAGE_SIZE = 500;
 
-// Status counts for a month/scope — one grouped scan. Used for the header
+// Status counts for a period/scope — one grouped scan. Used for the header
 // totals AND as the ENTIRE payload an agent gets once a month is past its
 // visibility cutoff (no rows, no PII ever leave the server in that case).
-async function monthSummary(companyId: string, month: string, agentId: string | null) {
+// `period` is the month scope and/or the incentive date range, so the chips
+// always total exactly what the sheet is showing.
+async function periodSummary(companyId: string, period: SQL[], agentId: string | null) {
   const rows = await db
     .select({ status: sales.activationStatus, value: count() })
     .from(sales)
     .where(
       and(
         eq(sales.companyId, companyId),
-        eq(sales.saleMonth, month),
+        ...period,
         isNull(sales.deletedAt),
         ...(agentId ? [eq(sales.agentId, agentId)] : [])
       )
@@ -52,7 +54,32 @@ export async function GET(req: NextRequest) {
   // An agent is hard-scoped to their own rows; admin/manager see everyone and
   // may narrow to one agent via ?agentId=.
   const ownerId = scope.viewAll ? (isUuid(p.get("agentId") || "") ? p.get("agentId")! : null) : session.userId;
-  const summary = await monthSummary(session.companyId, month, ownerId);
+
+  // Incentive date range (?from=&to=, yyyy-mm-dd, inclusive) — "sales made
+  // between these dates", keyed on createdAt (when the sale was RECORDED; the
+  // reliable timestamp — orderDate is free text and can't be range-filtered).
+  // Admin/manager: the range REPLACES the month scope, so a commission week
+  // spanning a month boundary just works. Agents: the range narrows WITHIN
+  // the selected month, so ranging into a past month can never bypass that
+  // month's visibility cutoff (canSeeDetail is resolved per month).
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const range: SQL[] = [];
+  const fromStr = p.get("from");
+  const toStr = p.get("to");
+  if (fromStr && DATE_RE.test(fromStr)) {
+    const d = new Date(`${fromStr}T00:00:00`);
+    if (!Number.isNaN(d.getTime())) range.push(gte(sales.createdAt, d));
+  }
+  if (toStr && DATE_RE.test(toStr)) {
+    const d = new Date(`${toStr}T00:00:00`);
+    if (!Number.isNaN(d.getTime())) {
+      d.setDate(d.getDate() + 1); // include all of the "to" day
+      range.push(lt(sales.createdAt, d));
+    }
+  }
+  const period: SQL[] = range.length > 0 && scope.viewAll ? [...range] : [eq(sales.saleMonth, month), ...range];
+
+  const summary = await periodSummary(session.companyId, period, ownerId);
 
   const meta = {
     month,
@@ -80,7 +107,7 @@ export async function GET(req: NextRequest) {
   // always the full picture. ONE grouped scan over the distinct product strings
   // (a small set), classified in JS; the exact strings per family are kept so
   // the product FILTER below matches the SAME rows the count reflects.
-  const productScope = [eq(sales.companyId, session.companyId), eq(sales.saleMonth, month), isNull(sales.deletedAt)];
+  const productScope = [eq(sales.companyId, session.companyId), ...period, isNull(sales.deletedAt)];
   if (!scope.viewAll) productScope.push(eq(sales.agentId, session.userId));
   else if (ownerId) productScope.push(eq(sales.agentId, ownerId));
   const productGroups = await db
@@ -106,7 +133,7 @@ export async function GET(req: NextRequest) {
     .map(([key, cnt]) => ({ key, label: productCategoryLabel(key), count: cnt }))
     .sort((a, b) => b.count - a.count);
 
-  const conditions = [eq(sales.companyId, session.companyId), eq(sales.saleMonth, month)];
+  const conditions = [eq(sales.companyId, session.companyId), ...period];
   // Trash bin (admin-only, showDeleted): ONLY the deleted rows — a real trash
   // view, not deleted rows mixed into the live sheet. Deleted sales stay
   // restorable for 30 days, then the cron purge removes them for good.

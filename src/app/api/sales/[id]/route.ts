@@ -43,12 +43,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // AGENT FIELD-LOCK — a sale is written once. While an agent is POSTING a
   // sale (the row starts blank and is filled cell by cell) they may FILL any
   // still-empty field; once a field holds a value it is locked for them —
-  // no rewriting the package, name, number, dates or notes, and no clearing
-  // (which would be rewrite-in-two-steps). The two toggles (autopay,
-  // commercial) belong to the posting session: editable by the agent only on
-  // the day the sale was created. Activation Status is the ONE thing an agent
-  // keeps updating for the life of the sale. Admin/manager (viewAll) are
-  // never locked — corrections go through them.
+  // no rewriting the package, name, number or dates, and no clearing (which
+  // would be rewrite-in-two-steps). The two toggles (autopay, commercial)
+  // belong to the posting session: editable by the agent only on the day the
+  // sale was created. Two fields stay editable for the life of the sale (on
+  // the agent's OWN rows, within the month cutoff): Activation Status and
+  // Notes — the working log they keep updating as they work the sale.
+  // Admin/manager (viewAll) are never locked — corrections go through them.
   const agentLocked = !scope.viewAll;
   const now = new Date();
   const createdToday =
@@ -61,7 +62,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const after: Record<string, unknown> = {};
   for (const key of EDITABLE_FIELDS) {
     if (!(key in body)) continue;
-    if (agentLocked && key !== "activationStatus") {
+    if (agentLocked && key !== "activationStatus" && key !== "notes") {
       if (key === "autopay" || key === "isCommercial") {
         if (!createdToday) {
           return NextResponse.json(
