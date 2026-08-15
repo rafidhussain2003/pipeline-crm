@@ -30,7 +30,10 @@ export async function getHRSettings(companyId: string) {
   return row!;
 }
 
-export async function updateHRSettings(companyId: string, patch: { employeeCodePrefix?: string; defaultEmploymentTypeId?: string | null }) {
+export async function updateHRSettings(
+  companyId: string,
+  patch: { employeeCodePrefix?: string; defaultEmploymentTypeId?: string | null; hrSignatoryName?: string | null; hrSignatoryTitle?: string | null }
+) {
   await ensureHRSetup(companyId);
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (patch.employeeCodePrefix !== undefined) {
@@ -39,6 +42,9 @@ export async function updateHRSettings(companyId: string, patch: { employeeCodeP
     set.employeeCodePrefix = p;
   }
   if (patch.defaultEmploymentTypeId !== undefined) set.defaultEmploymentTypeId = patch.defaultEmploymentTypeId || null;
+  // Company HR signatory — printed on offer letters + agreements.
+  if (patch.hrSignatoryName !== undefined) set.hrSignatoryName = patch.hrSignatoryName?.trim().slice(0, 100) || null;
+  if (patch.hrSignatoryTitle !== undefined) set.hrSignatoryTitle = patch.hrSignatoryTitle?.trim().slice(0, 100) || null;
   const [row] = await db.update(hrSettings).set(set).where(eq(hrSettings.companyId, companyId)).returning();
   return row;
 }

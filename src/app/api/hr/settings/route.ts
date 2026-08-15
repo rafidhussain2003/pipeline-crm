@@ -17,6 +17,8 @@ export async function PATCH(req: NextRequest) {
     const settings = await updateHRSettings(auth.session.companyId, {
       employeeCodePrefix: typeof b?.employeeCodePrefix === "string" ? b.employeeCodePrefix : undefined,
       defaultEmploymentTypeId: b?.defaultEmploymentTypeId !== undefined ? b.defaultEmploymentTypeId || null : undefined,
+      hrSignatoryName: b?.hrSignatoryName !== undefined ? (typeof b.hrSignatoryName === "string" ? b.hrSignatoryName : null) : undefined,
+      hrSignatoryTitle: b?.hrSignatoryTitle !== undefined ? (typeof b.hrSignatoryTitle === "string" ? b.hrSignatoryTitle : null) : undefined,
     });
     return NextResponse.json({ settings });
   } catch (err) {

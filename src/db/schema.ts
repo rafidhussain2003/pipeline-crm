@@ -3069,6 +3069,11 @@ export const hrSettings = pgTable("hr_settings", {
   employeeCodePrefix: varchar("employee_code_prefix", { length: 12 }).notNull().default("EMP"),
   nextEmployeeNumber: integer("next_employee_number").notNull().default(1),
   defaultEmploymentTypeId: uuid("default_employment_type_id").references(() => hrEmploymentTypes.id, { onDelete: "set null" }),
+  // Company HR signatory — the name/title printed as the signing HR on every
+  // generated Offer Letter and Employment & Data Protection Agreement. Set
+  // once by the admin in HR Settings.
+  hrSignatoryName: varchar("hr_signatory_name", { length: 100 }),
+  hrSignatoryTitle: varchar("hr_signatory_title", { length: 100 }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

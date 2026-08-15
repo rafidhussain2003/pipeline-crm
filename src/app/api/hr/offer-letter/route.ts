@@ -1,16 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireHR } from "@/lib/hr/guard";
-import { buildOfferLetterHtml, type OfferLetterInput } from "@/lib/hr/offer-letter";
+import { getHRSettings } from "@/lib/hr/settings";
+import { buildOfferLetterHtml, buildAgreementHtml, type OfferLetterInput } from "@/lib/hr/offer-letter";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 
-// Generate an Offer Letter + Employment & Data Protection Agreement as a
-// print-perfect HTML document (Download PDF = the browser's print-to-PDF).
-// Admin/HR only (hr:manage) — agents can never reach this. Stateless: nothing
-// is stored; the letter is generated fresh from the form each time and the
-// generation itself is audited.
+// Generate the Offer Letter AND the Employment & Data Protection Agreement as
+// two SEPARATE print-perfect HTML documents (Download PDF = the browser's
+// print-to-PDF of each). Admin/HR only (hr:manage) — agents can never reach
+// this. The HR signatory printed on both comes from HR Settings ("Company
+// HR"), never from the form. Stateless: nothing is stored; each generation
+// is audited.
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const dateOrEmpty = (v: unknown) => (DATE_RE.test(str(v, 10)) ? str(v, 10) : "");
+const intOr = (v: unknown, min: number, max: number) =>
+  v === "" || v === null || v === undefined || !Number.isFinite(Number(v)) ? undefined : Math.max(min, Math.min(max, Math.floor(Number(v))));
 
 export async function POST(req: NextRequest) {
   const auth = await requireHR("hr:manage");
@@ -22,51 +27,57 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const today = new Date().toISOString().slice(0, 10);
+  const settings = await getHRSettings(session.companyId);
 
   const input: OfferLetterInput = {
     candidateName: str(body.candidateName, 120),
+    fatherOrGuardianName: str(body.fatherOrGuardianName, 120) || undefined,
+    dateOfBirth: dateOrEmpty(body.dateOfBirth) || undefined,
     candidateAddress: str(body.candidateAddress, 400) || undefined,
     candidatePhone: str(body.candidatePhone, 40) || undefined,
     candidateEmail: str(body.candidateEmail, 120) || undefined,
+    idType: str(body.idType, 40) || undefined,
+    idNumber: str(body.idNumber, 60) || undefined,
     designation: str(body.designation, 100),
     department: str(body.department, 100) || undefined,
     employmentType: str(body.employmentType, 40) || undefined,
     monthlySalary: str(body.monthlySalary, 40),
     salaryCurrency: str(body.salaryCurrency, 10) || undefined,
     incentiveNote: str(body.incentiveNote, 200) || undefined,
-    joiningDate: DATE_RE.test(str(body.joiningDate, 10)) ? str(body.joiningDate, 10) : "",
+    joiningDate: dateOrEmpty(body.joiningDate),
     workLocation: str(body.workLocation, 200) || undefined,
     workingHours: str(body.workingHours, 200) || undefined,
-    probationMonths: Number.isFinite(Number(body.probationMonths)) && body.probationMonths !== "" && body.probationMonths !== null ? Math.max(0, Math.min(24, Math.floor(Number(body.probationMonths)))) : undefined,
-    noticeDays: Number.isFinite(Number(body.noticeDays)) && body.noticeDays !== "" && body.noticeDays !== null ? Math.max(0, Math.min(180, Math.floor(Number(body.noticeDays)))) : undefined,
+    probationMonths: intOr(body.probationMonths, 0, 24),
+    noticeDays: intOr(body.noticeDays, 0, 180),
     reportingTo: str(body.reportingTo, 100) || undefined,
-    letterDate: DATE_RE.test(str(body.letterDate, 10)) ? str(body.letterDate, 10) : today,
+    letterDate: dateOrEmpty(body.letterDate) || today,
     referenceNo: str(body.referenceNo, 60) || undefined,
-    hrSignatoryName: str(body.hrSignatoryName, 100) || undefined,
-    hrSignatoryTitle: str(body.hrSignatoryTitle, 100) || undefined,
+    // From HR Settings — the Company HR who signs.
+    hrSignatoryName: settings.hrSignatoryName || undefined,
+    hrSignatoryTitle: settings.hrSignatoryTitle || undefined,
   };
 
-  if (!input.candidateName) return NextResponse.json({ error: "Candidate name is required." }, { status: 400 });
+  if (!input.candidateName) return NextResponse.json({ error: "Agent's full name is required." }, { status: 400 });
   if (!input.designation) return NextResponse.json({ error: "Designation / position is required." }, { status: 400 });
   if (!input.monthlySalary) return NextResponse.json({ error: "Monthly salary is required." }, { status: 400 });
-  if (!input.joiningDate) return NextResponse.json({ error: "A valid joining date (yyyy-mm-dd) is required." }, { status: 400 });
+  if (!input.joiningDate) return NextResponse.json({ error: "A valid joining date is required." }, { status: 400 });
+  if (!settings.hrSignatoryName) {
+    return NextResponse.json(
+      { error: "Set the Company HR (signatory) name in HR → Settings first — it is printed on the offer letter and agreement." },
+      { status: 400 }
+    );
+  }
 
   await recordAudit({
     companyId: session.companyId,
     userId: session.userId,
     action: "hr.offer_letter_generated",
     entityType: "hr_offer_letter",
-    metadata: { candidateName: input.candidateName, designation: input.designation, joiningDate: input.joiningDate },
+    metadata: { candidateName: input.candidateName, designation: input.designation, joiningDate: input.joiningDate, hrSignatory: settings.hrSignatoryName },
   });
 
-  const html = buildOfferLetterHtml(input);
-  return new NextResponse(html, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-      // The document is a same-origin, no-script page rendered in the app's
-      // own iframe/tab; keep it from being framed elsewhere.
-      "X-Frame-Options": "SAMEORIGIN",
-    },
+  return NextResponse.json({
+    offerHtml: buildOfferLetterHtml(input),
+    agreementHtml: buildAgreementHtml(input),
   });
 }

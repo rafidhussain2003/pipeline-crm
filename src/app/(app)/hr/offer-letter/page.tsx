@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
-// HR — Offer Letter generator. Fill the form (or pick an existing employee to
-// prefill), click Generate: the complete Offer Letter + Employment & Data
-// Protection Agreement opens as a print-perfect A4 document in a new tab with
-// a "Download PDF / Print" button (the browser's print-to-PDF — real
-// letterhead, colours and the highlighted data-theft clause preserved). Print
-// it, get the employee's and HR's physical signatures. Admin/HR only.
+// HR — Offer Letter generator. Fill in the agent's details (or prefill from an
+// existing employee), click Generate: TWO print-ready A4 documents open in new
+// tabs — the Offer Letter and the Employment & Data Protection Agreement (two
+// pages) — each with its own "Download PDF / Print" button (the browser's
+// print-to-PDF: real letterhead, logo, colours and the highlighted data-theft
+// clause preserved). Print, collect the agent's and HR's signatures. The HR
+// signatory on both documents is the Company HR set in HR → Settings.
+// Admin/HR only.
 
 type Employee = {
   id: string;
@@ -22,9 +25,13 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 const EMPTY = {
   candidateName: "",
+  fatherOrGuardianName: "",
+  dateOfBirth: "",
   candidateAddress: "",
   candidatePhone: "",
   candidateEmail: "",
+  idType: "Aadhaar",
+  idNumber: "",
   designation: "Sales Agent",
   department: "",
   employmentType: "Full-time",
@@ -39,8 +46,6 @@ const EMPTY = {
   reportingTo: "",
   letterDate: today(),
   referenceNo: "",
-  hrSignatoryName: "",
-  hrSignatoryTitle: "Human Resources",
 };
 type Form = typeof EMPTY;
 
@@ -48,6 +53,7 @@ export default function OfferLetterPage() {
   const [form, setForm] = useState<Form>(EMPTY);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [prefillId, setPrefillId] = useState("");
+  const [hr, setHr] = useState<{ name: string | null; title: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [forbidden, setForbidden] = useState(false);
@@ -62,6 +68,10 @@ export default function OfferLetterPage() {
         return r.ok ? r.json() : { employees: [] };
       })
       .then((d) => setEmployees(d.employees || []))
+      .catch(() => {});
+    fetch("/api/hr/settings")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setHr({ name: d.settings?.hrSignatoryName ?? null, title: d.settings?.hrSignatoryTitle ?? null }))
       .catch(() => {});
   }, []);
 
@@ -81,6 +91,17 @@ export default function OfferLetterPage() {
     }));
   }
 
+  // Open a finished document in its own tab (about:blank + document.write keeps
+  // it same-origin so the page's own Print button works).
+  function openDoc(html: string): boolean {
+    const w = window.open("", "_blank");
+    if (!w) return false;
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    return true;
+  }
+
   async function generate(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -91,24 +112,18 @@ export default function OfferLetterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         setError(data.error || `Could not generate (${res.status})`);
         return;
       }
-      const html = await res.text();
-      // Open the finished document in its own tab (about:blank + document.write
-      // keeps it same-origin so the page's own Print button works).
-      const w = window.open("", "_blank");
-      if (!w) {
-        setError("Your browser blocked the new tab. Allow pop-ups for this site and try again.");
-        return;
+      const ok1 = openDoc(data.offerHtml);
+      const ok2 = openDoc(data.agreementHtml);
+      if (!ok1 || !ok2) {
+        setError("Your browser blocked one of the two document tabs. Allow pop-ups for this site and click Generate again.");
       }
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
     } catch {
-      setError("Could not generate the offer letter. Check your connection and try again.");
+      setError("Could not generate the documents. Check your connection and try again.");
     } finally {
       setBusy(false);
     }
@@ -154,10 +169,31 @@ export default function OfferLetterPage() {
       <div className="mb-5">
         <h1 className="text-xl font-semibold text-slate-900">Offer Letter</h1>
         <p className="text-sm text-slate-500 mt-0.5">
-          Generate an Offer of Employment together with the Employment &amp; Data Protection Agreement on the company
-          letterhead. It opens as a print-ready document — click <b>Download PDF / Print</b> there, then collect the
-          employee’s and HR’s signatures.
+          Generates two documents on the company letterhead — the <b>Offer of Employment</b> and the{" "}
+          <b>Employment &amp; Data Protection Agreement</b> (2 pages). Each opens print-ready with a{" "}
+          <b>Download PDF / Print</b> button; print both and collect the agent’s and HR’s signatures.
         </p>
+      </div>
+
+      {/* Company HR (signatory) — from HR Settings */}
+      <div className={`rounded-lg border px-4 py-3 mb-5 text-sm ${hr?.name ? "bg-white border-slate-200" : "bg-amber-50 border-amber-200"}`}>
+        {hr?.name ? (
+          <>
+            <span className="text-slate-500">Signed by (Company HR): </span>
+            <b className="text-slate-900">{hr.name}</b>
+            {hr.title && <span className="text-slate-500"> — {hr.title}</span>}
+            <span className="text-slate-400"> · </span>
+            <Link href="/hr/settings" className="text-blue-600 hover:underline">change in HR Settings</Link>
+          </>
+        ) : (
+          <>
+            <b className="text-amber-900">Company HR not set.</b>{" "}
+            <span className="text-amber-800">
+              The HR name is printed on both documents — set it in{" "}
+              <Link href="/hr/settings" className="underline font-medium">HR → Settings → Company HR (signatory)</Link> first.
+            </span>
+          </>
+        )}
       </div>
 
       <form onSubmit={generate} className="space-y-5">
@@ -175,13 +211,28 @@ export default function OfferLetterPage() {
           </select>
         </div>
 
-        {/* Candidate */}
+        {/* Agent details */}
         <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <div className="text-sm font-semibold text-slate-800 mb-3">Candidate</div>
+          <div className="text-sm font-semibold text-slate-800 mb-3">Agent details</div>
           <div className="grid sm:grid-cols-2 gap-3">
             {field("candidateName", "Full name", { required: true, placeholder: "e.g. Rahul Sharma" })}
+            {field("fatherOrGuardianName", "Father’s / Guardian’s name", { placeholder: "e.g. Suresh Sharma" })}
+            {field("dateOfBirth", "Date of birth", { type: "date" })}
             {field("candidatePhone", "Phone", { placeholder: "+91 …" })}
             {field("candidateEmail", "Email", { type: "email" })}
+            <div className="grid grid-cols-[120px_1fr] gap-2">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">ID type</label>
+                <select value={form.idType} onChange={set("idType")} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+                  {["Aadhaar", "PAN", "Passport", "Voter ID", "Driving Licence"].map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {field("idNumber", "ID number", { placeholder: "e.g. XXXX-XXXX-XXXX" })}
+            </div>
             {field("candidateAddress", "Address", { textarea: true, span2: true, placeholder: "House / street, area, city, state – PIN" })}
           </div>
         </div>
@@ -203,7 +254,7 @@ export default function OfferLetterPage() {
               </select>
             </div>
             {field("joiningDate", "Date of joining", { type: "date", required: true })}
-            <div className="grid grid-cols-[90px_1fr] gap-2 sm:col-span-1">
+            <div className="grid grid-cols-[90px_1fr] gap-2">
               {field("salaryCurrency", "Currency", { placeholder: "INR" })}
               {field("monthlySalary", "Monthly salary (gross)", { required: true, placeholder: "e.g. 25,000" })}
             </div>
@@ -222,8 +273,6 @@ export default function OfferLetterPage() {
           <div className="grid sm:grid-cols-2 gap-3">
             {field("letterDate", "Letter date", { type: "date" })}
             {field("referenceNo", "Reference no.", { placeholder: "e.g. BSO/HR/2026/014" })}
-            {field("hrSignatoryName", "Signed by (name)", { placeholder: "e.g. HR Manager’s name" })}
-            {field("hrSignatoryTitle", "Signatory title", { placeholder: "Human Resources" })}
           </div>
         </div>
 
@@ -239,9 +288,9 @@ export default function OfferLetterPage() {
             disabled={busy}
             className="text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-md px-4 py-2.5 disabled:opacity-40"
           >
-            {busy ? "Generating…" : "Generate offer letter"}
+            {busy ? "Generating…" : "Generate offer letter + agreement"}
           </button>
-          <span className="text-xs text-slate-400">Opens in a new tab with a Download PDF / Print button.</span>
+          <span className="text-xs text-slate-400">Opens two tabs (offer letter, agreement), each with Download PDF / Print.</span>
         </div>
       </form>
     </div>
