@@ -55,6 +55,7 @@ export default function OfferLetterPage() {
   const [prefillId, setPrefillId] = useState("");
   const [hr, setHr] = useState<{ name: string | null; title: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
   const [error, setError] = useState("");
   const [forbidden, setForbidden] = useState(false);
 
@@ -91,21 +92,33 @@ export default function OfferLetterPage() {
     }));
   }
 
-  // Open a finished document in its own tab as a real Blob URL. (Writing the
-  // HTML into an about:blank window gives it an opaque origin, and Chrome then
-  // silently ignores window.print() from that page — the Download PDF button
-  // did nothing. A blob: URL has a proper origin, so printing works and the
-  // print dialog offers "Save as PDF" with the document title as filename.)
-  function openDoc(html: string): boolean {
-    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-    const w = window.open(url, "_blank");
-    if (!w) {
-      URL.revokeObjectURL(url);
-      return false;
+  // Fetch one document as a real PDF file and save it straight to the computer
+  // (a Blob + a hidden <a download>) — no new tab, no print dialog. The server
+  // names the file ("Offer Letter - <name>.pdf" / "Employment Agreement -
+  // <name>.pdf") via Content-Disposition; we mirror that name here.
+  async function downloadPdf(doc: "offer" | "agreement"): Promise<string | null> {
+    const res = await fetch(`/api/hr/offer-letter?doc=${doc}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return data.error || `Could not generate (${res.status})`;
     }
-    // Release the blob once the tab has had time to load it.
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    return true;
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = /filename="([^"]+)"/.exec(cd);
+    const filename = m?.[1] || (doc === "offer" ? "Offer Letter.pdf" : "Employment Agreement.pdf");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    return null;
   }
 
   async function generate(e: React.FormEvent) {
@@ -113,21 +126,19 @@ export default function OfferLetterPage() {
     setError("");
     setBusy(true);
     try {
-      const res = await fetch("/api/hr/offer-letter", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(data.error || `Could not generate (${res.status})`);
+      // Both PDFs, one after the other (two files land in Downloads).
+      const err1 = await downloadPdf("offer");
+      if (err1) {
+        setError(err1);
         return;
       }
-      const ok1 = openDoc(data.offerHtml);
-      const ok2 = openDoc(data.agreementHtml);
-      if (!ok1 || !ok2) {
-        setError("Your browser blocked one of the two document tabs. Allow pop-ups for this site and click Generate again.");
+      const err2 = await downloadPdf("agreement");
+      if (err2) {
+        setError(err2);
+        return;
       }
+      setDone(true);
+      setTimeout(() => setDone(false), 6000);
     } catch {
       setError("Could not generate the documents. Check your connection and try again.");
     } finally {
@@ -175,9 +186,9 @@ export default function OfferLetterPage() {
       <div className="mb-5">
         <h1 className="text-xl font-semibold text-slate-900">Offer Letter</h1>
         <p className="text-sm text-slate-500 mt-0.5">
-          Generates two documents on the company letterhead — the <b>Offer of Employment</b> and the{" "}
-          <b>Employment &amp; Data Protection Agreement</b> (2 pages). Each opens print-ready with a{" "}
-          <b>Download PDF / Print</b> button; print both and collect the agent’s and HR’s signatures.
+          Downloads two PDF files on the company letterhead — the <b>Offer of Employment</b> (1 page) and the{" "}
+          <b>Employment &amp; Data Protection Agreement</b> (2 pages) — straight to your computer. Print them whenever
+          you like and collect the agent’s and HR’s signatures.
         </p>
       </div>
 
@@ -287,6 +298,12 @@ export default function OfferLetterPage() {
             {error}
           </div>
         )}
+        {done && (
+          <div role="status" className="text-sm bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-md px-3 py-2">
+            Downloaded: <b>Offer Letter - {form.candidateName}.pdf</b> and <b>Employment Agreement - {form.candidateName}.pdf</b>{" "}
+            — check your Downloads folder.
+          </div>
+        )}
 
         <div className="flex items-center gap-3">
           <button
@@ -294,9 +311,9 @@ export default function OfferLetterPage() {
             disabled={busy}
             className="text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-md px-4 py-2.5 disabled:opacity-40"
           >
-            {busy ? "Generating…" : "Generate offer letter + agreement"}
+            {busy ? "Generating PDFs…" : "Download offer letter + agreement (PDF)"}
           </button>
-          <span className="text-xs text-slate-400">Opens two tabs (offer letter, agreement), each with Download PDF / Print.</span>
+          <span className="text-xs text-slate-400">Saves two PDF files to your computer.</span>
         </div>
       </form>
     </div>

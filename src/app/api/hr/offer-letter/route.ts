@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireHR } from "@/lib/hr/guard";
 import { getHRSettings } from "@/lib/hr/settings";
-import { buildOfferLetterHtml, buildAgreementHtml, type OfferLetterInput } from "@/lib/hr/offer-letter";
+import type { OfferLetterInput } from "@/lib/hr/offer-letter";
+import { renderOfferLetterPdf, renderAgreementPdf } from "@/lib/hr/offer-letter-pdf";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 
-// Generate the Offer Letter AND the Employment & Data Protection Agreement as
-// two SEPARATE print-perfect HTML documents (Download PDF = the browser's
-// print-to-PDF of each). Admin/HR only (hr:manage) — agents can never reach
-// this. The HR signatory printed on both comes from HR Settings ("Company
-// HR"), never from the form. Stateless: nothing is stored; each generation
-// is audited.
+// Generate the Offer Letter or the Employment & Data Protection Agreement as a
+// REAL PDF file (rendered server-side with pdf-lib) — the response is
+// application/pdf with a Content-Disposition attachment, so the browser saves
+// it straight to the computer: no print dialog, no web page, no browser
+// headers/footers. ?doc=offer | agreement. Admin/HR only (hr:manage). The HR
+// signatory printed on both comes from HR Settings ("Company HR"), never from
+// the form. Stateless: nothing is stored; each generation is audited.
 const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const dateOrEmpty = (v: unknown) => (DATE_RE.test(str(v, 10)) ? str(v, 10) : "");
 const intOr = (v: unknown, min: number, max: number) =>
   v === "" || v === null || v === undefined || !Number.isFinite(Number(v)) ? undefined : Math.max(min, Math.min(max, Math.floor(Number(v))));
+// A safe filename: letters, digits, space, dash, underscore, dot.
+const fileSafe = (s: string) => s.replace(/[^A-Za-z0-9 ._-]+/g, "").trim().slice(0, 80) || "document";
 
 export async function POST(req: NextRequest) {
   const auth = await requireHR("hr:manage");
@@ -25,6 +29,7 @@ export async function POST(req: NextRequest) {
   const rl = checkPolicy("api.authenticated", session.userId);
   if (!rl.allowed) return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
 
+  const doc = req.nextUrl.searchParams.get("doc") === "agreement" ? "agreement" : "offer";
   const body = await req.json().catch(() => ({}));
   const today = new Date().toISOString().slice(0, 10);
   const settings = await getHRSettings(session.companyId);
@@ -68,16 +73,25 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Audit once per generation (the page requests both documents; audit the
+  // offer letter as the generation event, the agreement as its companion).
   await recordAudit({
     companyId: session.companyId,
     userId: session.userId,
-    action: "hr.offer_letter_generated",
+    action: doc === "offer" ? "hr.offer_letter_generated" : "hr.employment_agreement_generated",
     entityType: "hr_offer_letter",
     metadata: { candidateName: input.candidateName, designation: input.designation, joiningDate: input.joiningDate, hrSignatory: settings.hrSignatoryName },
   });
 
-  return NextResponse.json({
-    offerHtml: buildOfferLetterHtml(input),
-    agreementHtml: buildAgreementHtml(input),
+  const bytes = doc === "offer" ? await renderOfferLetterPdf(input) : await renderAgreementPdf(input);
+  const filename = doc === "offer" ? `Offer Letter - ${fileSafe(input.candidateName)}.pdf` : `Employment Agreement - ${fileSafe(input.candidateName)}.pdf`;
+
+  return new NextResponse(Buffer.from(bytes), {
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Length": String(bytes.byteLength),
+      "Cache-Control": "no-store",
+    },
   });
 }
