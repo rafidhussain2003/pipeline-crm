@@ -18,6 +18,7 @@ const HR_ITEMS: { href: string; label: string; managerOnly?: boolean }[] = [
   { href: "/hr/designations", label: "Designations", managerOnly: true },
   { href: "/hr/employment-types", label: "Employment Types", managerOnly: true },
   { href: "/hr/documents", label: "Documents", managerOnly: true },
+  { href: "/hr/offer-letter", label: "Offer Letter", managerOnly: true },
   { href: "/hr/org-chart", label: "Organization Chart", managerOnly: true },
   { href: "/hr/reports", label: "Reports", managerOnly: true },
   { href: "/hr/settings", label: "Settings", managerOnly: true },
