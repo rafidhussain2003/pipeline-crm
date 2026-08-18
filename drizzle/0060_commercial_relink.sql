@@ -1,0 +1,12 @@
+-- Commercial Sales — link every UNLINKED commercial row to its matching live
+-- main-ledger sale so ledger status changes reach the Commercial sheet.
+--
+-- The repair itself is done in application code (linkOrphanCommercialRows in
+-- src/lib/sales/commercial-link.ts): it runs on every Commercial Sales page
+-- load (a no-op once every row is linked) and links each unlinked row to its
+-- unambiguous match by customer name + product. Doing it in code — the same
+-- Drizzle queries the running app uses — is safer than a hand-written data
+-- migration for a boot-time migrator with no rollback. This migration is a
+-- versioned marker only (no schema change), so the journal records that the
+-- link model is in effect from here on.
+SELECT 1;

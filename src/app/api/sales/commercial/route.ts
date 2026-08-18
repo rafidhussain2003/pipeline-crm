@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { commercialSales } from "@/db/schema";
 import { asc, eq } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
+import { linkOrphanCommercialRows } from "@/lib/sales/commercial-link";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 
@@ -29,6 +30,11 @@ export async function GET() {
   const auth = await requireCommercialAdmin();
   if (!auth.ok) return auth.response;
   const { session } = auth;
+
+  // Self-heal: link any unlinked commercial row to its matching live sale so
+  // status changes on the main ledger always reach this sheet. A no-op once
+  // every row is linked (one small indexed read), so it's safe on every load.
+  await linkOrphanCommercialRows(session.companyId);
 
   const rows = await db
     .select({

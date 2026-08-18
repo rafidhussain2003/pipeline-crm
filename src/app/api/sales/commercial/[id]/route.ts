@@ -4,6 +4,7 @@ import { commercialSales, sales } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isSaleStatus } from "@/lib/sales/types";
+import { linkOrphanCommercialRows } from "@/lib/sales/commercial-link";
 import { recordAudit } from "@/lib/audit";
 import { isUuid } from "@/lib/url";
 
@@ -62,6 +63,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     .where(and(eq(commercialSales.id, id), eq(commercialSales.companyId, session.companyId)))
     .returning();
   if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // A standalone row whose customer/product was just typed may now match a
+  // live sale on the main ledger — link it right away so it starts following
+  // that sale's status (instead of staying a disconnected copy).
+  if (!row.saleId && ("customerName" in set || "product" in set)) {
+    await linkOrphanCommercialRows(session.companyId);
+  }
 
   await recordAudit({
     companyId: session.companyId,

@@ -149,11 +149,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       entityType: "sale",
       entityId: id,
     });
-  } else if (updated.isCommercial) {
-    // Any other edit to a commercial sale → write-through to its sheet row's
-    // snapshot, so the Commercial sheet keeps extracting the latest data
-    // (activation status above all) while the sale exists. One cheap UPDATE;
-    // a no-op if the link row is gone.
+  } else {
+    // Any other edit → write-through to the sale's Commercial-sheet row (if it
+    // has one), so the Commercial sheet keeps extracting the latest data —
+    // activation status above all. Keyed on the LINK ROW existing, not on the
+    // isCommercial flag: a commercial row can be linked to a sale whose flag
+    // is off (e.g. linked by the admin from the Commercial sheet), and it
+    // must still follow the sale. One cheap UPDATE; a no-op if there is no
+    // linked row.
     await db
       .update(commercialSales)
       .set({
