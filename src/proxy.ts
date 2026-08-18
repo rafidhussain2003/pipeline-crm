@@ -161,6 +161,16 @@ export async function proxy(req: NextRequest) {
       return NextResponse.redirect(new URL("/finance", getPublicAppUrl()));
     }
   }
+  // HR Employee — an HR-workspace-only account, same discipline: every
+  // non-HR app PAGE redirects to /hr as if it didn't exist (their /profile
+  // stays reachable; it's outside this matcher). APIs enforce their own
+  // guards — /api/hr/* grants them hr:view + hr:manage; every other module's
+  // API 403s an hr_employee.
+  if (session?.role === "hr_employee" && !isApiRoute) {
+    if (pathname !== "/hr" && !pathname.startsWith("/hr/")) {
+      return NextResponse.redirect(new URL("/hr", getPublicAppUrl()));
+    }
+  }
 
   // Platform infrastructure gate — the Facebook/Meta backend + developer
   // surfaces belong to the Platform Owner, never a tenant company. A tenant's

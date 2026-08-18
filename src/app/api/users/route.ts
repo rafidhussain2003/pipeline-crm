@@ -36,7 +36,14 @@ export async function GET(req: NextRequest) {
 
   // Finance Employees are managed in their own Finance → Team console and must
   // never appear among the CRM's people — exclude them from this roster.
-  const conditions = [eq(users.companyId, session.companyId), isNull(users.deletedAt), ne(users.role, "finance_employee")];
+  const conditions = [
+    eq(users.companyId, session.companyId),
+    isNull(users.deletedAt),
+    // Finance and HR employees are back-office accounts managed in their own
+    // workspaces (Finance → Team, HR → HR Team) — never part of the CRM roster.
+    ne(users.role, "finance_employee"),
+    ne(users.role, "hr_employee"),
+  ];
   if (status === "active") conditions.push(eq(users.active, true));
   if (status === "disabled") conditions.push(eq(users.active, false));
   // "owner" isn't a stored role — filtered client-side below via isOwner,

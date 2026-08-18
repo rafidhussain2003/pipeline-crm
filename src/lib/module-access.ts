@@ -59,6 +59,9 @@ const ROLE_DEFAULTS: Record<Role, Record<ModuleKey, boolean>> = {
   // Finance Employee: the Finance workspace ONLY — never CRM or any other
   // back-office module. This is what keeps them out of the CRM entirely.
   finance_employee: { crm: false, hr: false, finance: true, attendance: false, payroll: false, workflow: false },
+  // HR Employee: the HR workspace ONLY — never CRM, Finance, Attendance,
+  // Payroll or Workflow. Same isolation discipline as finance_employee.
+  hr_employee: { crm: false, hr: true, finance: false, attendance: false, payroll: false, workflow: false },
 };
 
 export type ModuleAccessMap = Record<ModuleKey, boolean>;

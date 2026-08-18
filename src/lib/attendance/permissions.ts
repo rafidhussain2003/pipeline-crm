@@ -25,6 +25,8 @@ const ATTENDANCE_ROLE_PERMISSIONS: Record<Role, ReadonlySet<AttendancePermission
   lead_distributor: new Set(),
   // Finance Employee: no Attendance access.
   finance_employee: new Set(),
+  // HR Employee: no Attendance access (HR workspace only).
+  hr_employee: new Set(),
 };
 
 export function hasAttendancePermission(role: Role, permission: AttendancePermission): boolean {

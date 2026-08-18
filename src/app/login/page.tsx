@@ -58,9 +58,11 @@ export default function LoginPage() {
           ? "/manager/fresh-leads"
           : data.role === "finance_employee"
             ? "/finance"
-            : // agent / manager / admin land on the daily dashboard; it forwards
-              // to /leads for companies without the Sales Ledger module.
-              "/home"
+            : data.role === "hr_employee"
+              ? "/hr"
+              : // agent / manager / admin land on the daily dashboard; it forwards
+                // to /leads for companies without the Sales Ledger module.
+                "/home"
     );
     router.refresh();
   }

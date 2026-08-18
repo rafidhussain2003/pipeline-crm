@@ -9,8 +9,10 @@ import PresenceHeartbeat from "./PresenceHeartbeat";
 // feature profile has "finance" AND the role can at least view it. A single
 // collapsible group so ten entries don't drown the core CRM nav.
 // HR module navigation (Phase 22). `managerOnly` items are hidden from
-// employees — an employee's HR world is only their own profile.
-const HR_ITEMS: { href: string; label: string; managerOnly?: boolean }[] = [
+// employees — an employee's HR world is only their own profile. `adminOnly`
+// items (the HR team roster, module settings) are for the company admin only —
+// an HR Employee runs HR but doesn't manage who runs HR.
+const HR_ITEMS: { href: string; label: string; managerOnly?: boolean; adminOnly?: boolean }[] = [
   { href: "/hr", label: "Dashboard", managerOnly: true },
   { href: "/hr/employees", label: "Employees", managerOnly: true },
   { href: "/hr/me", label: "My Profile" },
@@ -21,7 +23,8 @@ const HR_ITEMS: { href: string; label: string; managerOnly?: boolean }[] = [
   { href: "/hr/offer-letter", label: "Offer Letter", managerOnly: true },
   { href: "/hr/org-chart", label: "Organization Chart", managerOnly: true },
   { href: "/hr/reports", label: "Reports", managerOnly: true },
-  { href: "/hr/settings", label: "Settings", managerOnly: true },
+  { href: "/hr/team", label: "HR Team", managerOnly: true, adminOnly: true },
+  { href: "/hr/settings", label: "Settings", managerOnly: true, adminOnly: true },
 ];
 
 // Payroll module navigation (Phase 21). `managerOnly` items are hidden from
@@ -205,7 +208,10 @@ export default function Sidebar({
   const [payrollOpen, setPayrollOpen] = useState(inPayroll);
   const showPayroll = !!modules?.payroll;
   const payrollManager = role === "admin" || role === "manager";
-  const hrManager = role === "admin" || role === "manager";
+  // hr_employee runs the HR workspace at manager level (everything except the
+  // admin-only items: HR Team roster + module Settings).
+  const hrManager = role === "admin" || role === "manager" || role === "hr_employee";
+  const hrItemVisible = (item: (typeof HR_ITEMS)[number]) => (hrManager || !item.managerOnly) && (role === "admin" || !item.adminOnly);
   const showHr = !!modules?.hr;
   const showFinance = !!modules?.finance;
 
@@ -366,7 +372,29 @@ export default function Sidebar({
             })}
           </>
         )}
-        {role !== "lead_distributor" && role !== "finance_employee" && (
+        {/* HR Employee — a DEDICATED HR-only navigation (no CRM, no Back-to-CRM),
+            the same shape as the Finance Employee shell. Rendered regardless of
+            path so they are always workspace-locked. */}
+        {role === "hr_employee" && (
+          <>
+            <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-rose-700">HR Workspace</div>
+            {HR_ITEMS.filter(hrItemVisible).map((item) => {
+              const active = pathname === item.href;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                    active ? "bg-rose-50 text-rose-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </>
+        )}
+        {role !== "lead_distributor" && role !== "finance_employee" && role !== "hr_employee" && (
           <>
         {/* Enterprise Workspaces: inside /hr or /finance the sidebar IS that
             workspace's navigation. The CRM nav below renders only outside. */}
@@ -378,7 +406,7 @@ export default function Sidebar({
               </Link>
             )}
             <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-rose-700">HR Workspace</div>
-            {HR_ITEMS.filter((item) => hrManager || !item.managerOnly).map((item) => {
+            {HR_ITEMS.filter(hrItemVisible).map((item) => {
               const active = pathname === item.href;
               return (
                 <Link
@@ -638,11 +666,11 @@ export default function Sidebar({
           </>
         )}
       </nav>
-      {/* Presence is a lead-taking concept — super_admin and finance employees
-          don't participate, so no heartbeat/status is tracked for them. */}
-      {role !== "super_admin" && role !== "finance_employee" && <PresenceHeartbeat />}
+      {/* Presence is a lead-taking concept — super_admin, finance and HR
+          employees don't participate, so no heartbeat/status is tracked for them. */}
+      {role !== "super_admin" && role !== "finance_employee" && role !== "hr_employee" && <PresenceHeartbeat />}
       <div className="px-3 py-4 border-t border-slate-100 space-y-1">
-        {role !== "super_admin" && role !== "agent" && role !== "lead_distributor" && role !== "finance_employee" && (
+        {role !== "super_admin" && role !== "agent" && role !== "lead_distributor" && role !== "finance_employee" && role !== "hr_employee" && (
           <Link
             href="/subscription"
             className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${

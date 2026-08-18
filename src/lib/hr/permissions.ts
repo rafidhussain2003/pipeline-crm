@@ -22,6 +22,10 @@ const HR_ROLE_PERMISSIONS: Record<Role, ReadonlySet<HRPermission>> = {
   lead_distributor: new Set(),
   // Finance Employee: no HR access.
   finance_employee: new Set(),
+  // HR Employee: runs the HR workspace — employees, offer letters & agreements,
+  // documents, departments, designations, org chart, reports (view + manage).
+  // Module SETTINGS (hr:admin) stay with the company admin.
+  hr_employee: new Set(["hr:view_own", "hr:view", "hr:manage"]),
 };
 
 export function hasHRPermission(role: Role, permission: HRPermission): boolean {

@@ -74,6 +74,9 @@ const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   // permission whatsoever; everything it can do lives in the Finance capability
   // model (see lib/finance/permissions.ts), granted per person by the admin.
   finance_employee: new Set(),
+  // HR Employee: no CRM permissions at all — their entire world is the HR
+  // workspace, governed by lib/hr/permissions.ts.
+  hr_employee: new Set(),
 };
 
 export function hasPermission(role: Role, permission: Permission): boolean {
