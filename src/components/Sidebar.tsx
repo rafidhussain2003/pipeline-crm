@@ -130,7 +130,11 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   // agent records their own sales; admins/managers see the company master.
   // Optional module: hidden unless the Platform Owner enabled sales_ledger.
   // (This nav block already excludes finance_employee / lead_distributor.)
-  { href: "/sales", label: "Sales Ledger", feature: "sales_ledger", roles: ["admin", "manager", "agent"] },
+  // Per the owner: the MASTER sales sheet is admin + backend_agent only —
+  // managers have no Sales Ledger access. Agents keep their own-rows view.
+  { href: "/sales", label: "Sales Ledger", feature: "sales_ledger", roles: ["admin", "agent"] },
+  // Backend Agents — the admin's roster of Sales-Ledger-only employees.
+  { href: "/sales/team", label: "Backend Agents", feature: "sales_ledger", roles: ["admin"] },
   // Commercial Sales — the admin-only sheet of sales marked "Commercial" on
   // the main ledger. Strictly admin (the API 403s everyone else too).
   { href: "/sales/commercial", label: "Commercial Sales", feature: "sales_ledger", roles: ["admin"] },
@@ -372,6 +376,21 @@ export default function Sidebar({
             })}
           </>
         )}
+        {/* Backend Agent — a DEDICATED Sales-Ledger-only navigation (no CRM),
+            same shape as the Finance/HR employee shells. */}
+        {role === "backend_agent" && (
+          <>
+            <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700">Sales Workspace</div>
+            <Link
+              href="/sales"
+              className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                pathname === "/sales" ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              Sales Ledger
+            </Link>
+          </>
+        )}
         {/* HR Employee — a DEDICATED HR-only navigation (no CRM, no Back-to-CRM),
             the same shape as the Finance Employee shell. Rendered regardless of
             path so they are always workspace-locked. */}
@@ -394,7 +413,7 @@ export default function Sidebar({
             })}
           </>
         )}
-        {role !== "lead_distributor" && role !== "finance_employee" && role !== "hr_employee" && (
+        {role !== "lead_distributor" && role !== "finance_employee" && role !== "hr_employee" && role !== "backend_agent" && (
           <>
         {/* Enterprise Workspaces: inside /hr or /finance the sidebar IS that
             workspace's navigation. The CRM nav below renders only outside. */}
@@ -668,9 +687,9 @@ export default function Sidebar({
       </nav>
       {/* Presence is a lead-taking concept — super_admin, finance and HR
           employees don't participate, so no heartbeat/status is tracked for them. */}
-      {role !== "super_admin" && role !== "finance_employee" && role !== "hr_employee" && <PresenceHeartbeat />}
+      {role !== "super_admin" && role !== "finance_employee" && role !== "hr_employee" && role !== "backend_agent" && <PresenceHeartbeat />}
       <div className="px-3 py-4 border-t border-slate-100 space-y-1">
-        {role !== "super_admin" && role !== "agent" && role !== "lead_distributor" && role !== "finance_employee" && role !== "hr_employee" && (
+        {role !== "super_admin" && role !== "agent" && role !== "lead_distributor" && role !== "finance_employee" && role !== "hr_employee" && role !== "backend_agent" && (
           <Link
             href="/subscription"
             className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${

@@ -171,6 +171,15 @@ export async function proxy(req: NextRequest) {
       return NextResponse.redirect(new URL("/hr", getPublicAppUrl()));
     }
   }
+  // Backend Agent — a Sales-Ledger-only account, same discipline: every
+  // non-Sales app PAGE redirects to /sales (their /profile stays reachable;
+  // it's outside this matcher). APIs enforce their own guards — requireSales
+  // grants them the master sheet; every other module's API 403s them.
+  if (session?.role === "backend_agent" && !isApiRoute) {
+    if (pathname !== "/sales" && !pathname.startsWith("/sales/")) {
+      return NextResponse.redirect(new URL("/sales", getPublicAppUrl()));
+    }
+  }
 
   // Platform infrastructure gate — the Facebook/Meta backend + developer
   // surfaces belong to the Platform Owner, never a tenant company. A tenant's

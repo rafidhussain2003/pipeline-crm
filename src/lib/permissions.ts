@@ -80,6 +80,9 @@ const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   // HR Record: a personnel-record-only account (HR added an employee by email).
   // Not a user of the system at all — no permissions anywhere.
   hr_record: new Set(),
+  // Backend Agent: a Sales-Ledger-only employee — no CRM/company permissions;
+  // everything they can do lives in the Sales Ledger scope (lib/sales/access.ts).
+  backend_agent: new Set(),
 };
 
 export function hasPermission(role: Role, permission: Permission): boolean {

@@ -28,6 +28,8 @@ const HR_ROLE_PERMISSIONS: Record<Role, ReadonlySet<HRPermission>> = {
   hr_employee: new Set(["hr:view_own", "hr:view", "hr:manage"]),
   // HR Record: a personnel record, not an HR user — no HR access.
   hr_record: new Set(),
+  // Backend Agent: Sales Ledger only — no HR access.
+  backend_agent: new Set(),
 };
 
 export function hasHRPermission(role: Role, permission: HRPermission): boolean {

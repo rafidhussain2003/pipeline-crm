@@ -29,7 +29,7 @@ import { relations, sql } from "drizzle-orm";
 // sees all company leads with customer PII hidden and distributes them to
 // agents. NOT an admin. See src/lib/leads/pii.ts for the masking and
 // src/lib/permissions.ts for its (narrow) permission set.
-export const roleEnum = pgEnum("role", ["super_admin", "admin", "manager", "agent", "lead_distributor", "finance_employee", "hr_employee", "hr_record"]);
+export const roleEnum = pgEnum("role", ["super_admin", "admin", "manager", "agent", "lead_distributor", "finance_employee", "hr_employee", "hr_record", "backend_agent"]);
 // Tiers are a configurable priority band, not hardcoded logic — the ORDER/
 // weight of each tier comes from assignment_rules + the AI tier factor's
 // config, never from the enum values themselves. "senior"/"supervisor" (Phase

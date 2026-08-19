@@ -45,6 +45,8 @@ export async function GET(req: NextRequest) {
     ne(users.role, "hr_employee"),
     // HR personnel records (HR added someone by email) are not CRM people either.
     ne(users.role, "hr_record"),
+    // Backend Agents live in Sales Ledger → Backend Agents, not the CRM roster.
+    ne(users.role, "backend_agent"),
   ];
   if (status === "active") conditions.push(eq(users.active, true));
   if (status === "disabled") conditions.push(eq(users.active, false));

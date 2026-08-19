@@ -26,9 +26,13 @@ type SaleRow = {
 export default async function HomePage() {
   const session = await getSession();
   if (!session || !session.companyId) redirect("/login");
-  const viewAll = session.role === "admin" || session.role === "manager";
-  // The dashboard is a Sales-Ledger surface. A company without the module keeps
-  // its existing landing (/leads) — no behavior change for them.
+  // The dashboard is a Sales-Ledger surface. Managers have no Sales Ledger
+  // access (the master sheet is admin + backend_agent only), so they keep the
+  // classic /leads landing; backend agents are workspace-locked to /sales by
+  // the proxy and never reach this page.
+  if (session.role === "manager") redirect("/leads");
+  const viewAll = session.role === "admin";
+  // A company without the module keeps its existing landing (/leads) too.
   if (!(await featureService.isEnabled(session.companyId, "sales_ledger"))) redirect("/leads");
 
   const today0 = new Date();

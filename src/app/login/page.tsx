@@ -60,6 +60,8 @@ export default function LoginPage() {
             ? "/finance"
             : data.role === "hr_employee"
               ? "/hr"
+              : data.role === "backend_agent"
+                ? "/sales"
               : // agent / manager / admin land on the daily dashboard; it forwards
                 // to /leads for companies without the Sales Ledger module.
                 "/home"

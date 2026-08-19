@@ -64,6 +64,9 @@ const ROLE_DEFAULTS: Record<Role, Record<ModuleKey, boolean>> = {
   hr_employee: { crm: false, hr: true, finance: false, attendance: false, payroll: false, workflow: false },
   // HR Record: a personnel record created by HR — not a user of any workspace.
   hr_record: { crm: false, hr: false, finance: false, attendance: false, payroll: false, workflow: false },
+  // Backend Agent: the Sales Ledger ONLY (gated by role in lib/sales/access.ts,
+  // not by a module key) — never CRM or any back-office workspace.
+  backend_agent: { crm: false, hr: false, finance: false, attendance: false, payroll: false, workflow: false },
 };
 
 export type ModuleAccessMap = Record<ModuleKey, boolean>;

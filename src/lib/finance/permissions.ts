@@ -126,6 +126,7 @@ const FINANCE_ROLE_PERMISSIONS: Record<Role, ReadonlySet<FinancePermission>> = {
   finance_employee: new Set(), // per-user — resolved via resolveFinanceCapabilities
   hr_employee: new Set(), // HR workspace only — no Finance access
   hr_record: new Set(), // personnel record only — no access
+  backend_agent: new Set(), // Sales Ledger only — no Finance access
 };
 
 export function hasFinancePermission(role: Role, permission: FinancePermission): boolean {
