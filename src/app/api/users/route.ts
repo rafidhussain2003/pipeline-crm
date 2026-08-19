@@ -43,6 +43,8 @@ export async function GET(req: NextRequest) {
     // workspaces (Finance → Team, HR → HR Team) — never part of the CRM roster.
     ne(users.role, "finance_employee"),
     ne(users.role, "hr_employee"),
+    // HR personnel records (HR added someone by email) are not CRM people either.
+    ne(users.role, "hr_record"),
   ];
   if (status === "active") conditions.push(eq(users.active, true));
   if (status === "disabled") conditions.push(eq(users.active, false));
@@ -132,8 +134,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
-  if (existing) {
+  // An existing email is normally a conflict — EXCEPT an HR personnel record
+  // (role hr_record) of THIS company: HR added this person in the HR workspace
+  // first. Creating the agent then UPGRADES that record into the real, active
+  // CRM account (same user id, so the HR profile stays linked to them) rather
+  // than failing or creating a duplicate person.
+  const [existing] = await db
+    .select({ id: users.id, role: users.role, companyId: users.companyId, deletedAt: users.deletedAt })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+  const upgradeHrRecord = !!existing && existing.role === "hr_record" && existing.companyId === session.companyId && !existing.deletedAt;
+  if (existing && !upgradeHrRecord) {
     return NextResponse.json({ error: "That email is already in use." }, { status: 409 });
   }
 
@@ -149,22 +161,38 @@ export async function POST(req: NextRequest) {
   }
 
   const passwordHash = await hashPassword(password);
-  const [user] = await db
-    .insert(users)
-    .values({
-      companyId: session.companyId,
-      name: name.trim(),
-      email,
-      phone: phone || null,
-      passwordHash,
-      role: requestedRole,
-      tier: tier || "1",
-      active: true,
-      // Phase 13: an invited user's temporary password can never become
-      // permanent — they're forced to set their own on first login.
-      mustChangePassword: true,
-    })
-    .returning();
+  const [user] = upgradeHrRecord
+    ? await db
+        .update(users)
+        .set({
+          name: name.trim(),
+          phone: phone || null,
+          passwordHash,
+          role: requestedRole,
+          tier: tier || "1",
+          active: true,
+          mustChangePassword: true,
+          // Drop the record's all-off module map so the role's own CRM defaults apply.
+          moduleAccess: null,
+        })
+        .where(eq(users.id, existing!.id))
+        .returning()
+    : await db
+        .insert(users)
+        .values({
+          companyId: session.companyId,
+          name: name.trim(),
+          email,
+          phone: phone || null,
+          passwordHash,
+          role: requestedRole,
+          tier: tier || "1",
+          active: true,
+          // Phase 13: an invited user's temporary password can never become
+          // permanent — they're forced to set their own on first login.
+          mustChangePassword: true,
+        })
+        .returning();
 
   await recordAudit({
     companyId: session.companyId,
@@ -173,6 +201,7 @@ export async function POST(req: NextRequest) {
     entityType: "user",
     entityId: user.id,
     after: { name: user.name, email: user.email, phone: user.phone, role: user.role, tier: user.tier },
+    metadata: upgradeHrRecord ? { upgradedFromHrRecord: true } : undefined,
   });
 
   await eventBus.emit("user.created", { userId: user.id, companyId: session.companyId, role: user.role });

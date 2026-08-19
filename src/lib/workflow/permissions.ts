@@ -25,6 +25,7 @@ const WORKFLOW_ROLE_PERMISSIONS: Record<Role, ReadonlySet<WorkflowPermission>> =
   finance_employee: new Set(),
   // HR Employee: no Workflow access.
   hr_employee: new Set(),
+  hr_record: new Set(),
 };
 
 export function hasWorkflowPermission(role: Role, permission: WorkflowPermission): boolean {

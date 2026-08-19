@@ -442,6 +442,20 @@
 			"when": 1786459579437,
 			"tag": "0062_commercial_admin_overrides",
 			"breakpoints": true
+		},
+		{
+			"idx": 63,
+			"version": "7",
+			"when": 1786545979437,
+			"tag": "0063_hr_record_role",
+			"breakpoints": true
+		},
+		{
+			"idx": 64,
+			"version": "7",
+			"when": 1786632379437,
+			"tag": "0064_hr_record_backfill",
+			"breakpoints": true
 		}
 	]
 }

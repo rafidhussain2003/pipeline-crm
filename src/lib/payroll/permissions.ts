@@ -28,6 +28,7 @@ const PAYROLL_ROLE_PERMISSIONS: Record<Role, ReadonlySet<PayrollPermission>> = {
   finance_employee: new Set(),
   // HR Employee: no Payroll access (HR workspace only).
   hr_employee: new Set(),
+  hr_record: new Set(),
 };
 
 export function hasPayrollPermission(role: Role, permission: PayrollPermission): boolean {

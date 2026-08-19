@@ -77,6 +77,9 @@ const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   // HR Employee: no CRM permissions at all — their entire world is the HR
   // workspace, governed by lib/hr/permissions.ts.
   hr_employee: new Set(),
+  // HR Record: a personnel-record-only account (HR added an employee by email).
+  // Not a user of the system at all — no permissions anywhere.
+  hr_record: new Set(),
 };
 
 export function hasPermission(role: Role, permission: Permission): boolean {

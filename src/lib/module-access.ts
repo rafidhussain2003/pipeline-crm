@@ -62,6 +62,8 @@ const ROLE_DEFAULTS: Record<Role, Record<ModuleKey, boolean>> = {
   // HR Employee: the HR workspace ONLY — never CRM, Finance, Attendance,
   // Payroll or Workflow. Same isolation discipline as finance_employee.
   hr_employee: { crm: false, hr: true, finance: false, attendance: false, payroll: false, workflow: false },
+  // HR Record: a personnel record created by HR — not a user of any workspace.
+  hr_record: { crm: false, hr: false, finance: false, attendance: false, payroll: false, workflow: false },
 };
 
 export type ModuleAccessMap = Record<ModuleKey, boolean>;

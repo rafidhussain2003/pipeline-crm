@@ -26,6 +26,8 @@ const HR_ROLE_PERMISSIONS: Record<Role, ReadonlySet<HRPermission>> = {
   // documents, departments, designations, org chart, reports (view + manage).
   // Module SETTINGS (hr:admin) stay with the company admin.
   hr_employee: new Set(["hr:view_own", "hr:view", "hr:manage"]),
+  // HR Record: a personnel record, not an HR user — no HR access.
+  hr_record: new Set(),
 };
 
 export function hasHRPermission(role: Role, permission: HRPermission): boolean {

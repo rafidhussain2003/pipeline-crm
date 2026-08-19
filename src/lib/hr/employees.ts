@@ -8,7 +8,6 @@ import { and, asc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { isSchemaLagError } from "@/lib/db-errors";
 import { hashPassword } from "@/lib/auth";
-import { checkAgentQuota } from "@/lib/tenant/limits";
 import { EMPLOYMENT_STATUSES, HRError, isValidDateStr, type EmploymentStatus } from "./types";
 import { assertCompanyUser, isDup } from "./departments";
 import { ensureHRSetup, getHRSettings, nextEmployeeCode } from "./settings";
@@ -47,9 +46,14 @@ async function resolveEmployeeUser(
     return { userId: existing.id, createdLogin: false };
   }
 
-  const quota = await checkAgentQuota(companyId);
-  if (!quota.allowed) throw new HRError(quota.warning || "Agent limit reached for this plan.", 402);
-
+  // HR WORKSPACE ISOLATION. A person HR adds by email is an HR personnel
+  // RECORD, not a CRM agent: role "hr_record" — a role that no CRM surface
+  // (agents roster, lead assignment, tiers, analytics, presence, operations,
+  // agent quota) ever selects, and that holds no permission anywhere, so the
+  // account cannot be used to sign in to the CRM. HR's records therefore never
+  // leak into the main Ziplod. (If the company later wants this person as a
+  // real agent, the admin creates them in Settings → Agents; that user then
+  // links to this HR profile by email.) No agent quota is consumed.
   const passwordHash = await hashPassword(crypto.randomBytes(24).toString("hex"));
   const [created] = await db
     .insert(users)
@@ -58,14 +62,13 @@ async function resolveEmployeeUser(
       name: displayName || normalized,
       email: normalized,
       passwordHash,
-      role: "agent",
-      tier: "1",
-      active: true,
+      role: "hr_record",
+      active: false, // a record, not a login — never active
       mustChangePassword: true,
-      moduleAccess: { crm: false },
+      moduleAccess: { crm: false, hr: false, finance: false, attendance: false, payroll: false, workflow: false },
     })
     .returning({ id: users.id });
-  return { userId: created.id, createdLogin: true };
+  return { userId: created.id, createdLogin: false };
 }
 
 export async function getEmployee(companyId: string, id: string) {

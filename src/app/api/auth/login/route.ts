@@ -106,7 +106,9 @@ export async function POST(req: NextRequest) {
       }
     };
 
-    if (!user || !user.active || user.deletedAt) {
+    // hr_record = a personnel record HR created (never a login) — rejected
+    // exactly like an inactive account, whatever its active flag says.
+    if (!user || !user.active || user.deletedAt || user.role === "hr_record") {
       await noteFailure(null, null, !user ? "unknown email" : "inactive account");
       await recordAudit({
         companyId: null,
