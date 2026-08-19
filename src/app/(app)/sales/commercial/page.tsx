@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-// Commercial Sales — the ADMIN-ONLY, INDEPENDENT sheet. A sale marked
-// "Commercial" on the main ledger is copied here ONCE; from then on this sheet
-// owns its rows — the admin edits Customer / Date / Product / Status / Add ons
-// / Funds Status right here, and nothing on the main ledger ever changes or
-// removes them (only Remove here does). Own compact format (per the reference
-// sheet), Excel-style grid, green header.
+// Commercial Sales — the ADMIN-ONLY sheet, ONE-WAY from the main ledger: it
+// pulls every "Commercial" sale and its status from the main ledger, but
+// nothing the admin changes here (status, add-ons, funds, anything) ever goes
+// back to the main ledger, and an admin edit here is never overwritten by the
+// pull. Own compact format (per the reference sheet), Excel-style grid, green
+// header.
 
 const STATUSES = [
   { value: "active", label: "Active" },
@@ -113,7 +113,7 @@ export default function CommercialSalesPage() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Commercial Sales</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Every sale marked “Commercial” on the main ledger is copied here once; from then on this sheet is independent — edit status and details here. Admin-only.
+            Pulls every “Commercial” sale and its status from the main ledger (one-way). Anything you change here stays here — it never goes back to the main ledger, and it won’t be overwritten. Admin-only.
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -3,16 +3,19 @@ import { db } from "@/db";
 import { commercialSales } from "@/db/schema";
 import { asc, eq } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
-import { linkOrphanCommercialRows } from "@/lib/sales/commercial-link";
+import { linkOrphanCommercialRows, pullCommercialFromLedger } from "@/lib/sales/commercial-link";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 
-// Commercial Sales — the ADMIN-ONLY, INDEPENDENT sheet. A sale marked
-// "Commercial" on the main ledger is COPIED here once; from then on every row
-// owns its data (customer/date/product/status/add-ons/funds) and is edited
-// HERE. Nothing on the main ledger — later edits, unmarking, trash, purge —
-// ever changes or removes a row here; only an explicit Remove on this sheet
-// does. Ordered oldest first (append-at-bottom, like the main sheet).
+// Commercial Sales — the ADMIN-ONLY sheet, ONE-WAY from the main ledger.
+// A sale marked "Commercial" is caught here, and its customer / date /
+// product / ACTIVATION STATUS keep being PULLED from the main ledger on every
+// load — so an agent's status update reaches this sheet. Nothing ever flows
+// back: edits the admin makes here (status, add-ons, funds, anything) stay
+// here, never touch the main ledger (agents can see that), and are never
+// overwritten by the pull (adminOverrides). Trash/purge/unmark on the main
+// ledger never removes a row here — only Remove on this sheet does.
+// Ordered oldest first (append-at-bottom, like the main sheet).
 async function requireCommercialAdmin() {
   const auth = await requireSales();
   if (!auth.ok) return auth;
@@ -31,10 +34,13 @@ export async function GET() {
   if (!auth.ok) return auth.response;
   const { session } = auth;
 
-  // Self-heal: link any unlinked commercial row to its matching live sale so
-  // status changes on the main ledger always reach this sheet. A no-op once
-  // every row is linked (one small indexed read), so it's safe on every load.
+  // Self-heal: attach any unlinked commercial row to its matching live sale
+  // (a no-op once every row is linked), then PULL the latest data/status from
+  // the main ledger into every linked row — one-way, main → here — skipping
+  // any field the admin has edited on this sheet (adminOverrides). Nothing
+  // flows back to the main ledger.
   await linkOrphanCommercialRows(session.companyId);
+  await pullCommercialFromLedger(session.companyId);
 
   const rows = await db
     .select({

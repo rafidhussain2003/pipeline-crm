@@ -14,7 +14,7 @@
 // the admin created stays visible for them to Remove.
 import { db } from "@/db";
 import { commercialSales, sales } from "@/db/schema";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 const norm = (s: string | null | undefined) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -80,4 +80,62 @@ export async function linkOrphanCommercialRows(companyId: string): Promise<numbe
     linked++;
   }
   return linked;
+}
+
+// ── One-way PULL: main ledger → Commercial sheet ───────────────────────────
+// Refresh every LINKED commercial row from its live main-ledger sale —
+// customer / order date / product / activation status — so an agent's status
+// update on the main ledger shows up here. Strictly one-directional: this
+// reads the sale and writes the commercial row; nothing ever flows back to
+// the main ledger (agents can see that sheet).
+//
+// The admin's own edits on the Commercial sheet win: any field listed in the
+// row's adminOverrides is skipped, so the pull never overwrites what the admin
+// set here — while every field they haven't touched keeps following the sale.
+// Called on every Commercial Sales page load; one read of the linked sales +
+// only the rows whose values actually differ are written.
+export async function pullCommercialFromLedger(companyId: string): Promise<number> {
+  const rows = await db
+    .select({
+      id: commercialSales.id,
+      saleId: commercialSales.saleId,
+      customerName: commercialSales.customerName,
+      orderDate: commercialSales.orderDate,
+      product: commercialSales.product,
+      activationStatus: commercialSales.activationStatus,
+      adminOverrides: commercialSales.adminOverrides,
+    })
+    .from(commercialSales)
+    .where(and(eq(commercialSales.companyId, companyId), sql`${commercialSales.saleId} is not null`));
+  if (rows.length === 0) return 0;
+
+  const saleIds = rows.map((r) => r.saleId as string);
+  const live = await db
+    .select({
+      id: sales.id,
+      customerName: sales.customerName,
+      orderDate: sales.orderDate,
+      product: sales.product,
+      activationStatus: sales.activationStatus,
+    })
+    .from(sales)
+    .where(and(eq(sales.companyId, companyId), inArray(sales.id, saleIds), isNull(sales.deletedAt)));
+  const liveById = new Map(live.map((s) => [s.id, s]));
+
+  let pulled = 0;
+  for (const r of rows) {
+    const s = liveById.get(r.saleId as string);
+    if (!s) continue; // sale trashed/purged → the row keeps its last-known data
+    const overrides = new Set(Array.isArray(r.adminOverrides) ? r.adminOverrides : []);
+    const set: Record<string, unknown> = {};
+    if (!overrides.has("customerName") && (s.customerName ?? null) !== (r.customerName ?? null)) set.customerName = s.customerName;
+    if (!overrides.has("orderDate") && (s.orderDate ?? null) !== (r.orderDate ?? null)) set.orderDate = s.orderDate;
+    if (!overrides.has("product") && (s.product ?? null) !== (r.product ?? null)) set.product = s.product;
+    if (!overrides.has("activationStatus") && s.activationStatus !== r.activationStatus) set.activationStatus = s.activationStatus;
+    if (Object.keys(set).length === 0) continue;
+    set.updatedAt = new Date();
+    await db.update(commercialSales).set(set).where(eq(commercialSales.id, r.id));
+    pulled++;
+  }
+  return pulled;
 }

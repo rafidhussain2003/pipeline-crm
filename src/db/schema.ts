@@ -3428,12 +3428,19 @@ export const commercialSales = pgTable(
     // only ever caught once.
     saleId: uuid("sale_id").references(() => sales.id, { onDelete: "set null" }),
     // Every row's OWN data. Standalone rows: typed by the admin. Linked rows:
-    // snapshotted at catch time and write-through-synced from the sale while
-    // it exists — so the row still shows everything after the sale is gone.
+    // copied at catch time and then PULLED from the main-ledger sale (one-way,
+    // main → here) while the sale exists — so an agent's status update reaches
+    // this sheet — and kept after the sale is gone.
     customerName: varchar("customer_name", { length: 200 }),
     orderDate: varchar("order_date", { length: 120 }),
     product: varchar("product", { length: 160 }),
     activationStatus: varchar("activation_status", { length: 20 }).notNull().default("pending"),
+    // Fields the ADMIN has edited on this sheet (e.g. ["activationStatus"]).
+    // The one-way pull from the main ledger skips these, so an admin's own
+    // edit here is never overwritten by the next pull — while everything the
+    // admin hasn't touched keeps following the sale. Nothing ever flows back
+    // to the main ledger (agents can see that).
+    adminOverrides: jsonb("admin_overrides").$type<string[]>(),
     // Admin-only columns of the commercial format ("Elite", "STANDARD", "Plus" /
     // "6-12", "6-19" in the reference sheet). Free text.
     addOns: varchar("add_ons", { length: 160 }),

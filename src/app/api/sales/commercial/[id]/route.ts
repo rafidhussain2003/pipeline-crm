@@ -22,10 +22,11 @@ async function requireCommercialAdmin() {
   return auth;
 }
 
-// Edit a commercial row. The Commercial sheet is INDEPENDENT of the main
-// ledger: every row owns its data, so customer / date / product / status and
-// Add ons / Funds Status are all editable here, on every row, and nothing on
-// the main ledger ever overwrites them.
+// Edit a commercial row. Every field is editable here on every row. The sheet
+// PULLS customer/date/product/status from the main ledger (one-way), but an
+// admin edit here wins: it is recorded as an admin override and the pull skips
+// that field from then on. Nothing the admin changes here is ever written to
+// the main ledger (agents can see that sheet).
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireCommercialAdmin();
   if (!auth.ok) return auth.response;
@@ -34,7 +35,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const [row] = await db
-    .select({ id: commercialSales.id, saleId: commercialSales.saleId })
+    .select({ id: commercialSales.id, saleId: commercialSales.saleId, adminOverrides: commercialSales.adminOverrides })
     .from(commercialSales)
     .where(and(eq(commercialSales.id, id), eq(commercialSales.companyId, session.companyId)))
     .limit(1);
@@ -44,9 +45,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const set: Record<string, unknown> = {};
   if ("addOns" in body) set.addOns = body.addOns === null ? null : String(body.addOns).slice(0, 160);
   if ("fundsStatus" in body) set.fundsStatus = body.fundsStatus === null ? null : String(body.fundsStatus).slice(0, 60);
-  // Every row owns its data — the Commercial sheet is independent of the main
-  // ledger, so customer/date/product/status are editable HERE on every row
-  // (caught or standalone alike), and nothing on the main ledger overwrites them.
+  // Pulled fields — editable here on every row (caught or standalone).
   if ("customerName" in body) set.customerName = body.customerName === null ? null : String(body.customerName).slice(0, 200);
   if ("orderDate" in body) set.orderDate = body.orderDate === null ? null : String(body.orderDate).slice(0, 120);
   if ("product" in body) set.product = body.product === null ? null : String(body.product).slice(0, 160);
@@ -55,6 +54,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     set.activationStatus = body.activationStatus;
   }
   if (Object.keys(set).length === 0) return NextResponse.json({ error: "No editable fields provided." }, { status: 400 });
+  // The admin edited a field that the one-way pull from the main ledger would
+  // otherwise refresh → record it as an admin override so the pull leaves it
+  // alone from now on. (Add ons / Funds Status are never pulled, so they
+  // don't need recording.) One-way: nothing here is written to the main ledger.
+  const PULLED = ["customerName", "orderDate", "product", "activationStatus"] as const;
+  const touched = PULLED.filter((k) => k in set);
+  if (touched.length > 0) {
+    const prev = Array.isArray(row.adminOverrides) ? row.adminOverrides : [];
+    set.adminOverrides = Array.from(new Set([...prev, ...touched]));
+  }
   set.updatedAt = new Date();
 
   const [updated] = await db

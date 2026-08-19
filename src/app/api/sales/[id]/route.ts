@@ -121,13 +121,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   await recordAudit({ companyId: session.companyId, userId: session.userId, action: "sale.updated", entityType: "sale", entityId: id, before, after });
 
   // Marking a sale "Commercial" CATCHES it into the admin-only Commercial Sales
-  // sheet: a one-time COPY of the sale's data into a commercial row. From that
-  // moment the Commercial sheet is fully INDEPENDENT — it owns its rows, the
-  // admin edits status/data there, and nothing on the main ledger (later
-  // edits, unmarking, trash, purge) ever changes or removes them. The only way
-  // a row leaves the Commercial sheet is its own Remove button. A sale is
-  // caught at most once (sale_id unique); unmarking and re-marking does not
-  // create a duplicate.
+  // sheet (a commercial row linked to this sale). From then on that sheet
+  // PULLS the sale's customer/date/product/status one-way (main → Commercial)
+  // whenever it loads — so an agent's status update reaches it — but nothing
+  // the admin does on the Commercial sheet ever flows back here, and
+  // unmarking / trash / purge never removes a row there (only its own Remove
+  // does). A sale is caught at most once (sale_id unique).
   if ("isCommercial" in set && updated.isCommercial !== row.isCommercial) {
     if (updated.isCommercial) {
       await db
