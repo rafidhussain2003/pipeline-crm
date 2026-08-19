@@ -116,7 +116,7 @@ function financeItemsFor(role: string, financeCaps: string[]): typeof FINANCE_IT
 // entry carries a roles gate that excludes "agent". Hiding is presentation
 // only; the proxy redirects agents off these PAGES and the APIs enforce
 // their own permissions, so a typed URL gets the same answer.
-const navItems: { href: string; label: string; feature?: string; roles?: string[] }[] = [
+const navItems: { href: string; label: string; feature?: string; roles?: string[]; newTab?: boolean }[] = [
   // Daily dashboard (Sales Ledger V2) — today's/upcoming installations + due
   // reminder calls. Only shown when the Sales Ledger module is enabled.
   { href: "/home", label: "Home", feature: "sales_ledger", roles: ["admin", "manager", "agent"] },
@@ -142,6 +142,11 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   // a manager/admin sees the whole company's. Scope is decided server-side.
   // Also hidden from the Lead Distribution Manager (a customer-PII surface).
   { href: "/callbacks", label: "Callbacks", feature: "callback_engine", roles: ["admin", "manager", "agent"] },
+  // Secure Notepad — opens in its OWN TAB (newTab) so the agent keeps it open
+  // while working leads. Sensitive data (SSN/DOB/cards) is auto-protected
+  // server-side; the company admin can switch the feature off in Company
+  // Settings (the API enforces it).
+  { href: "/notepad", label: "Secure Notepad", roles: ["admin", "manager", "agent"], newTab: true },
   { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration", roles: ["admin", "manager"] },
   // Facebook Forms alias management — admin only (the page shows real Meta form
   // names, which managers/agents must never see).
@@ -475,11 +480,13 @@ export default function Sidebar({
               <Link
                 key={item.href}
                 href={item.href}
+                target={item.newTab ? "_blank" : undefined}
                 className={`block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                   active ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                 }`}
               >
                 {item.label}
+                {item.newTab && <span className="text-slate-300"> ↗</span>}
               </Link>
             );
           })}

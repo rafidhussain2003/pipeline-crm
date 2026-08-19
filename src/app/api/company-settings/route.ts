@@ -35,6 +35,9 @@ export async function GET() {
       managerPrivacyMode: companies.managerPrivacyMode,
       // Agent lead-visibility limit — null when the company uses the default.
       agentLeadVisibilityLimit: companies.agentLeadVisibilityLimit,
+      // Secure Notepad — company toggle + when the Friday cleanup last ran.
+      notepadEnabled: companies.notepadEnabled,
+      notepadCleanupAt: companies.notepadCleanupAt,
       // Whether agents are required to set a login PIN.
       requireAgentPin: companies.requireAgentPin,
     })
@@ -75,6 +78,8 @@ export async function PATCH(req: NextRequest) {
   // loop above (false would become null). Admin-only (this whole PATCH is
   // gated by company_settings:edit) — managers/distributors can never reach it.
   if (typeof body.managerPrivacyMode === "boolean") allowed.managerPrivacyMode = body.managerPrivacyMode;
+  // Secure Notepad toggle — admin-only (this whole PATCH is company_settings:edit).
+  if (typeof body.notepadEnabled === "boolean") allowed.notepadEnabled = body.notepadEnabled;
   // Require agents to set a login PIN — admin-only (same gate).
   if (typeof body.requireAgentPin === "boolean") allowed.requireAgentPin = body.requireAgentPin;
   // Agent lead-visibility limit — admin-only (same gate). null resets to the

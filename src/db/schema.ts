@@ -194,6 +194,10 @@ export const companies = pgTable(
     // deleted; admins/managers are never capped. Enforced at the database in
     // src/lib/leads/access.ts.
     agentLeadVisibilityLimit: integer("agent_lead_visibility_limit"),
+    // Secure Notepad — company toggle (admin-controlled, Profile > Company)
+    // and the last time the Friday cleanup swept this company's notes.
+    notepadEnabled: boolean("notepad_enabled").notNull().default(true),
+    notepadCleanupAt: timestamp("notepad_cleanup_at"),
     // Sales Ledger V2 — when ON, agents must set a 4-digit login PIN (admins and
     // managers may still opt in individually). Admin-controlled (Profile >
     // Company). Default OFF: the PIN stays purely opt-in for everyone.
@@ -3453,3 +3457,35 @@ export const commercialSales = pgTable(
     companyIdx: index("commercial_sales_company_idx").on(t.companyId, t.createdAt),
   })
 );
+
+// Secure Notepad — ONE private note per user (Windows-Notepad simplicity).
+// The content is ALWAYS the SANITIZED text: sensitive values (SSN, DOB,
+// payment cards) are detected server-side and replaced with dated
+// placeholders BEFORE storage — the original values are never written
+// anywhere (not in this row, not in logs, not in audit). The weekly Friday
+// cleanup removes expired placeholders, leaving normal text untouched.
+// version = optimistic concurrency for autosave races. Strictly tenant- and
+// user-scoped: there is no note id in any URL (no IDOR surface) — the API
+// addresses "my note" only.
+export const notepadNotes = pgTable(
+  "notepad_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    content: text("content").notNull().default(""),
+    version: integer("version").notNull().default(1),
+    // Lifetime count of protected values (numbers only, never the values).
+    redactionCount: integer("redaction_count").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    userUniq: uniqueIndex("notepad_notes_company_user_uniq").on(t.companyId, t.userId),
+  })
+);
+
