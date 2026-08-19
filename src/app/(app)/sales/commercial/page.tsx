@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-// Commercial Sales — the ADMIN-ONLY sheet of sales marked "Commercial" on the
-// main ledger. Own compact format (per the reference sheet): Customer name,
-// Date, Product sold, Status, Add ons, Funds Status. Customer/Date/Product/
-// Status edit the LIVE sale (admin can change anything); Add ons and Funds
-// Status are this sheet's own columns. Excel-style grid, green header.
+// Commercial Sales — the ADMIN-ONLY, INDEPENDENT sheet. A sale marked
+// "Commercial" on the main ledger is copied here ONCE; from then on this sheet
+// owns its rows — the admin edits Customer / Date / Product / Status / Add ons
+// / Funds Status right here, and nothing on the main ledger ever changes or
+// removes them (only Remove here does). Own compact format (per the reference
+// sheet), Excel-style grid, green header.
 
 const STATUSES = [
   { value: "active", label: "Active" },
@@ -24,8 +25,8 @@ const STATUS_ROW: Record<string, string> = {
 
 type Row = {
   id: string;
-  // Set = caught from the main ledger (live-linked); null = standalone row the
-  // admin added directly on this sheet (never on the main ledger).
+  // Set = originally caught from a main-ledger sale; null = added directly on
+  // this sheet. Either way the row is independent and owns its data.
   saleId: string | null;
   addOns: string | null;
   fundsStatus: string | null;
@@ -64,8 +65,7 @@ export default function CommercialSalesPage() {
     load();
   }, [load]);
 
-  // Sheet-own fields (addOns/fundsStatus, and ALL data fields on a standalone
-  // row) → commercial row PATCH.
+  // Every field on every row → the commercial row's own PATCH.
   async function patchCommercial(id: string, field: string, value: unknown) {
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
     const res = await fetch(`/api/sales/commercial/${id}`, {
@@ -76,18 +76,12 @@ export default function CommercialSalesPage() {
     if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Could not save");
     load({ silent: true });
   }
-  // Data fields on a row: a LINKED row edits the live sale on the main ledger
-  // (this sheet reflects it); a STANDALONE row edits its own columns here.
+  // Every field on every row edits the COMMERCIAL row itself — this sheet is
+  // independent of the main ledger. (It used to route linked rows' edits to
+  // the main-ledger sale and then re-read the sale's status, which snapped an
+  // admin's status change back within a second.)
   async function patchData(r: Row, field: string, value: unknown) {
-    if (!r.saleId) return patchCommercial(r.id, field, value);
-    setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, [field]: value } : x)));
-    const res = await fetch(`/api/sales/${r.saleId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ [field]: value }),
-    });
-    if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Could not save");
-    load({ silent: true });
+    return patchCommercial(r.id, field, value);
   }
   // Admin adds a commercial sale directly ON this sheet: a STANDALONE row that
   // exists only here — the main Sales Ledger never sees it. Appears at the
@@ -101,14 +95,10 @@ export default function CommercialSalesPage() {
     load({ silent: true });
   }
 
-  // Remove from this sheet. Linked row: unmarks the sale (the sale itself
-  // stays on the main ledger). Standalone row: deleted for good — it never
-  // existed anywhere else.
+  // Remove a row from this sheet. The main Sales Ledger is never affected —
+  // this sheet is independent; Remove is the ONLY way a row leaves it.
   async function removeRow(r: Row) {
-    const msg = r.saleId
-      ? "Remove this sale from Commercial Sales? The sale stays on the main ledger — it is only unmarked."
-      : "Delete this commercial sale? It exists only on this sheet and will be removed permanently.";
-    if (!confirm(msg)) return;
+    if (!confirm("Remove this sale from the Commercial Sales sheet? (The main Sales Ledger is not affected.)")) return;
     await fetch(`/api/sales/commercial/${r.id}`, { method: "DELETE" });
     load({ silent: true });
   }
@@ -123,7 +113,7 @@ export default function CommercialSalesPage() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Commercial Sales</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Every sale marked “Commercial” on the main ledger lands here automatically. Admin-only.
+            Every sale marked “Commercial” on the main ledger is copied here once; from then on this sheet is independent — edit status and details here. Admin-only.
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -120,12 +120,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   await recordAudit({ companyId: session.companyId, userId: session.userId, action: "sale.updated", entityType: "sale", entityId: id, before, after });
 
-  // Commercial mark changed → catch into / release from the admin-only
-  // Commercial Sales sheet. Catching SNAPSHOTS the sale's data into the
-  // commercial row so the sheet stays whole even if the sale is later trashed
-  // or purged. Unmarking (the agent's same-day correction or an admin) removes
-  // the row — the deliberate opt-out, distinct from main-ledger deletion,
-  // which never touches this sheet.
+  // Marking a sale "Commercial" CATCHES it into the admin-only Commercial Sales
+  // sheet: a one-time COPY of the sale's data into a commercial row. From that
+  // moment the Commercial sheet is fully INDEPENDENT — it owns its rows, the
+  // admin edits status/data there, and nothing on the main ledger (later
+  // edits, unmarking, trash, purge) ever changes or removes them. The only way
+  // a row leaves the Commercial sheet is its own Remove button. A sale is
+  // caught at most once (sale_id unique); unmarking and re-marking does not
+  // create a duplicate.
   if ("isCommercial" in set && updated.isCommercial !== row.isCommercial) {
     if (updated.isCommercial) {
       await db
@@ -139,8 +141,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           activationStatus: updated.activationStatus,
         })
         .onConflictDoNothing({ target: commercialSales.saleId });
-    } else {
-      await db.delete(commercialSales).where(and(eq(commercialSales.saleId, updated.id), eq(commercialSales.companyId, session.companyId)));
     }
     await recordAudit({
       companyId: session.companyId,
@@ -149,24 +149,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       entityType: "sale",
       entityId: id,
     });
-  } else {
-    // Any other edit → write-through to the sale's Commercial-sheet row (if it
-    // has one), so the Commercial sheet keeps extracting the latest data —
-    // activation status above all. Keyed on the LINK ROW existing, not on the
-    // isCommercial flag: a commercial row can be linked to a sale whose flag
-    // is off (e.g. linked by the admin from the Commercial sheet), and it
-    // must still follow the sale. One cheap UPDATE; a no-op if there is no
-    // linked row.
-    await db
-      .update(commercialSales)
-      .set({
-        customerName: updated.customerName,
-        orderDate: updated.orderDate,
-        product: updated.product,
-        activationStatus: updated.activationStatus,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(commercialSales.saleId, updated.id), eq(commercialSales.companyId, session.companyId)));
   }
 
   // Installation date changed → reconcile this sale's reminders to it.

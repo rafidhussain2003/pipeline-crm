@@ -20,7 +20,7 @@ const norm = (s: string | null | undefined) => (s || "").toLowerCase().replace(/
 
 export async function linkOrphanCommercialRows(companyId: string): Promise<number> {
   const orphans = await db
-    .select({ id: commercialSales.id, customerName: commercialSales.customerName, product: commercialSales.product })
+    .select({ id: commercialSales.id, customerName: commercialSales.customerName, product: commercialSales.product, orderDate: commercialSales.orderDate })
     .from(commercialSales)
     .where(and(eq(commercialSales.companyId, companyId), isNull(commercialSales.saleId)));
   if (orphans.length === 0) return 0;
@@ -41,7 +41,6 @@ export async function linkOrphanCommercialRows(companyId: string): Promise<numbe
       customerName: sales.customerName,
       product: sales.product,
       orderDate: sales.orderDate,
-      activationStatus: sales.activationStatus,
     })
     .from(sales)
     .where(and(eq(sales.companyId, companyId), isNull(sales.deletedAt)));
@@ -68,10 +67,9 @@ export async function linkOrphanCommercialRows(companyId: string): Promise<numbe
       .update(commercialSales)
       .set({
         saleId: s.id,
-        customerName: s.customerName,
-        orderDate: s.orderDate,
-        product: s.product,
-        activationStatus: s.activationStatus,
+        customerName: o.customerName || s.customerName,
+        orderDate: o.orderDate || s.orderDate,
+        product: o.product || s.product,
         updatedAt: new Date(),
       })
       .where(eq(commercialSales.id, o.id));

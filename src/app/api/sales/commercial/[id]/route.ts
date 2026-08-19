@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { commercialSales, sales } from "@/db/schema";
+import { commercialSales } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isSaleStatus } from "@/lib/sales/types";
@@ -22,10 +22,10 @@ async function requireCommercialAdmin() {
   return auth;
 }
 
-// Edit a commercial row. Add ons / Funds Status are editable on every row.
-// Customer/date/product/status are editable here ONLY for STANDALONE rows
-// (they're this row's own data); on a LINKED row those live on the sale — the
-// page edits them through the main-ledger PATCH, which this sheet reflects.
+// Edit a commercial row. The Commercial sheet is INDEPENDENT of the main
+// ledger: every row owns its data, so customer / date / product / status and
+// Add ons / Funds Status are all editable here, on every row, and nothing on
+// the main ledger ever overwrites them.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireCommercialAdmin();
   if (!auth.ok) return auth.response;
@@ -44,15 +44,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const set: Record<string, unknown> = {};
   if ("addOns" in body) set.addOns = body.addOns === null ? null : String(body.addOns).slice(0, 160);
   if ("fundsStatus" in body) set.fundsStatus = body.fundsStatus === null ? null : String(body.fundsStatus).slice(0, 60);
-  if (!row.saleId) {
-    // Standalone row — its own data columns.
-    if ("customerName" in body) set.customerName = body.customerName === null ? null : String(body.customerName).slice(0, 200);
-    if ("orderDate" in body) set.orderDate = body.orderDate === null ? null : String(body.orderDate).slice(0, 120);
-    if ("product" in body) set.product = body.product === null ? null : String(body.product).slice(0, 160);
-    if ("activationStatus" in body) {
-      if (!isSaleStatus(body.activationStatus)) return NextResponse.json({ error: "Invalid activation status." }, { status: 400 });
-      set.activationStatus = body.activationStatus;
-    }
+  // Every row owns its data — the Commercial sheet is independent of the main
+  // ledger, so customer/date/product/status are editable HERE on every row
+  // (caught or standalone alike), and nothing on the main ledger overwrites them.
+  if ("customerName" in body) set.customerName = body.customerName === null ? null : String(body.customerName).slice(0, 200);
+  if ("orderDate" in body) set.orderDate = body.orderDate === null ? null : String(body.orderDate).slice(0, 120);
+  if ("product" in body) set.product = body.product === null ? null : String(body.product).slice(0, 160);
+  if ("activationStatus" in body) {
+    if (!isSaleStatus(body.activationStatus)) return NextResponse.json({ error: "Invalid activation status." }, { status: 400 });
+    set.activationStatus = body.activationStatus;
   }
   if (Object.keys(set).length === 0) return NextResponse.json({ error: "No editable fields provided." }, { status: 400 });
   set.updatedAt = new Date();
@@ -65,8 +65,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   // A standalone row whose customer/product was just typed may now match a
-  // live sale on the main ledger — link it right away so it starts following
-  // that sale's status (instead of staying a disconnected copy).
+  // live sale on the main ledger — attach it (sale_id) so it isn't a
+  // disconnected duplicate. Attaching never changes this row's data/status.
   if (!row.saleId && ("customerName" in set || "product" in set)) {
     await linkOrphanCommercialRows(session.companyId);
   }
@@ -82,9 +82,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   return NextResponse.json({ row: updated });
 }
 
-// Remove a row from the sheet. A LINKED row unmarks the sale on the main
-// ledger (the sale itself is untouched) and drops the link; a STANDALONE row
-// is simply deleted — it never existed anywhere else.
+// Remove a row from the Commercial sheet. This sheet is independent: Remove
+// deletes the commercial row ONLY — the main Sales Ledger (and the sale's own
+// "Commercial" flag there) is not touched. The row is gone from this sheet;
+// re-marking the sale on the main ledger would catch it again as a fresh copy.
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireCommercialAdmin();
   if (!auth.ok) return auth.response;
@@ -99,20 +100,15 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     .limit(1);
   if (!link) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  if (link.saleId) {
-    await db
-      .update(sales)
-      .set({ isCommercial: false, updatedAt: new Date() })
-      .where(and(eq(sales.id, link.saleId), eq(sales.companyId, session.companyId)));
-  }
   await db.delete(commercialSales).where(eq(commercialSales.id, link.id));
 
   await recordAudit({
     companyId: session.companyId,
     userId: session.userId,
-    action: link.saleId ? "sale.unmarked_commercial" : "commercial_sale.deleted",
-    entityType: link.saleId ? "sale" : "commercial_sale",
-    entityId: link.saleId ?? link.id,
+    action: "commercial_sale.deleted",
+    entityType: "commercial_sale",
+    entityId: link.id,
+    metadata: link.saleId ? { saleId: link.saleId } : undefined,
   });
   return NextResponse.json({ ok: true });
 }

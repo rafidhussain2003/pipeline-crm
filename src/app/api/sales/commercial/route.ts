@@ -7,12 +7,12 @@ import { linkOrphanCommercialRows } from "@/lib/sales/commercial-link";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 
-// Commercial Sales — the ADMIN-ONLY, INDEPENDENT sheet. Every row owns its
-// data (customer/date/product/status): caught rows carry a snapshot that the
-// main ledger's write-through keeps current while the sale exists; standalone
-// rows are the admin's own entries. Nothing on the main ledger — trash,
-// purge, anything — ever removes a row here; only an explicit Remove on this
-// sheet does. Ordered oldest first (append-at-bottom, like the main sheet).
+// Commercial Sales — the ADMIN-ONLY, INDEPENDENT sheet. A sale marked
+// "Commercial" on the main ledger is COPIED here once; from then on every row
+// owns its data (customer/date/product/status/add-ons/funds) and is edited
+// HERE. Nothing on the main ledger — later edits, unmarking, trash, purge —
+// ever changes or removes a row here; only an explicit Remove on this sheet
+// does. Ordered oldest first (append-at-bottom, like the main sheet).
 async function requireCommercialAdmin() {
   const auth = await requireSales();
   if (!auth.ok) return auth;
