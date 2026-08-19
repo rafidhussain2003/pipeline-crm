@@ -107,6 +107,19 @@ export default function CommercialSalesPage() {
     return <div className="p-6 text-sm text-slate-500">Only an admin can view Commercial Sales.</div>;
   }
 
+  // Status totals for the chips on top — derived from the loaded rows, so they
+  // update instantly when a status is changed here.
+  const counts = rows.reduce(
+    (acc, r) => {
+      if (r.activationStatus === "active") acc.active++;
+      else if (r.activationStatus === "pending") acc.pending++;
+      else if (r.activationStatus === "cancelled") acc.cancelled++;
+      else if (r.activationStatus === "follow_up") acc.follow_up++;
+      return acc;
+    },
+    { active: 0, pending: 0, cancelled: 0, follow_up: 0 }
+  );
+
   return (
     <div className="p-6">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -116,15 +129,21 @@ export default function CommercialSalesPage() {
             Pulls every “Commercial” sale and its status from the main ledger (one-way). Anything you change here stays here — it never goes back to the main ledger, and it won’t be overwritten. Admin-only.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-slate-600 bg-slate-100 rounded-full px-3 py-1.5">
-            {rows.length} commercial {rows.length === 1 ? "sale" : "sales"}
-          </span>
-          <button onClick={addSale} className="text-sm font-semibold text-white bg-green-700 hover:bg-green-800 rounded-md px-3 py-2">
-            + Add sale
-          </button>
-        </div>
+        <button onClick={addSale} className="text-sm font-semibold text-white bg-green-700 hover:bg-green-800 rounded-md px-3 py-2">
+          + Add sale
+        </button>
       </div>
+
+      {/* Status totals — the same chips as the main Sales Ledger. */}
+      {!loading && (
+        <div className="flex flex-wrap gap-2 mb-4 text-xs">
+          <Stat label="Total" value={rows.length} tone="text-slate-700 bg-slate-100" />
+          <Stat label="Active" value={counts.active} tone="text-emerald-800 bg-emerald-100" />
+          <Stat label="Pending" value={counts.pending} tone="text-amber-800 bg-amber-100" />
+          <Stat label="Cancelled" value={counts.cancelled} tone="text-red-800 bg-red-100" />
+          <Stat label="Follow-up" value={counts.follow_up} tone="text-yellow-800 bg-yellow-100" />
+        </div>
+      )}
 
       {error && (
         <div role="alert" className="mb-3 flex items-center justify-between gap-3 text-sm bg-red-50 border border-red-100 text-red-800 rounded-md px-3 py-2">
@@ -194,6 +213,14 @@ export default function CommercialSalesPage() {
         </table>
       </div>
     </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-medium ${tone}`}>
+      {label} <span className="font-bold">{value}</span>
+    </span>
   );
 }
 
