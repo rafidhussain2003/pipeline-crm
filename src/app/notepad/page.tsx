@@ -9,8 +9,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // state, so typing latency is the browser's own.
 //
 // SECURITY: the server detects and redacts sensitive values (SSN / DOB /
-// payment cards / driver's-license & state-ID numbers) on every save — this
-// page merely displays what the server
+// payment cards / driver's-license & state-ID numbers / bank routing &
+// account numbers) on every save — this page merely displays what the server
 // returns. Nothing is EVER written to localStorage / sessionStorage /
 // IndexedDB / the URL; unsaved work lives in memory only, protected by an
 // on-close warning while a save is pending. When the server redacts, the
@@ -122,7 +122,7 @@ export default function SecureNotepadPage() {
         } else {
           dirtyRef.current = true;
         }
-        flashNotice(`Ziplod protected ${d.redactions} sensitive ${d.redactions === 1 ? "item" : "items"} (SSN / DOB / card / ID).`);
+        flashNotice(`Ziplod protected ${d.redactions} sensitive ${d.redactions === 1 ? "item" : "items"} (SSN / DOB / card / ID / bank).`);
       }
       setStatus(dirtyRef.current ? "dirty" : "saved");
     } catch {
@@ -229,7 +229,7 @@ export default function SecureNotepadPage() {
         <span className="text-sm font-semibold text-slate-800">Secure Notepad</span>
         <span className={`text-[11px] font-medium border rounded-full px-2.5 py-0.5 ${chip.c}`}>{chip.t}</span>
         {notice && <span className="text-[11px] font-medium text-blue-800 bg-blue-50 border border-blue-200 rounded-full px-2.5 py-0.5 truncate">{notice}</span>}
-        <span className="ml-auto text-[11px] text-slate-400 hidden sm:block">SSNs, DOBs, card & license/ID numbers are protected automatically · Ctrl+F to search</span>
+        <span className="ml-auto text-[11px] text-slate-400 hidden sm:block">SSNs, DOBs, cards, license/IDs & bank numbers are protected automatically · Ctrl+F to search</span>
       </div>
 
       {findOpen && (

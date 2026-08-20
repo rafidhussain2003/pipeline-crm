@@ -69,6 +69,14 @@ const bypass: [string, string, string][] = [
   ["dl: government id", "government id 12345678", "12345678"],
   ["dl: ID card", "ID card 87654321", "87654321"],
   ["dl: lowercase label", "dl# d1234567", "d1234567"],
+  // Bank routing numbers — valid ABA (checksum + prefix), detected context-free.
+  ["routing: bare valid (Wells Fargo)", "wire to 121000248 today", "121000248"],
+  ["routing: labeled (BofA)", "ABA 111000025", "111000025"],
+  ["routing: routing number (Chase)", "routing number 021000021", "021000021"],
+  // Bank account numbers — only near an account label.
+  ["account: account label", "account 9988776655", "9988776655"],
+  ["account: acct label", "acct 12345678", "12345678"],
+  ["account: checking a/c", "checking a/c 123456789012", "123456789012"],
 ];
 for (const [name, input, secret] of bypass) {
   check(`bypass: ${name}`, !redacted(input).includes(secret), JSON.stringify(redacted(input).slice(0, 60)));
@@ -78,12 +86,17 @@ for (const [name, input, secret] of bypass) {
 const keep = [
   "phone 555-123-4567", "call 5551234567", "install 08/25/2026", "order date 08/04/2026",
   "appointment 13/08/2026", "ZIP 90210", "invoice #INV-2026-0042", "customer id 4488213",
-  "lead id 100294", "price $4,111.00", "acct 12345678", "tracking 1234567890",
+  "lead id 100294", "price $4,111.00", "tracking 1234567890",
   "order 1234 5678 9012 3456", "contract 03/01/2024", "meeting Jan 15, 2026",
   "192.168.1.1", "version 4.1.1.1", "call at 3:45 pm", "suite 400-A",
   // DL/ID false-positive guards — no license/ID context → must survive.
-  "order confirmation 12345678", "call log 5551234567", "reference 998877665",
+  "order confirmation 12345678", "call log 5551234567",
   "driver's license expires 2025", "renewed license in 2027",
+  // Routing/account false-positive guards.
+  "reference 998877665",      // 9 digits but invalid ABA prefix (99) → not routing
+  "invoice 123456789",        // 9 digits, valid prefix, but fails ABA checksum → not routing
+  "order 987654321",          // 9 digits, invalid prefix (98) → not routing
+  "discount code 12345678",   // no account context → not an account number
 ];
 for (const t of keep) check(`keep: ${t}`, nDetect(t) === 0, JSON.stringify(redacted(t)));
 

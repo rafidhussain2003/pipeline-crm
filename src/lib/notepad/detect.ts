@@ -13,8 +13,11 @@
 // DOB-ish label), and driver's-license / state-ID numbers (a DL/ID-shaped
 // token ONLY when a license/ID context label sits right before it — DL formats
 // vary by state and overlap ordinary numbers, so context is what separates a
-// real license number from an order / customer / lead id). Ordinary dates
-// (installations, deadlines) are left alone unless they look like a DOB.
+// real license number from an order / customer / lead id), bank ROUTING
+// numbers (9 digits validated by the ABA checksum + prefix — detected
+// context-free like a card), and bank ACCOUNT numbers (no checksum/format, so
+// only near an account label). Ordinary dates (installations, deadlines) are
+// left alone unless they look like a DOB.
 //
 // DELIBERATE LIMITATION (documented, not hidden): pattern detection cannot
 // catch a value a user deliberately encodes in non-standard ways — digits
@@ -30,10 +33,10 @@
 // Friday AFTER that date, when the weekly cleanup deletes it (and a label-only
 // line it leaves behind), keeping all normal text.
 
-export type SensitiveKind = "SSN" | "DOB" | "Card" | "ID";
+export type SensitiveKind = "SSN" | "DOB" | "Card" | "ID" | "Routing" | "Account";
 export type Detection = { kind: SensitiveKind };
 
-const PLACEHOLDER_RE = /\[(SSN|DOB|Card|ID) protected (\d{2})\/(\d{2})\/(\d{4})\]/g;
+const PLACEHOLDER_RE = /\[(SSN|DOB|Card|ID|Routing|Account) protected (\d{2})\/(\d{2})\/(\d{4})\]/g;
 
 // Separators allowed WITHIN a card / SSN number: ASCII space, tab, dot,
 // no-break space, the Unicode general-punctuation spaces, the ideographic
@@ -106,6 +109,19 @@ function ssnOk(area: string, group: string, serial: string): boolean {
   if (a === 0 || a === 666 || a >= 900) return false;
   if (Number(group) === 0 || Number(serial) === 0) return false;
   return true;
+}
+// ABA routing-number validator: exactly 9 digits, a valid Federal-Reserve
+// routing-symbol prefix (00–12, 21–32, 61–72, 80), and the ABA checksum. Both
+// constraints together make this reliable enough to detect context-free, the
+// same way a card relies on Luhn + brand prefix.
+function abaRoutingOk(d: string): boolean {
+  if (!/^\d{9}$/.test(d)) return false;
+  const p = Number(d.slice(0, 2));
+  const prefixOk = p <= 12 || (p >= 21 && p <= 32) || (p >= 61 && p <= 72) || p === 80;
+  if (!prefixOk) return false;
+  const n = d.split("").map(Number);
+  const sum = 3 * (n[0] + n[3] + n[6]) + 7 * (n[1] + n[4] + n[7]) + (n[2] + n[5] + n[8]);
+  return sum % 10 === 0;
 }
 const MONTHS: Record<string, number> = {
   january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7,
@@ -214,6 +230,27 @@ export function findSensitiveSpans(text: string, now: Date = new Date()): Span[]
   for (const m of norm.matchAll(/\b([A-Za-z]{0,2}\d{5,14}[A-Za-z]?)\b/g)) {
     if (!hasContext(norm, m.index!, idContext, 28)) continue;
     claim(m.index!, m.index! + m[1].length, "ID");
+  }
+
+  // 5) Bank ROUTING numbers — a bare 9-digit run that passes the ABA checksum +
+  //    prefix (see abaRoutingOk). Context-free, like a card: the checksum makes
+  //    a random order/reference number matching by accident rare (an invalid
+  //    prefix such as "998877665" is rejected outright).
+  for (const m of norm.matchAll(/\b\d{9}\b/g)) {
+    if (!abaRoutingOk(m[0])) continue;
+    claim(m.index!, m.index! + m[0].length, "Routing");
+  }
+
+  // 6) Bank ACCOUNT numbers — no checksum, no fixed length, so (like bare SSN /
+  //    DL) a 6–17 digit run is redacted ONLY near an account context label:
+  //    "account", "acct", "a/c", "checking", "savings". This keeps ordinary
+  //    order / invoice / customer numbers with no such label untouched.
+  const acctContext = /\baccount\b|\bacct\b|\ba\/c\b|\bchecking\b|\bsavings\b/i;
+  for (const m of norm.matchAll(/\b\d[\d\- ]{4,20}\d\b/g)) {
+    const digits = m[0].replace(/[^0-9]/g, "");
+    if (digits.length < 6 || digits.length > 17) continue;
+    if (!hasContext(norm, m.index!, acctContext, 24)) continue;
+    claim(m.index!, m.index! + m[0].length, "Account");
   }
 
   return spans.sort((a, b) => a.start - b.start);
