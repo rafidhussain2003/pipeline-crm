@@ -267,8 +267,8 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
           <div>
             <div className="text-sm font-medium text-slate-900">Secure Notepad</div>
             <div className="text-xs text-slate-500 mt-0.5 max-w-md">
-              A private, fast notepad for every team member. SSNs, dates of birth and card numbers are detected and
-              protected automatically; protected items are permanently removed every Friday.{" "}
+              A private, fast notepad for every team member. SSNs, dates of birth, card numbers and license / state-ID numbers are
+              detected and protected automatically; protected items are permanently removed every Friday.{" "}
               <span className="text-slate-400">
                 {notepadCleanupAt ? `Last cleanup: ${new Date(notepadCleanupAt).toLocaleString()}.` : "Cleanup runs every Friday."}
               </span>

@@ -8,10 +8,13 @@
 //
 // Detected: SSNs (dashed always; space/dot-separated or bare-9 only near an
 // SSN-ish label), payment cards (13–19 digits, Luhn + major-brand prefix,
-// with space/tab/dot/dash/Unicode-space separators), and dates of birth
-// (common formats where the year implies a plausible person age, or a date
-// near a DOB-ish label). Ordinary dates (installations, deadlines) are left
-// alone unless they look like a DOB.
+// with space/tab/dot/dash/Unicode-space separators), dates of birth (common
+// formats where the year implies a plausible person age, or a date near a
+// DOB-ish label), and driver's-license / state-ID numbers (a DL/ID-shaped
+// token ONLY when a license/ID context label sits right before it — DL formats
+// vary by state and overlap ordinary numbers, so context is what separates a
+// real license number from an order / customer / lead id). Ordinary dates
+// (installations, deadlines) are left alone unless they look like a DOB.
 //
 // DELIBERATE LIMITATION (documented, not hidden): pattern detection cannot
 // catch a value a user deliberately encodes in non-standard ways — digits
@@ -27,10 +30,10 @@
 // Friday AFTER that date, when the weekly cleanup deletes it (and a label-only
 // line it leaves behind), keeping all normal text.
 
-export type SensitiveKind = "SSN" | "DOB" | "Card";
+export type SensitiveKind = "SSN" | "DOB" | "Card" | "ID";
 export type Detection = { kind: SensitiveKind };
 
-const PLACEHOLDER_RE = /\[(SSN|DOB|Card) protected (\d{2})\/(\d{2})\/(\d{4})\]/g;
+const PLACEHOLDER_RE = /\[(SSN|DOB|Card|ID) protected (\d{2})\/(\d{2})\/(\d{4})\]/g;
 
 // Separators allowed WITHIN a card / SSN number: ASCII space, tab, dot,
 // no-break space, the Unicode general-punctuation spaces, the ideographic
@@ -196,6 +199,21 @@ export function findSensitiveSpans(text: string, now: Date = new Date()): Span[]
     if (!MONTHS[m[2].toLowerCase()] || !plausibleDobYear(year, now)) continue;
     if (!(hasContext(norm, m.index!, dobContext) || now.getFullYear() - year >= 10)) continue;
     claim(m.index!, m.index! + m[0].length, "DOB");
+  }
+
+  // 4) Driver's license / State ID numbers. DL/ID formats differ by state and
+  //    overlap ordinary numbers, so — exactly like the bare-SSN rule — a
+  //    DL/ID-shaped token is redacted ONLY when a license/ID context label is
+  //    within ~28 chars before it. This deliberately does NOT match a bare
+  //    "id" (so "customer id 4488213" / "lead id 100294" are untouched); it
+  //    matches "driver's license", "DL", "DLN", "D/L", "license #/no/number",
+  //    "lic #", "state id", "government/govt id", and "ID card". The token is
+  //    1–2 optional leading letters + 5–14 digits + an optional trailing letter
+  //    (covers CA "D1234567", TX "12345678", FL "F123456789012", NJ, NY, …).
+  const idContext = /driver'?s?\s*licen[cs]e|driver'?s?\s*lic\b|\bdln\b|\bd\/l\b|\bdl\b|licen[cs]e\s*(?:no|number|#|:)|\blic\s*#|state[-\s]*(?:issued\s*)?id|govern(?:ment)?\s*id|govt\s*id|\bid\s*card\b/i;
+  for (const m of norm.matchAll(/\b([A-Za-z]{0,2}\d{5,14}[A-Za-z]?)\b/g)) {
+    if (!hasContext(norm, m.index!, idContext, 28)) continue;
+    claim(m.index!, m.index! + m[1].length, "ID");
   }
 
   return spans.sort((a, b) => a.start - b.start);

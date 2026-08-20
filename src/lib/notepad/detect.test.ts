@@ -59,6 +59,16 @@ const bypass: [string, string, string][] = [
   ["multi: second card", "4111 1111 1111 1111 and 5500005555555559", "5500005555555559"],
   ["long: card in 100k text", "x".repeat(50000) + " 4111111111111111 " + "y".repeat(50000), "4111111111111111"],
   ["repeated: same ssn twice", "SSN 123-45-6789 again 123-45-6789", "123-45-6789"],
+  // Driver's license / State ID — redacted only with a license/ID context label.
+  ["dl: DL# California", "DL# D1234567", "D1234567"],
+  ["dl: driver's license Florida", "driver's license F123456789012", "F123456789012"],
+  ["dl: state id", "state id 12345678", "12345678"],
+  ["dl: License No", "License No: A1234567", "A1234567"],
+  ["dl: DLN", "customer DLN 987654321 on file", "987654321"],
+  ["dl: D/L", "D/L 123456789", "123456789"],
+  ["dl: government id", "government id 12345678", "12345678"],
+  ["dl: ID card", "ID card 87654321", "87654321"],
+  ["dl: lowercase label", "dl# d1234567", "d1234567"],
 ];
 for (const [name, input, secret] of bypass) {
   check(`bypass: ${name}`, !redacted(input).includes(secret), JSON.stringify(redacted(input).slice(0, 60)));
@@ -71,6 +81,9 @@ const keep = [
   "lead id 100294", "price $4,111.00", "acct 12345678", "tracking 1234567890",
   "order 1234 5678 9012 3456", "contract 03/01/2024", "meeting Jan 15, 2026",
   "192.168.1.1", "version 4.1.1.1", "call at 3:45 pm", "suite 400-A",
+  // DL/ID false-positive guards — no license/ID context → must survive.
+  "order confirmation 12345678", "call log 5551234567", "reference 998877665",
+  "driver's license expires 2025", "renewed license in 2027",
 ];
 for (const t of keep) check(`keep: ${t}`, nDetect(t) === 0, JSON.stringify(redacted(t)));
 
