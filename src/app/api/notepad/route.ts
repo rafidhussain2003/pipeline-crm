@@ -42,6 +42,11 @@ export async function GET() {
   if (!auth.ok) return auth.response;
   const { session } = auth;
 
+  // GET is not read-only (it creates the note on first open and lazily sweeps
+  // expired placeholders), so it carries the same per-user rate limit as PUT.
+  const rl = checkPolicy("api.authenticated", session.userId);
+  if (!rl.allowed) return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
+
   let [note] = await db
     .select({ content: notepadNotes.content, version: notepadNotes.version, updatedAt: notepadNotes.updatedAt })
     .from(notepadNotes)
@@ -64,25 +69,36 @@ export async function GET() {
 
   // Lazy expiry sweep for THIS note (belt-and-braces alongside the Friday
   // cron): expired placeholders never survive a load even if the cron is down.
+  //
+  // VERSION-GUARDED: the sweep applies only if the row still holds the version
+  // we read (eq(version, note.version)). Without this guard a concurrent PUT
+  // that committed newer content between our read and our write would be
+  // silently overwritten by the swept OLD content (a lost update). If the
+  // guard misses (a writer won the race), we skip the write + audit and simply
+  // re-read committed state for the response — the newer content is already
+  // clean, or will be swept on the next load.
   const swept = removeExpiredPlaceholders(note.content);
   if (swept.removed > 0) {
-    await db
+    const [applied] = await db
       .update(notepadNotes)
       .set({ content: swept.content, version: sql`${notepadNotes.version} + 1`, updatedAt: new Date() })
-      .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId)));
-    await recordAudit({
-      companyId: session.companyId,
-      userId: session.userId,
-      action: "notepad.sensitive_purged",
-      entityType: "notepad_note",
-      metadata: { removed: swept.removed, trigger: "on_load" },
-    });
+      .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId), eq(notepadNotes.version, note.version)))
+      .returning({ version: notepadNotes.version });
+    if (applied) {
+      await recordAudit({
+        companyId: session.companyId,
+        userId: session.userId,
+        action: "notepad.sensitive_purged",
+        entityType: "notepad_note",
+        metadata: { removed: swept.removed, trigger: "on_load" },
+      });
+    }
     const [fresh] = await db
       .select({ content: notepadNotes.content, version: notepadNotes.version, updatedAt: notepadNotes.updatedAt })
       .from(notepadNotes)
       .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId)))
       .limit(1);
-    note = fresh;
+    if (fresh) note = fresh;
   }
 
   return NextResponse.json({ content: note.content, version: note.version, updatedAt: note.updatedAt }, { headers: { "Cache-Control": "no-store" } });
@@ -95,6 +111,16 @@ export async function PUT(req: NextRequest) {
 
   const rl = checkPolicy("api.authenticated", session.userId);
   if (!rl.allowed) return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
+
+  // Early size guard — reject an oversized payload from the Content-Length
+  // header BEFORE reading the whole body into memory (a 1M-char note is at
+  // most ~4MB UTF-8; 8MB leaves ample room for JSON escaping while capping the
+  // memory a single request can force us to buffer). The post-parse char check
+  // below still applies when the length header is absent (chunked encoding).
+  const declaredLen = Number(req.headers.get("content-length") || 0);
+  if (Number.isFinite(declaredLen) && declaredLen > 8_000_000) {
+    return NextResponse.json({ error: "This note is too large. Split it into smaller notes." }, { status: 413 });
+  }
 
   const body = await req.json().catch(() => ({}));
   const raw = typeof body?.content === "string" ? body.content : null;

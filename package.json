@@ -10,7 +10,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:seed": "tsx src/db/seed.ts"
+    "db:seed": "tsx src/db/seed.ts",
+    "test:notepad": "tsx src/lib/notepad/detect.test.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

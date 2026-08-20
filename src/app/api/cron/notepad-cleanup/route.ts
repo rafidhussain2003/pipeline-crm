@@ -1,9 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import { db } from "@/db";
 import { notepadNotes, companies } from "@/db/schema";
 import { eq, sql } from "drizzle-orm";
 import { removeExpiredPlaceholders } from "@/lib/notepad/detect";
 import { recordAudit } from "@/lib/audit";
+
+// Constant-time secret check: compares equal-length SHA-256 digests with
+// timingSafeEqual so neither the comparison time nor an early return leaks
+// how much of the secret was correct. Returns false for any missing/mismatched
+// value without branching on content.
+function cronSecretValid(provided: string | null): boolean {
+  const expected = process.env.CRON_SECRET;
+  if (!expected || !provided) return false;
+  const a = crypto.createHash("sha256").update(provided).digest();
+  const b = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
 
 // Secure Notepad — the weekly Friday cleanup. Permanently removes protected
 // placeholders whose retention deadline has passed, keeping all normal text
@@ -13,8 +26,7 @@ import { recordAudit } from "@/lib/audit";
 // immediately, and the per-note change detection makes re-runs no-ops.
 // Authenticated by the same x-cron-secret as every other cron route.
 export async function POST(req: NextRequest) {
-  const providedSecret = req.headers.get("x-cron-secret");
-  if (!process.env.CRON_SECRET || providedSecret !== process.env.CRON_SECRET) {
+  if (!cronSecretValid(req.headers.get("x-cron-secret"))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

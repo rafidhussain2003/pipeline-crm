@@ -6,11 +6,21 @@
 // dated placeholders BEFORE storage; the original values are never returned,
 // stored, logged or audited by any caller of this module.
 //
-// Detected: SSNs (dashed always; bare 9-digit only near an SSN-ish label),
-// payment cards (13–19 digits, Luhn + major-brand prefix), and dates of birth
-// (common formats where the year implies a plausible person age, or any date
+// Detected: SSNs (dashed always; space/dot-separated or bare-9 only near an
+// SSN-ish label), payment cards (13–19 digits, Luhn + major-brand prefix,
+// with space/tab/dot/dash/Unicode-space separators), and dates of birth
+// (common formats where the year implies a plausible person age, or a date
 // near a DOB-ish label). Ordinary dates (installations, deadlines) are left
 // alone unless they look like a DOB.
+//
+// DELIBERATE LIMITATION (documented, not hidden): pattern detection cannot
+// catch a value a user deliberately encodes in non-standard ways — digits
+// spelled as words ("one two three…"), split across separate lines, base64,
+// homoglyph letters, or astral-plane digit code points. This layer protects
+// against ACCIDENTAL inclusion of PII in the common written formats and the
+// realistic obfuscations (spacing, punctuation, Unicode digits); it is not,
+// and cannot be, an exfiltration-proof guarantee against a determined insider
+// who has legitimate note access. The audit report states this explicitly.
 //
 // Placeholder format (plain text, Notepad-friendly):  [SSN protected 19/08/2026]
 // The embedded date is the DETECTION date; a placeholder expires on the first
@@ -22,9 +32,45 @@ export type Detection = { kind: SensitiveKind };
 
 const PLACEHOLDER_RE = /\[(SSN|DOB|Card) protected (\d{2})\/(\d{2})\/(\d{4})\]/g;
 
+// Separators allowed WITHIN a card / SSN number: ASCII space, tab, dot,
+// no-break space, the Unicode general-punctuation spaces, the ideographic
+// space, and hyphen. Interpolated inside a character class — the hyphen is
+// LAST so it is a literal, not a range. (Newlines are deliberately excluded —
+// a number split across lines is the documented residual above.)
+const SEP = " \\t.\\u00A0\\u2000-\\u200A\\u202F\\u205F\\u3000-";
+
 const fmt2 = (n: number) => String(n).padStart(2, "0");
 function placeholder(kind: SensitiveKind, when: Date): string {
   return `[${kind} protected ${fmt2(when.getDate())}/${fmt2(when.getMonth() + 1)}/${when.getFullYear()}]`;
+}
+
+// ── Unicode digit folding (length-preserving) ──────────────────────────────
+// Fold common BMP Unicode decimal digits to ASCII so detection sees "4111…"
+// whether the attacker typed fullwidth (４), Arabic-Indic (٤), Devanagari (४),
+// etc. Every folded code point is a single UTF-16 unit mapped to a single
+// ASCII digit, so the folded string has the SAME length and indices — spans
+// found on it apply directly to the original. Astral-plane digits (surrogate
+// pairs) are intentionally NOT folded (they'd break alignment) and are called
+// out as a residual in the module header.
+const DIGIT_BASES = [0xff10, 0x0660, 0x06f0, 0x0966, 0x09e6, 0x0a66, 0x0ae6, 0x0b66, 0x0be6, 0x0c66, 0x0ce6, 0x0d66, 0x0e50, 0x0ed0, 0x0f20, 0xff10];
+function foldDigits(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code >= 48 && code <= 57) {
+      out += text[i];
+      continue;
+    }
+    let folded = text[i];
+    for (const base of DIGIT_BASES) {
+      if (code >= base && code <= base + 9) {
+        folded = String.fromCharCode(48 + (code - base));
+        break;
+      }
+    }
+    out += folded;
+  }
+  return out;
 }
 
 // ── Validators ─────────────────────────────────────────────────────────────
@@ -75,7 +121,10 @@ function hasContext(text: string, index: number, re: RegExp, back = 24): boolean
 type Span = { start: number; end: number; kind: SensitiveKind };
 
 // ── Detection ──────────────────────────────────────────────────────────────
+// Detection runs on the DIGIT-FOLDED twin (same length as `text`), so every
+// returned span is valid against the original string too.
 export function findSensitiveSpans(text: string, now: Date = new Date()): Span[] {
+  const norm = foldDigits(text);
   const spans: Span[] = [];
   const taken: boolean[] = [];
   const claim = (start: number, end: number, kind: SensitiveKind): void => {
@@ -84,58 +133,68 @@ export function findSensitiveSpans(text: string, now: Date = new Date()): Span[]
     spans.push({ start, end, kind });
   };
   // Existing placeholders are never re-scanned (idempotency).
-  for (const m of text.matchAll(PLACEHOLDER_RE)) {
+  for (const m of norm.matchAll(PLACEHOLDER_RE)) {
     for (let i = m.index!; i < m.index! + m[0].length; i++) taken[i] = true;
   }
 
   // 1) Payment cards first (longest digit runs): 13–19 digits with optional
-  //    single spaces/dashes between groups. Luhn + brand prefix required.
-  for (const m of text.matchAll(/(?<![\d.])(?:\d[ -]?){12,18}\d(?![\d.])/g)) {
+  //    single separators between them (space/tab/dot/dash/Unicode-space). Luhn
+  //    + brand prefix required, so broad separators don't create false hits.
+  const cardRe = new RegExp(`(?<![\\d.])(?:[0-9][${SEP}]?){12,18}[0-9](?![\\d])`, "g");
+  for (const m of norm.matchAll(cardRe)) {
     const raw = m[0];
-    const digits = raw.replace(/[ -]/g, "");
+    const digits = raw.replace(/[^0-9]/g, "");
     if (digits.length < 13 || digits.length > 19) continue;
     if (!cardPrefixOk(digits) || !luhnOk(digits)) continue;
     claim(m.index!, m.index! + raw.length, "Card");
   }
 
-  // 2) SSNs. Dashed form always counts; bare 9 digits only near an SSN label
-  //    (avoids eating phone-like/order numbers).
-  for (const m of text.matchAll(/\b(\d{3})-(\d{2})-(\d{4})\b/g)) {
+  // 2) SSNs. Dashed 3-2-4 always counts (strong signal). Space/dot-separated
+  //    3-2-4, or a bare 9-digit run, count only near an SSN label (avoids
+  //    eating phone-like / order numbers).
+  const ssnCtx = /ssn|social|ss\s*#|soc\b/i;
+  for (const m of norm.matchAll(/\b(\d{3})-(\d{2})-(\d{4})\b/g)) {
     if (!ssnOk(m[1], m[2], m[3])) continue;
     claim(m.index!, m.index! + m[0].length, "SSN");
   }
-  for (const m of text.matchAll(/\b(\d{3})(\d{2})(\d{4})\b/g)) {
+  const ssnSepRe = new RegExp(`\\b(\\d{3})[${SEP}](\\d{2})[${SEP}](\\d{4})\\b`, "g");
+  for (const m of norm.matchAll(ssnSepRe)) {
     if (!ssnOk(m[1], m[2], m[3])) continue;
-    if (!hasContext(text, m.index!, /ssn|social|ss\s*#|soc\b/i)) continue;
+    if (!hasContext(norm, m.index!, ssnCtx)) continue;
+    claim(m.index!, m.index! + m[0].length, "SSN");
+  }
+  for (const m of norm.matchAll(/\b(\d{3})(\d{2})(\d{4})\b/g)) {
+    if (!ssnOk(m[1], m[2], m[3])) continue;
+    if (!hasContext(norm, m.index!, ssnCtx)) continue;
     claim(m.index!, m.index! + m[0].length, "SSN");
   }
 
   // 3) Dates of birth.
   const dobContext = /dob|d\.o\.b|birth|born|b-?day/i;
-  // 3a) Numeric dates MM/DD/YYYY or MM-DD-YYYY (also DD/MM): DOB if the year
-  //     implies a plausible age AND (context OR the date is clearly in the
-  //     past by 10+ years — a strong DOB signal on its own).
-  for (const m of text.matchAll(/\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})\b/g)) {
+  // 3a) Numeric dates MM/DD/YYYY, MM-DD-YYYY, MM.DD.YYYY (also DD/MM): DOB if
+  //     the year implies a plausible age AND (context OR the date is clearly in
+  //     the past by 10+ years — a strong DOB signal on its own).
+  for (const m of norm.matchAll(/\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b/g)) {
     const year = Number(m[3]);
     if (!plausibleDobYear(year, now)) continue;
     const mo = Number(m[1]);
     const dy = Number(m[2]);
     if (mo < 1 || mo > 31 || dy < 1 || dy > 31) continue;
-    if (!(hasContext(text, m.index!, dobContext) || now.getFullYear() - year >= 10)) continue;
+    if (!(hasContext(norm, m.index!, dobContext) || now.getFullYear() - year >= 10)) continue;
     claim(m.index!, m.index! + m[0].length, "DOB");
   }
   // 3b) "January 15, 1990" / "15 January 1990"
   const monthName = "(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)";
-  for (const m of text.matchAll(new RegExp(`\\b${monthName}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`, "gi"))) {
+  for (const m of norm.matchAll(new RegExp(`\\b${monthName}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`, "gi"))) {
     const year = Number(m[3]);
     if (!MONTHS[m[1].toLowerCase()] || !plausibleDobYear(year, now)) continue;
-    if (!(hasContext(text, m.index!, dobContext) || now.getFullYear() - year >= 10)) continue;
+    if (!(hasContext(norm, m.index!, dobContext) || now.getFullYear() - year >= 10)) continue;
     claim(m.index!, m.index! + m[0].length, "DOB");
   }
-  for (const m of text.matchAll(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthName}\\.?,?\\s+(\\d{4})\\b`, "gi"))) {
+  for (const m of norm.matchAll(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+${monthName}\\.?,?\\s+(\\d{4})\\b`, "gi"))) {
     const year = Number(m[3]);
     if (!MONTHS[m[2].toLowerCase()] || !plausibleDobYear(year, now)) continue;
-    if (!(hasContext(text, m.index!, dobContext) || now.getFullYear() - year >= 10)) continue;
+    if (!(hasContext(norm, m.index!, dobContext) || now.getFullYear() - year >= 10)) continue;
     claim(m.index!, m.index! + m[0].length, "DOB");
   }
 
@@ -189,10 +248,14 @@ export function removeExpiredPlaceholders(content: string, today: Date = new Dat
       return whole;
     });
     if (hadExpired) {
-      // Drop the line entirely if only a short label (e.g. "SSN:", "DOB -")
-      // remains; otherwise keep the line without the placeholder.
+      // Drop the line entirely ONLY when nothing meaningful is left: either the
+      // residue is blank, or it is a short FIELD LABEL — a few words ending in
+      // ":" or "-" (e.g. "SSN:", "DOB -", "Payment info:") whose only value was
+      // the redacted secret. A residue with real content and no trailing label
+      // separator (e.g. "call John re  today") is KEPT minus the placeholder —
+      // the earlier heuristic dropped those too, losing legitimate note text.
       const residue = cleaned.trim();
-      if (residue === "" || (/^[A-Za-z .#()]{0,24}[:\-]?$/.test(residue) && residue.length <= 25)) continue;
+      if (residue === "" || /^[A-Za-z0-9 .#()]{0,24}[:\-]$/.test(residue)) continue;
       kept.push(cleaned.replace(/[ \t]+$/g, ""));
     } else {
       kept.push(line);
