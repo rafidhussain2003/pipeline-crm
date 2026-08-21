@@ -356,7 +356,23 @@ export default function SecureNotepadPage() {
         <span className="text-xs font-semibold text-slate-800">Secure Notepad</span>
         <span className={`text-[11px] font-medium border rounded-full px-2.5 py-0.5 ${chip.c}`}>{chip.t}</span>
         {notice && <span className="text-[11px] font-medium text-blue-800 bg-blue-50 border border-blue-200 rounded-full px-2.5 py-0.5 truncate">{notice}</span>}
-        <span className="ml-auto text-[11px] text-slate-400 hidden md:block">Double-click a tab to rename · sensitive info auto-erases 12h after typing · Ctrl+F</span>
+        <span className="ml-auto text-[11px] text-slate-400 hidden md:block">Double-click a tab to rename · Ctrl+F to search</span>
+      </div>
+
+      {/* Retention legend — always visible so agents remember how long sensitive
+          info (SSN · card · DOB · license/ID · bank) is kept before it auto-erases. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-1 border-b border-slate-200 bg-white text-[11px] shrink-0">
+        <span className="font-semibold text-slate-500">Sensitive info auto-erases:</span>
+        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 text-slate-700 px-2 py-0.5">
+          Default <b>12 hours</b>
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5">
+          Type <b>{'"Follow Up"'}</b> on its own line → keeps <b>7 days</b>
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5">
+          Type <b>{'"Active"'}</b> on its own line → erases <b>now</b>
+        </span>
+        <span className="text-slate-400 hidden lg:inline">· leave a blank line between customers</span>
       </div>
 
       {findOpen && (
