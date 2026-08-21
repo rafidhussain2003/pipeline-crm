@@ -268,7 +268,7 @@ function CompanyTab({ canEdit }: { canEdit: boolean }) {
             <div className="text-sm font-medium text-slate-900">Secure Notepad</div>
             <div className="text-xs text-slate-500 mt-0.5 max-w-md">
               A private, fast notepad for every team member. SSNs, dates of birth, card numbers, license / state-ID numbers and bank routing / account numbers are
-              detected and protected automatically; protected items are permanently removed every Friday.{" "}
+              detected and kept readable to the agent for 12 hours (7 days if the note says &ldquo;Follow Up&rdquo;, or erased at once on &ldquo;Active&rdquo;), then auto-erased — a DOB keeps only its birth year. Stored encrypted.{" "}
               <span className="text-slate-400">
                 {notepadCleanupAt ? `Last cleanup: ${new Date(notepadCleanupAt).toLocaleString()}.` : "Cleanup runs every Friday."}
               </span>

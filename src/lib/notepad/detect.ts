@@ -45,10 +45,6 @@ const PLACEHOLDER_RE = /\[(SSN|DOB|Card|ID|Routing|Account) protected (\d{2})\/(
 // a number split across lines is the documented residual above.)
 const SEP = " \\t.\\u00A0\\u2000-\\u200A\\u202F\\u205F\\u3000-";
 
-const fmt2 = (n: number) => String(n).padStart(2, "0");
-function placeholder(kind: SensitiveKind, when: Date): string {
-  return `[${kind} protected ${fmt2(when.getDate())}/${fmt2(when.getMonth() + 1)}/${when.getFullYear()}]`;
-}
 
 // ── Unicode digit folding (length-preserving) ──────────────────────────────
 // Fold common BMP Unicode decimal digits to ASCII so detection sees "4111…"
@@ -256,67 +252,117 @@ export function findSensitiveSpans(text: string, now: Date = new Date()): Span[]
   return spans.sort((a, b) => a.start - b.start);
 }
 
-// Replace every detected span with its dated placeholder. Returns the
-// sanitized text and the detections (kinds only — NEVER the values).
-export function redactSensitive(text: string, now: Date = new Date()): { sanitized: string; detections: Detection[] } {
-  const spans = findSensitiveSpans(text, now);
-  if (spans.length === 0) return { sanitized: text, detections: [] };
+// ── Retention model ─────────────────────────────────────────────────────────
+// Per the owner's rule, detected sensitive VALUES are kept READABLE so the
+// agent can work the order, then auto-erased 12 hours after they were first
+// typed. DOB is special: on expiry only the birth YEAR is kept. Non-sensitive
+// text is always preserved. A value's "first seen" time is tracked per value —
+// keyed by an HMAC of its normalized digits, NEVER the value itself — so the
+// clock survives edits to surrounding text and does not reset on re-save.
+export const RETENTION_MS = 12 * 60 * 60 * 1000; // default window: 12 hours
+export const FOLLOWUP_MS = 7 * 24 * 60 * 60 * 1000; // "Follow Up" block: 7 days
+
+// key = hmac(normalized value); value = kind + first-seen epoch ms.
+export type SensitiveMeta = Record<string, { kind: SensitiveKind; t: number }>;
+
+// Per-customer-block retention control. The note is split into blocks by blank
+// lines (one blank line between customers). A standalone marker LINE inside a
+// block changes how long that block's sensitive values live:
+//   "Active" / "Activated"  → 0  (erase immediately — the order is done)
+//   "Follow Up" / "Followup"→ 7 days (kept longer while the order is pending)
+//   otherwise               → 12 hours (default)
+// The marker must be its OWN line (optionally with trailing punctuation) so an
+// ordinary sentence like "wants active service" never triggers it. Active wins
+// over Follow Up if a block somehow has both.
+const lineIsActive = (l: string) => /^\s*activ(?:e|ated)\s*[!.:*-]*\s*$/i.test(l);
+const lineIsFollowUp = (l: string) => /^\s*follow[\s-]?up\s*[!.:*-]*\s*$/i.test(l);
+
+type Block = { start: number; end: number; win: number };
+function blockWindows(content: string): Block[] {
+  const blocks: Block[] = [];
+  const lines = content.split("\n");
+  let offset = 0;
+  let start = -1;
+  let active = false;
+  let follow = false;
+  const flush = (end: number) => {
+    if (start < 0) return;
+    blocks.push({ start, end, win: active ? 0 : follow ? FOLLOWUP_MS : RETENTION_MS });
+    start = -1;
+    active = false;
+    follow = false;
+  };
+  for (const line of lines) {
+    const lineStart = offset;
+    if (line.trim() === "") {
+      flush(lineStart);
+    } else {
+      if (start < 0) start = lineStart;
+      if (lineIsActive(line)) active = true;
+      if (lineIsFollowUp(line)) follow = true;
+    }
+    offset = lineStart + line.length + 1; // +1 for the "\n"
+  }
+  flush(offset);
+  return blocks;
+}
+function windowForOffset(blocks: Block[], pos: number): number {
+  for (const b of blocks) if (pos >= b.start && pos < b.end) return b.win;
+  return RETENTION_MS;
+}
+
+// Identity of a value for clock-tracking: fold Unicode digits, keep only
+// alphanumerics, lowercase — so "4111 1111 1111 1111", "4111-1111 1111-1111"
+// and the fullwidth form share one clock.
+function normValue(v: string): string {
+  return foldDigits(v).replace(/[^0-9a-z]/gi, "").toLowerCase();
+}
+
+// The birth year kept when a DOB expires ("01/15/1990" -> "1990"). Empty if no
+// plausible year is present (then the DOB is erased entirely).
+function birthYearOf(dob: string): string {
+  const m = foldDigits(dob).match(/(?:19|20)[0-9][0-9]/);
+  return m ? m[0] : "";
+}
+
+// The ONE retention pass — used identically on save, load and the sweep.
+// Detects sensitive values in `content`, carries each value's first-seen time
+// from `prevMeta` (or stamps `nowMs` for a newly seen value), erases those
+// older than 12h (DOB -> birth year), and returns the rewritten readable
+// content plus the meta for the values that remain. Pure: `hmac` is injected,
+// so callers supply a keyed HMAC (route/cron) or a test double.
+export function applyRetention(
+  content: string,
+  prevMeta: SensitiveMeta,
+  nowMs: number,
+  hmac: (v: string) => string,
+): { content: string; meta: SensitiveMeta; detected: Detection[]; expired: number } {
+  const spans = findSensitiveSpans(content, new Date(nowMs));
+  const blocks = blockWindows(content);
+  const meta: SensitiveMeta = {};
+  const detected: Detection[] = [];
+  let expired = 0;
   let out = "";
   let cursor = 0;
-  for (const s of spans) {
-    out += text.slice(cursor, s.start) + placeholder(s.kind, now);
-    cursor = s.end;
-  }
-  out += text.slice(cursor);
-  return { sanitized: out, detections: spans.map((s) => ({ kind: s.kind })) };
-}
-
-// The first Friday STRICTLY AFTER the given date (detected Friday → next
-// Friday; detected Thursday → the very next day).
-export function nextFridayAfter(d: Date): Date {
-  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const add = ((5 - out.getDay() + 7) % 7) || 7;
-  out.setDate(out.getDate() + add);
-  return out;
-}
-
-// Weekly cleanup: remove placeholders whose retention deadline has passed
-// (today >= their next-Friday), keeping ALL normal text. A line that consisted
-// of a short label + only expired placeholders (e.g. "SSN: [SSN protected …]")
-// is removed entirely — matching the spec's example — while lines with any
-// other real content are kept minus the placeholder.
-export function removeExpiredPlaceholders(content: string, today: Date = new Date()): { content: string; removed: number } {
-  const today0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  let removed = 0;
-  const lines = content.split("\n");
-  const kept: string[] = [];
-  for (const line of lines) {
-    let hadExpired = false;
-    const cleaned = line.replace(PLACEHOLDER_RE, (whole, _kind, dd, mm, yyyy) => {
-      const detected = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
-      if (Number.isNaN(detected.getTime())) return whole;
-      if (today0.getTime() >= nextFridayAfter(detected).getTime()) {
-        removed++;
-        hadExpired = true;
-        return "";
-      }
-      return whole;
-    });
-    if (hadExpired) {
-      // Drop the line entirely ONLY when nothing meaningful is left: either the
-      // residue is blank, or it is a short FIELD LABEL — a few words ending in
-      // ":" or "-" (e.g. "SSN:", "DOB -", "Payment info:") whose only value was
-      // the redacted secret. A residue with real content and no trailing label
-      // separator (e.g. "call John re  today") is KEPT minus the placeholder —
-      // the earlier heuristic dropped those too, losing legitimate note text.
-      const residue = cleaned.trim();
-      if (residue === "" || /^[A-Za-z0-9 .#()]{0,24}[:\-]$/.test(residue)) continue;
-      kept.push(cleaned.replace(/[ \t]+$/g, ""));
+  for (const sp of spans) {
+    const value = content.slice(sp.start, sp.end);
+    const key = hmac(normValue(value));
+    const firstSeen = prevMeta[key]?.t ?? nowMs;
+    const win = windowForOffset(blocks, sp.start); // 12h / 7d / 0, per this value's block
+    out += content.slice(cursor, sp.start);
+    if (nowMs - firstSeen >= win) {
+      expired++;
+      if (sp.kind === "DOB") out += birthYearOf(value); // keep birth year only
+      // every other kind: erase the value entirely (append nothing)
     } else {
-      kept.push(line);
+      out += value; // still within the window -> keep it readable
+      meta[key] = { kind: sp.kind, t: firstSeen };
+      detected.push({ kind: sp.kind });
     }
+    cursor = sp.end;
   }
-  return { content: kept.join("\n"), removed };
+  out += content.slice(cursor);
+  return { content: out, meta, detected, expired };
 }
 
 // Hard cap — an oversized note is rejected, never truncated silently.

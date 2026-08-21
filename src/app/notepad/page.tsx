@@ -8,13 +8,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // paste, Ctrl+A/C/V/Z/Y and newlines — zero per-keystroke work beyond React
 // state, so typing latency is the browser's own.
 //
-// SECURITY: the server detects and redacts sensitive values (SSN / DOB /
-// payment cards / driver's-license & state-ID numbers / bank routing &
-// account numbers) on every save — this page merely displays what the server
-// returns. Nothing is EVER written to localStorage / sessionStorage /
-// IndexedDB / the URL; unsaved work lives in memory only, protected by an
-// on-close warning while a save is pending. When the server redacts, the
-// text updates to the protected placeholders and a small notice appears.
+// SECURITY: the server detects sensitive values (SSN / DOB / card / license-ID
+// / bank) and keeps them readable for a retention window — 12h after typing by
+// default, 7 days if the customer's block has a "Follow Up" line, or erased at
+// once on an "Active" line — then auto-erases them (DOB keeps its birth year).
+// Values are stored ENCRYPTED at rest and returned only to the owning agent.
+// Nothing is EVER written to localStorage / sessionStorage / IndexedDB / the
+// URL; unsaved work lives in memory only, guarded by an on-close warning.
 //
 // AUTOSAVE: debounced (~800ms after the last keystroke), serialized (one
 // request in flight; the newest content always wins), version-checked
@@ -109,10 +109,10 @@ export default function SecureNotepadPage() {
       if (!res.ok) throw new Error();
       const d = await res.json();
       versionRef.current = d.version;
-      if (d.redactions > 0) {
-        // The server protected sensitive values: adopt the sanitized text.
-        // Only swap wholesale if the user hasn't typed since this snapshot;
-        // otherwise splice is unsafe — mark dirty so the next save re-syncs.
+      if (d.expired > 0) {
+        // The server may have erased expired sensitive values (12h / 7d / on
+        // "Active") — adopt the returned copy. Only swap wholesale if the user
+        // hasn't typed since this snapshot; otherwise mark dirty to re-sync.
         if (textRef.current === snapshot) {
           const ta = taRef.current;
           const atEnd = ta ? ta.selectionStart === snapshot.length : false;
@@ -122,7 +122,7 @@ export default function SecureNotepadPage() {
         } else {
           dirtyRef.current = true;
         }
-        flashNotice(`Ziplod protected ${d.redactions} sensitive ${d.redactions === 1 ? "item" : "items"} (SSN / DOB / card / ID / bank).`);
+        flashNotice(`${d.expired} expired sensitive ${d.expired === 1 ? "item" : "items"} auto-erased.`);
       }
       setStatus(dirtyRef.current ? "dirty" : "saved");
     } catch {
@@ -229,7 +229,7 @@ export default function SecureNotepadPage() {
         <span className="text-sm font-semibold text-slate-800">Secure Notepad</span>
         <span className={`text-[11px] font-medium border rounded-full px-2.5 py-0.5 ${chip.c}`}>{chip.t}</span>
         {notice && <span className="text-[11px] font-medium text-blue-800 bg-blue-50 border border-blue-200 rounded-full px-2.5 py-0.5 truncate">{notice}</span>}
-        <span className="ml-auto text-[11px] text-slate-400 hidden sm:block">SSNs, DOBs, cards, license/IDs & bank numbers are protected automatically · Ctrl+F to search</span>
+        <span className="ml-auto text-[11px] text-slate-400 hidden sm:block">Sensitive info (SSN/DOB/card/ID/bank) auto-erases 12h after typing · &ldquo;Follow Up&rdquo; keeps 7 days · &ldquo;Active&rdquo; erases now · Ctrl+F</span>
       </div>
 
       {findOpen && (

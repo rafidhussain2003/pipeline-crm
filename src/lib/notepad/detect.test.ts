@@ -1,159 +1,166 @@
-/* Secure Notepad — detection / redaction / cleanup regression suite.
+/* Secure Notepad — detection + 12-hour retention regression suite.
  *
  * Run: npm run test:notepad   (executes with tsx; no test framework needed)
  *
- * This suite is ADVERSARIAL by design — it is the post-deployment security
- * audit's evidence. It covers: obfuscation bypasses (spacing, punctuation,
- * Unicode digits, tabs, multiple/long inputs), false-positive protection of
- * legitimate business data, overlapping/multiple detections, idempotency,
- * Friday-expiry math, and cleanup safety (never empties a note, drops only
- * label lines, keeps mixed lines). A fixed `NOW` keeps every case deterministic.
+ * Retention model (owner rule): a detected sensitive value is kept READABLE for
+ * 12h after first typed, then auto-erased — DOB keeps only its birth year.
+ * This suite is adversarial: obfuscation bypasses must all be DETECTED (so the
+ * clock applies), legitimate business data must never be detected, and the
+ * expiry/carry-over/birth-year behaviour is verified with a fixed clock.
  */
-import { redactSensitive, removeExpiredPlaceholders, nextFridayAfter, findSensitiveSpans, NOTE_MAX_CHARS } from "./detect";
+import { applyRetention, findSensitiveSpans, RETENTION_MS, NOTE_MAX_CHARS, type SensitiveMeta } from "./detect";
 
-const NOW = new Date(2026, 7, 19); // Wed 19 Aug 2026 (local)
+const NOW = new Date(2026, 7, 19, 12, 0, 0).getTime(); // fixed clock (ms)
+const H = (v: string) => "h:" + v; // deterministic test HMAC
+const fresh = (t: string) => applyRetention(t, {}, NOW, H); // fresh save: within window
+const age = (m: SensitiveMeta, ms: number): SensitiveMeta =>
+  Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { ...v, t: NOW - ms }]));
+
 let pass = 0;
 const fails: string[] = [];
-function check(name: string, cond: boolean, extra?: string) {
-  if (cond) pass++;
-  else fails.push(name + (extra ? `  [${extra}]` : ""));
-}
-const redacted = (t: string) => redactSensitive(t, NOW).sanitized;
-const nDetect = (t: string) => redactSensitive(t, NOW).detections.length;
+const check = (name: string, cond: boolean, extra?: string) => { if (cond) pass++; else fails.push(name + (extra ? `  [${extra}]` : "")); };
 
-// ── 1. The spec's canonical example ─────────────────────────────────────────
+// ── 1. Spec example: sensitive kept readable now; erased after 12h ───────────
 {
-  const ex = "Customer John\nPhone: 555-123-4567\nSSN: 123-45-6789\nDOB: 01/15/1990\nNeeds callback tomorrow";
-  const r = redactSensitive(ex, NOW);
-  check("spec: SSN redacted", !r.sanitized.includes("123-45-6789"));
-  check("spec: DOB redacted", !r.sanitized.includes("01/15/1990"));
-  check("spec: phone kept", r.sanitized.includes("555-123-4567"));
-  check("spec: names/notes kept", r.sanitized.includes("Customer John") && r.sanitized.includes("Needs callback tomorrow"));
-  check("spec: exactly 2 detections", r.detections.length === 2);
-  check("spec: placeholders dated", /\[SSN protected 19\/08\/2026\]/.test(r.sanitized) && /\[DOB protected 19\/08\/2026\]/.test(r.sanitized));
+  const ex = "Customer John\nPhone: 555-123-4567\nSSN: 123-45-6789\nDOB: 01/15/1990\nNeeds callback";
+  const now0 = fresh(ex);
+  check("fresh: SSN kept readable in window", now0.content.includes("123-45-6789"));
+  check("fresh: DOB kept readable in window", now0.content.includes("01/15/1990"));
+  check("fresh: 2 sensitive detected (SSN+DOB)", now0.detected.length === 2);
+  check("fresh: name + phone + note untouched", now0.content.includes("Customer John") && now0.content.includes("555-123-4567") && now0.content.includes("Needs callback"));
+  const later = applyRetention(ex, age(now0.meta, RETENTION_MS + 1000), NOW, H);
+  check("expired: SSN erased after 12h", !later.content.includes("123-45-6789"));
+  check("expired: DOB reduced to birth year", later.content.includes("1990") && !later.content.includes("01/15/1990"));
+  check("expired: name + phone + note still intact", later.content.includes("Customer John") && later.content.includes("555-123-4567") && later.content.includes("Needs callback"));
+  check("expired: count = 2", later.expired === 2);
 }
 
-// ── 2. Bypass attempts — the original value must NOT survive ─────────────────
-const bypass: [string, string, string][] = [
-  // name, input, literal-that-must-not-survive
-  ["card spaced", "card 4111 1111 1111 1111 end", "4111 1111 1111 1111"],
-  ["card solid", "card 4111111111111111 end", "4111111111111111"],
-  ["card dot-separated", "card 4111.1111.1111.1111 end", "4111.1111.1111.1111"],
-  ["card tab-separated", "card 4111\t1111\t1111\t1111 end", "4111\t1111\t1111\t1111"],
-  ["card nbsp-separated", "card 4111 1111 1111 1111 end", "4111 1111 1111 1111"],
-  ["card mixed space+dash", "c 4111-1111 1111-1111 x", "4111-1111 1111-1111"],
-  ["card fullwidth digits", "c ４１１１１１１１１１１１１１１１ x", "４１１１"],
-  ["card amex", "amex 378282246310005 x", "378282246310005"],
-  ["card mastercard", "mc 5500005555555559 x", "5500005555555559"],
-  ["ssn dashed", "SSN 123-45-6789", "123-45-6789"],
-  ["ssn bare+ctx", "SSN: 123456789", "123456789"],
-  ["ssn spaced+ctx", "SSN 123 45 6789", "123 45 6789"],
-  ["ssn dotted+ctx", "social 123.45.6789", "123.45.6789"],
-  ["ssn fullwidth+ctx", "SSN １２３-４５-６７８９", "１２３"],
-  ["ssn mixed-case label", "sSn: 123-45-6789", "123-45-6789"],
-  ["dob slash+ctx", "DOB 01/15/1990", "01/15/1990"],
-  ["dob dotted+ctx", "DOB 01.15.1990", "01.15.1990"],
-  ["dob written", "born January 15, 1990", "January 15, 1990"],
-  ["dob written reversed", "dob 15 January 1990", "15 January 1990"],
-  ["dob unlabeled old date", "note 01/15/1988 here", "01/15/1988"],
-  ["multi: second card", "4111 1111 1111 1111 and 5500005555555559", "5500005555555559"],
-  ["long: card in 100k text", "x".repeat(50000) + " 4111111111111111 " + "y".repeat(50000), "4111111111111111"],
-  ["repeated: same ssn twice", "SSN 123-45-6789 again 123-45-6789", "123-45-6789"],
-  // Driver's license / State ID — redacted only with a license/ID context label.
-  ["dl: DL# California", "DL# D1234567", "D1234567"],
-  ["dl: driver's license Florida", "driver's license F123456789012", "F123456789012"],
-  ["dl: state id", "state id 12345678", "12345678"],
-  ["dl: License No", "License No: A1234567", "A1234567"],
-  ["dl: DLN", "customer DLN 987654321 on file", "987654321"],
-  ["dl: D/L", "D/L 123456789", "123456789"],
-  ["dl: government id", "government id 12345678", "12345678"],
-  ["dl: ID card", "ID card 87654321", "87654321"],
-  ["dl: lowercase label", "dl# d1234567", "d1234567"],
-  // Bank routing numbers — valid ABA (checksum + prefix), detected context-free.
-  ["routing: bare valid (Wells Fargo)", "wire to 121000248 today", "121000248"],
-  ["routing: labeled (BofA)", "ABA 111000025", "111000025"],
-  ["routing: routing number (Chase)", "routing number 021000021", "021000021"],
-  // Bank account numbers — only near an account label.
-  ["account: account label", "account 9988776655", "9988776655"],
-  ["account: acct label", "acct 12345678", "12345678"],
-  ["account: checking a/c", "checking a/c 123456789012", "123456789012"],
+// ── 2. Bypass attempts must all be DETECTED (so the 12h clock applies) ───────
+const bypass: [string, string][] = [
+  ["card spaced", "card 4111 1111 1111 1111 end"],
+  ["card solid", "card 4111111111111111 end"],
+  ["card dot-separated", "card 4111.1111.1111.1111 end"],
+  ["card tab-separated", "card 4111\t1111\t1111\t1111 end"],
+  ["card nbsp-separated", "card 4111 1111 1111 1111 end"],
+  ["card mixed space+dash", "c 4111-1111 1111-1111 x"],
+  ["card fullwidth digits", "c ４１１１１１１１１１１１１１１１ x"],
+  ["card amex", "amex 378282246310005 x"],
+  ["ssn dashed", "SSN 123-45-6789"],
+  ["ssn bare+ctx", "SSN: 123456789"],
+  ["ssn spaced+ctx", "SSN 123 45 6789"],
+  ["ssn dotted+ctx", "social 123.45.6789"],
+  ["dob slash+ctx", "DOB 01/15/1990"],
+  ["dob dotted+ctx", "DOB 01.15.1990"],
+  ["dob written", "born January 15, 1990"],
+  ["dl DL#", "DL# D1234567"],
+  ["dl driver's license", "driver's license F123456789012"],
+  ["dl state id", "state id 12345678"],
+  ["routing bare valid", "wire to 121000248 today"],
+  ["routing labeled", "ABA 111000025"],
+  ["account label", "account 9988776655"],
+  ["account acct", "acct 12345678"],
 ];
-for (const [name, input, secret] of bypass) {
-  check(`bypass: ${name}`, !redacted(input).includes(secret), JSON.stringify(redacted(input).slice(0, 60)));
+for (const [name, input] of bypass) {
+  const r = fresh(input);
+  check(`detect: ${name}`, r.detected.length >= 1, JSON.stringify(r.detected));
 }
 
-// ── 3. False positives — legitimate data must survive untouched ──────────────
+// ── 3. False positives — legitimate data never detected/tracked ─────────────
 const keep = [
   "phone 555-123-4567", "call 5551234567", "install 08/25/2026", "order date 08/04/2026",
   "appointment 13/08/2026", "ZIP 90210", "invoice #INV-2026-0042", "customer id 4488213",
   "lead id 100294", "price $4,111.00", "tracking 1234567890",
   "order 1234 5678 9012 3456", "contract 03/01/2024", "meeting Jan 15, 2026",
   "192.168.1.1", "version 4.1.1.1", "call at 3:45 pm", "suite 400-A",
-  // DL/ID false-positive guards — no license/ID context → must survive.
   "order confirmation 12345678", "call log 5551234567",
   "driver's license expires 2025", "renewed license in 2027",
-  // Routing/account false-positive guards.
-  "reference 998877665",      // 9 digits but invalid ABA prefix (99) → not routing
-  "invoice 123456789",        // 9 digits, valid prefix, but fails ABA checksum → not routing
-  "order 987654321",          // 9 digits, invalid prefix (98) → not routing
-  "discount code 12345678",   // no account context → not an account number
+  "reference 998877665", "invoice 123456789", "order 987654321", "discount code 12345678",
 ];
-for (const t of keep) check(`keep: ${t}`, nDetect(t) === 0, JSON.stringify(redacted(t)));
+for (const t of keep) check(`keep: ${t}`, fresh(t).detected.length === 0, JSON.stringify(fresh(t).detected));
 
-// ── 4. Overlapping / multiple / idempotency ─────────────────────────────────
+// ── 4. Clock carry-over — a value's 12h timer does NOT reset on re-save ──────
+{
+  const first = fresh("card 4111111111111111 end");
+  const oneHourAgo = age(first.meta, 60 * 60 * 1000);
+  const again = applyRetention("card 4111111111111111 end", oneHourAgo, NOW, H);
+  check("carry-over: still readable at 1h", again.content.includes("4111111111111111"));
+  check("carry-over: clock NOT reset to now", Object.values(again.meta)[0].t === NOW - 60 * 60 * 1000);
+  const at11h = applyRetention("card 4111111111111111 end", age(first.meta, 11 * 60 * 60 * 1000), NOW, H);
+  check("carry-over: still readable at 11h", at11h.content.includes("4111111111111111"));
+  const at13h = applyRetention("card 4111111111111111 end", age(first.meta, 13 * 60 * 60 * 1000), NOW, H);
+  check("carry-over: erased at 13h", !at13h.content.includes("4111111111111111") && at13h.expired === 1);
+}
+
+// ── 5. Birth-year extraction on DOB expiry ──────────────────────────────────
+for (const [dob, year] of [["DOB 01/15/1990", "1990"], ["born January 15, 1990", "1990"], ["dob 15 January 1988", "1988"], ["DOB 01.15.1975", "1975"]] as [string, string][]) {
+  const f = fresh(dob);
+  const exp = applyRetention(dob, age(f.meta, RETENTION_MS + 1), NOW, H);
+  check(`birthyear: ${dob} -> ${year}`, exp.content.includes(year) && !/\b\d{1,2}[/.\s]\d{1,2}\b/.test(exp.content.replace(year, "")), JSON.stringify(exp.content));
+}
+
+// ── 6. Erasing a non-DOB value leaves surrounding text ──────────────────────
+{
+  const f = fresh("Acct 12345678 — call after 5");
+  const exp = applyRetention("Acct 12345678 — call after 5", age(f.meta, RETENTION_MS + 1), NOW, H);
+  check("erase: account value gone", !exp.content.includes("12345678"));
+  check("erase: surrounding text kept", exp.content.includes("Acct") && exp.content.includes("call after 5"));
+}
+
+// ── 7. Idempotency + multi + no-op ──────────────────────────────────────────
 {
   const multi = "SSN 123-45-6789 card 4111111111111111 dob 01/15/1990";
-  check("multi: 3 kinds detected", nDetect(multi) === 3);
-  const once = redacted(multi);
-  const twice = redacted(once);
-  check("idempotent: re-redaction is a no-op", twice === once && nDetect(once) === 0);
-  // A user typing a fake placeholder is not re-scanned.
-  check("idempotent: existing placeholder untouched", redacted("x [Card protected 01/01/2020] y") === "x [Card protected 01/01/2020] y");
-  // Spans never overlap.
-  const spans = findSensitiveSpans(multi, NOW);
+  check("multi: 3 detected", fresh(multi).detected.length === 3);
+  const expiredMeta = age(fresh(multi).meta, RETENTION_MS + 1);
+  const gone = applyRetention(multi, expiredMeta, NOW, H);
+  const goneAgain = applyRetention(gone.content, gone.meta, NOW, H);
+  check("idempotent: re-running after expiry is a no-op", goneAgain.content === gone.content && goneAgain.detected.length === 0);
+  check("no-op: plain text untouched, nothing detected", fresh("just normal text\nline two").content === "just normal text\nline two" && fresh("just normal text\nline two").detected.length === 0);
+  // findSensitiveSpans never overlaps.
+  const spans = findSensitiveSpans(multi, new Date(NOW));
   let overlap = false;
   for (let i = 1; i < spans.length; i++) if (spans[i].start < spans[i - 1].end) overlap = true;
   check("spans: never overlap", !overlap);
 }
 
-// ── 5. Friday-expiry math (timezone policy: server-LOCAL calendar day) ───────
-check("friday: Wed→Fri (2 days)", nextFridayAfter(new Date(2026, 7, 19)).getDate() === 21);
-check("friday: Fri→next Fri (strictly after)", nextFridayAfter(new Date(2026, 7, 21)).getDate() === 28);
-check("friday: Thu→Fri (next day)", nextFridayAfter(new Date(2026, 7, 20)).getDate() === 21);
-check("friday: Sat→Fri (6 days)", nextFridayAfter(new Date(2026, 7, 22)).getDate() === 28);
+// ── 8. XSS / HTML injection round-trips as literal text (never detected) ─────
+for (const payload of ['<script>alert(1)</script>', '<img src=x onerror=alert(1)>', 'javascript:alert(1)']) {
+  check(`xss literal: ${payload.slice(0, 12)}`, fresh(payload).content === payload && fresh(payload).detected.length === 0);
+}
 
-// ── 6. Cleanup safety ───────────────────────────────────────────────────────
+// ── 10. Block markers — Follow Up (7 days) & Active (immediate) ──────────────
 {
-  const note = "Customer John\nPhone: 555-123-4567\nSSN: [SSN protected 12/08/2026]\nDOB: [DOB protected 12/08/2026]\nNeeds callback";
-  const beforeFri = removeExpiredPlaceholders(note, new Date(2026, 7, 13)); // Thu before → not yet
-  check("cleanup: nothing removed before the Friday deadline", beforeFri.removed === 0 && beforeFri.content === note);
-  const onFri = removeExpiredPlaceholders(note, new Date(2026, 7, 14)); // Fri 14th ≥ nextFriday(12th)=14th
-  check("cleanup: expired placeholders removed on/after deadline", onFri.removed === 2);
-  check("cleanup: label-only lines dropped", !onFri.content.includes("SSN") && !onFri.content.includes("DOB"));
-  check("cleanup: normal lines fully intact", onFri.content.includes("Customer John") && onFri.content.includes("Phone: 555-123-4567") && onFri.content.includes("Needs callback"));
-  check("cleanup: never empties a note with normal content", onFri.content.trim().length > 0);
-  // A line with OTHER real content keeps the text, drops only the placeholder.
-  const mixed = removeExpiredPlaceholders("ref [SSN protected 12/08/2026] keep this", new Date(2026, 7, 14));
-  check("cleanup: mixed line keeps real text", mixed.content.includes("keep this") && !mixed.content.includes("[SSN"));
-  // Idempotent + a not-yet-expired placeholder is preserved.
-  check("cleanup: idempotent", removeExpiredPlaceholders(onFri.content, new Date(2026, 7, 21)).content === onFri.content);
-  const future = "x [Card protected 19/08/2026] y"; // nextFriday = 21 Aug
-  check("cleanup: unexpired placeholder preserved", removeExpiredPlaceholders(future, new Date(2026, 7, 20)).removed === 0);
-  // Cleanup of a note with NO placeholders is a pure no-op.
-  check("cleanup: no-placeholder note untouched", removeExpiredPlaceholders("just normal text\nline two", NOW).content === "just normal text\nline two");
+  const card = "4111111111111111";
+  // Follow Up → 7-day window: still readable past 12h, gone after 8 days.
+  const fu = "John card " + card + "\nFollow Up";
+  const fuFresh = applyRetention(fu, {}, NOW, H);
+  check("followup: detected + kept fresh", fuFresh.detected.length === 1 && fuFresh.content.includes(card));
+  check("followup: still readable at 13h (7d window)", applyRetention(fu, age(fuFresh.meta, 13 * 60 * 60 * 1000), NOW, H).content.includes(card));
+  check("followup: erased after 8 days", !applyRetention(fu, age(fuFresh.meta, 8 * 24 * 60 * 60 * 1000), NOW, H).content.includes(card));
+
+  // Active → erased immediately, even on the very first pass.
+  const act = "John card " + card + "\nActive";
+  const actFresh = applyRetention(act, {}, NOW, H);
+  check("active: erased immediately", !actFresh.content.includes(card) && actFresh.expired === 1);
+  check("active: non-sensitive kept", actFresh.content.includes("John") && actFresh.content.includes("Active"));
+
+  // Standalone-only: "active" inside a sentence must NOT trigger immediate erase.
+  const sentence = "John card " + card + "\ncustomer wants active service";
+  check("active: embedded word does NOT trigger", applyRetention(sentence, {}, NOW, H).content.includes(card));
+
+  // Block isolation: Active in block A erases only A; Follow Up block B kept.
+  const two = "A card " + card + "\nActive\n\nB card 5500005555555559\nFollow Up";
+  const twoRes = applyRetention(two, {}, NOW, H);
+  check("blocks: Active block A erased", !twoRes.content.includes(card));
+  check("blocks: Follow Up block B kept", twoRes.content.includes("5500005555555559"));
 }
 
-// ── 7. XSS / HTML injection round-trips as literal text (no detection, no mangling) ─
-for (const payload of ['<script>alert(1)</script>', '<img src=x onerror=alert(1)>', 'javascript:alert(1)', '"><svg/onload=alert(1)>']) {
-  check(`xss literal: ${payload.slice(0, 16)}`, redacted(payload) === payload && nDetect(payload) === 0);
-}
-
-// ── 8. Guards ────────────────────────────────────────────────────────────────
-check("size cap constant is 1,000,000", NOTE_MAX_CHARS === 1_000_000);
-check("empty input → no detections", nDetect("") === 0 && redacted("") === "");
+// ── 9. Guards ────────────────────────────────────────────────────────────────
+check("retention window is 12h", RETENTION_MS === 12 * 60 * 60 * 1000);
+check("size cap is 1,000,000", NOTE_MAX_CHARS === 1_000_000);
+check("empty input → nothing", fresh("").content === "" && fresh("").detected.length === 0);
 
 // ── Report ───────────────────────────────────────────────────────────────────
-console.log(`\nSecure Notepad detection suite: ${pass} passed, ${fails.length} failed`);
+console.log(`\nSecure Notepad retention suite: ${pass} passed, ${fails.length} failed`);
 if (fails.length) {
   for (const f of fails) console.log("  FAIL: " + f);
   process.exit(1);

@@ -2,14 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { db } from "@/db";
 import { notepadNotes, companies } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
-import { removeExpiredPlaceholders } from "@/lib/notepad/detect";
+import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { applyRetention, type SensitiveMeta } from "@/lib/notepad/detect";
+import { encrypt, decrypt } from "@/lib/crypto";
 import { recordAudit } from "@/lib/audit";
 
-// Constant-time secret check: compares equal-length SHA-256 digests with
-// timingSafeEqual so neither the comparison time nor an early return leaks
-// how much of the secret was correct. Returns false for any missing/mismatched
-// value without branching on content.
+// Secure Notepad — the retention sweep. Sensitive values are kept readable for
+// 12 hours after typing, then auto-erased (DOB keeps its birth year). The
+// notepad GET runs this lazily for a note the owner opens; THIS sweep catches
+// notes nobody opened, so a value can't outlive its 12h window on an idle note.
+//
+// Schedule it HOURLY (not weekly) — the retention window is 12h, so the sweep
+// must run well inside it. It is safe to run as often as you like: a note with
+// nothing expired is a no-op, and re-runs are idempotent.
+// Authenticated by the same x-cron-secret as every other cron route, compared
+// in constant time.
 function cronSecretValid(provided: string | null): boolean {
   const expected = process.env.CRON_SECRET;
   if (!expected || !provided) return false;
@@ -17,58 +24,57 @@ function cronSecretValid(provided: string | null): boolean {
   const b = crypto.createHash("sha256").update(expected).digest();
   return crypto.timingSafeEqual(a, b);
 }
+function metaHmac(v: string): string {
+  return crypto.createHmac("sha256", process.env.ENCRYPTION_KEY || "notepad-dev-key").update(v).digest("hex");
+}
+function readStored(raw: string): string {
+  if (!raw) return "";
+  try {
+    return decrypt(raw);
+  } catch {
+    return raw;
+  }
+}
 
-// Secure Notepad — the weekly Friday cleanup. Permanently removes protected
-// placeholders whose retention deadline has passed, keeping all normal text
-// (removeExpiredPlaceholders is the single tested policy; the notepad GET
-// also runs it lazily per note, so this cron is the sweep for notes nobody
-// opened). Safe to schedule daily or hourly: on non-Fridays it exits
-// immediately, and the per-note change detection makes re-runs no-ops.
-// Authenticated by the same x-cron-secret as every other cron route.
 export async function POST(req: NextRequest) {
   if (!cronSecretValid(req.headers.get("x-cron-secret"))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const today = new Date();
-  if (today.getDay() !== 5) {
-    return NextResponse.json({ ok: true, skipped: "not Friday" });
-  }
-
-  // Only notes that can possibly contain a placeholder (cheap prefilter).
+  const now = Date.now();
+  // Only notes that actually track a sensitive value can have anything to
+  // expire — the meta column is the efficient prefilter.
   const rows = await db
-    .select({ id: notepadNotes.id, companyId: notepadNotes.companyId, content: notepadNotes.content })
+    .select({ id: notepadNotes.id, companyId: notepadNotes.companyId, content: notepadNotes.content, meta: notepadNotes.sensitiveMeta, version: notepadNotes.version })
     .from(notepadNotes)
-    .where(sql`${notepadNotes.content} like '%protected %'`);
+    .where(isNotNull(notepadNotes.sensitiveMeta));
 
   let notesSwept = 0;
-  let removed = 0;
+  let expired = 0;
   const companiesTouched = new Set<string>();
   for (const n of rows) {
-    const swept = removeExpiredPlaceholders(n.content, today);
-    if (swept.removed === 0) continue;
-    await db
+    const prevMeta = (n.meta ?? {}) as SensitiveMeta;
+    if (Object.keys(prevMeta).length === 0) continue;
+    const stored = readStored(n.content);
+    const res = applyRetention(stored, prevMeta, now, metaHmac);
+    if (res.expired === 0 && res.content === stored) continue;
+    // Version-guarded so a concurrent owner save is never overwritten.
+    const [applied] = await db
       .update(notepadNotes)
-      .set({ content: swept.content, version: sql`${notepadNotes.version} + 1`, updatedAt: new Date() })
-      .where(eq(notepadNotes.id, n.id));
+      .set({ content: encrypt(res.content), sensitiveMeta: res.meta, version: sql`${notepadNotes.version} + 1`, updatedAt: new Date() })
+      .where(and(eq(notepadNotes.id, n.id), eq(notepadNotes.version, n.version)))
+      .returning({ id: notepadNotes.id });
+    if (!applied) continue; // the owner wrote first; their save already applied retention
     notesSwept++;
-    removed += swept.removed;
+    expired += res.expired;
     companiesTouched.add(n.companyId);
-    // Counts only — never content.
-    await recordAudit({
-      companyId: n.companyId,
-      userId: null,
-      action: "notepad.sensitive_purged",
-      entityType: "notepad_note",
-      entityId: n.id,
-      metadata: { removed: swept.removed, trigger: "friday_cleanup" },
-    });
+    if (res.expired > 0) {
+      await recordAudit({ companyId: n.companyId, userId: null, action: "notepad.sensitive_expired", entityType: "notepad_note", entityId: n.id, metadata: { expired: res.expired, trigger: "sweep" } });
+    }
   }
 
-  // Stamp every company that has the feature so the admin's settings card can
-  // show the cleanup system is operational (stamped even when nothing needed
-  // removing — the sweep RAN).
+  // Stamp every enabled company so the admin's settings card shows the sweep ran.
   await db.update(companies).set({ notepadCleanupAt: new Date() }).where(eq(companies.notepadEnabled, true));
 
-  return NextResponse.json({ ok: true, scanned: rows.length, notesSwept, removed, companies: companiesTouched.size });
+  return NextResponse.json({ ok: true, scanned: rows.length, notesSwept, expired, companies: companiesTouched.size });
 }

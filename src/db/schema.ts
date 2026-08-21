@@ -3477,8 +3477,15 @@ export const notepadNotes = pgTable(
     userId: uuid("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
+    // Stored ENCRYPTED at rest (AES-256-GCM) now that sensitive values are kept
+    // readable for the 12h retention window. Legacy rows may hold plaintext;
+    // the route decrypts with a plaintext fallback.
     content: text("content").notNull().default(""),
     version: integer("version").notNull().default(1),
+    // Per-value retention clock: { hmac(value): { kind, t: firstSeenMs } }. Holds
+    // NO sensitive value (HMAC only) — just when each was first seen, so the
+    // 12-hour expiry survives edits and does not reset on re-save. NULL = none.
+    sensitiveMeta: jsonb("sensitive_meta").$type<Record<string, { kind: string; t: number }>>(),
     // Lifetime count of protected values (numbers only, never the values).
     redactionCount: integer("redaction_count").notNull().default(0),
     createdAt: timestamp("created_at").notNull().defaultNow(),

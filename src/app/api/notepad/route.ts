@@ -1,24 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import { db } from "@/db";
 import { notepadNotes, companies } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { requireCompanySession } from "@/lib/auth";
-import { redactSensitive, removeExpiredPlaceholders, NOTE_MAX_CHARS } from "@/lib/notepad/detect";
+import { applyRetention, NOTE_MAX_CHARS, type SensitiveMeta } from "@/lib/notepad/detect";
+import { encrypt, decrypt } from "@/lib/crypto";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 
 // Secure Notepad — "my note" only. There is deliberately NO note id anywhere
 // (no URL param, no body id): every query is companyId + userId from the
-// verified session, so there is no IDOR surface at all — a tampered request
-// can only ever reach the caller's own note. Admins do NOT see agents' notes;
-// each person has exactly one private note.
+// verified session, so there is no IDOR surface at all. Admins do NOT see
+// agents' notes; each person has exactly one private note.
 //
-// SERVER-SIDE ENFORCEMENT: every save runs the same detection/redaction the
-// client previews, on the raw body — a modified client, a direct POST, or a
-// crafted payload still gets sanitized before anything is stored. The
-// original sensitive values are never stored, logged, audited or echoed
-// beyond this response's sanitized content.
+// RETENTION MODEL (owner rule): detected sensitive values (card / SSN / DOB /
+// license-ID / bank) are kept READABLE so the agent can work the order, then
+// auto-erased 12h after first typed (DOB keeps its birth year). The value is
+// stored ENCRYPTED at rest (AES-256-GCM); the readable form is returned ONLY
+// to the owning agent and is never logged or audited (counts/kinds only). The
+// per-value clock lives in sensitive_meta (HMAC keys — no value).
 const ALLOWED_ROLES = new Set(["admin", "manager", "agent", "backend_agent"]);
+
+// Keyed HMAC over a value's identity — the retention clock key. Uses
+// ENCRYPTION_KEY so a low-entropy value (e.g. an SSN) can't be brute-forced
+// from the stored meta.
+function metaHmac(v: string): string {
+  return crypto.createHmac("sha256", process.env.ENCRYPTION_KEY || "notepad-dev-key").update(v).digest("hex");
+}
+// Decrypt stored content, tolerating legacy plaintext rows written before the
+// encryption switch (decrypt throws on non-ciphertext → treat as plaintext).
+function readStored(raw: string): string {
+  if (!raw) return "";
+  try {
+    return decrypt(raw);
+  } catch {
+    return raw;
+  }
+}
+const metaChanged = (a: SensitiveMeta, b: SensitiveMeta) => JSON.stringify(a) !== JSON.stringify(b);
 
 async function guard() {
   const auth = await requireCompanySession();
@@ -42,66 +62,55 @@ export async function GET() {
   if (!auth.ok) return auth.response;
   const { session } = auth;
 
-  // GET is not read-only (it creates the note on first open and lazily sweeps
-  // expired placeholders), so it carries the same per-user rate limit as PUT.
+  // GET is not read-only (it creates the note on first open and runs the
+  // retention sweep), so it carries the same per-user rate limit as PUT.
   const rl = checkPolicy("api.authenticated", session.userId);
   if (!rl.allowed) return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
 
   let [note] = await db
-    .select({ content: notepadNotes.content, version: notepadNotes.version, updatedAt: notepadNotes.updatedAt })
+    .select({ content: notepadNotes.content, meta: notepadNotes.sensitiveMeta, version: notepadNotes.version, updatedAt: notepadNotes.updatedAt })
     .from(notepadNotes)
     .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId)))
     .limit(1);
 
   if (!note) {
-    // First open → create the empty note (idempotent under races).
-    await db
-      .insert(notepadNotes)
-      .values({ companyId: session.companyId, userId: session.userId, content: "" })
-      .onConflictDoNothing();
+    await db.insert(notepadNotes).values({ companyId: session.companyId, userId: session.userId, content: "" }).onConflictDoNothing();
     [note] = await db
-      .select({ content: notepadNotes.content, version: notepadNotes.version, updatedAt: notepadNotes.updatedAt })
+      .select({ content: notepadNotes.content, meta: notepadNotes.sensitiveMeta, version: notepadNotes.version, updatedAt: notepadNotes.updatedAt })
       .from(notepadNotes)
       .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId)))
       .limit(1);
     await recordAudit({ companyId: session.companyId, userId: session.userId, action: "notepad.created", entityType: "notepad_note" });
   }
 
-  // Lazy expiry sweep for THIS note (belt-and-braces alongside the Friday
-  // cron): expired placeholders never survive a load even if the cron is down.
-  //
-  // VERSION-GUARDED: the sweep applies only if the row still holds the version
-  // we read (eq(version, note.version)). Without this guard a concurrent PUT
-  // that committed newer content between our read and our write would be
-  // silently overwritten by the swept OLD content (a lost update). If the
-  // guard misses (a writer won the race), we skip the write + audit and simply
-  // re-read committed state for the response — the newer content is already
-  // clean, or will be swept on the next load.
-  const swept = removeExpiredPlaceholders(note.content);
-  if (swept.removed > 0) {
+  const stored = readStored(note.content);
+  const prevMeta = (note.meta ?? {}) as SensitiveMeta;
+  const res = applyRetention(stored, prevMeta, Date.now(), metaHmac);
+
+  // Persist if the retention pass changed anything (values expired, or the
+  // clock map moved). Version-guarded so a concurrent PUT is never clobbered.
+  if (res.content !== stored || metaChanged(prevMeta, res.meta)) {
     const [applied] = await db
       .update(notepadNotes)
-      .set({ content: swept.content, version: sql`${notepadNotes.version} + 1`, updatedAt: new Date() })
+      .set({ content: encrypt(res.content), sensitiveMeta: res.meta, version: sql`${notepadNotes.version} + 1`, updatedAt: new Date() })
       .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId), eq(notepadNotes.version, note.version)))
-      .returning({ version: notepadNotes.version });
+      .returning({ version: notepadNotes.version, updatedAt: notepadNotes.updatedAt });
     if (applied) {
-      await recordAudit({
-        companyId: session.companyId,
-        userId: session.userId,
-        action: "notepad.sensitive_purged",
-        entityType: "notepad_note",
-        metadata: { removed: swept.removed, trigger: "on_load" },
-      });
+      if (res.expired > 0) {
+        await recordAudit({ companyId: session.companyId, userId: session.userId, action: "notepad.sensitive_expired", entityType: "notepad_note", metadata: { expired: res.expired, trigger: "on_load" } });
+      }
+      return NextResponse.json({ content: res.content, version: applied.version, updatedAt: applied.updatedAt }, { headers: { "Cache-Control": "no-store" } });
     }
+    // A concurrent writer won — return the freshly committed state instead.
     const [fresh] = await db
       .select({ content: notepadNotes.content, version: notepadNotes.version, updatedAt: notepadNotes.updatedAt })
       .from(notepadNotes)
       .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId)))
       .limit(1);
-    if (fresh) note = fresh;
+    if (fresh) return NextResponse.json({ content: readStored(fresh.content), version: fresh.version, updatedAt: fresh.updatedAt }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  return NextResponse.json({ content: note.content, version: note.version, updatedAt: note.updatedAt }, { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({ content: res.content, version: note.version, updatedAt: note.updatedAt }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function PUT(req: NextRequest) {
@@ -112,11 +121,7 @@ export async function PUT(req: NextRequest) {
   const rl = checkPolicy("api.authenticated", session.userId);
   if (!rl.allowed) return NextResponse.json({ error: "Too many requests. Please slow down." }, { status: 429 });
 
-  // Early size guard — reject an oversized payload from the Content-Length
-  // header BEFORE reading the whole body into memory (a 1M-char note is at
-  // most ~4MB UTF-8; 8MB leaves ample room for JSON escaping while capping the
-  // memory a single request can force us to buffer). The post-parse char check
-  // below still applies when the length header is absent (chunked encoding).
+  // Early size guard — reject an oversized payload before buffering the body.
   const declaredLen = Number(req.headers.get("content-length") || 0);
   if (Number.isFinite(declaredLen) && declaredLen > 8_000_000) {
     return NextResponse.json({ error: "This note is too large. Split it into smaller notes." }, { status: 413 });
@@ -130,21 +135,23 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "This note is too large. Split it into smaller notes." }, { status: 413 });
   }
 
-  // THE security step — always server-side, on the raw payload.
-  const { sanitized, detections } = redactSensitive(raw);
+  // Load the current retention clock so a value's 12h timer carries over
+  // instead of resetting on every save.
+  const [existing] = await db
+    .select({ meta: notepadNotes.sensitiveMeta })
+    .from(notepadNotes)
+    .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId)))
+    .limit(1);
+  const prevMeta = (existing?.meta ?? {}) as SensitiveMeta;
 
-  // Optimistic concurrency: the save applies only if the caller edited the
-  // version they last saw; a stale save (another tab won the race) gets a 409
-  // WITH the current server copy so the client can reconcile without losing
-  // the newer content.
+  // THE retention step — always server-side, on the raw payload.
+  const res = applyRetention(raw, prevMeta, Date.now(), metaHmac);
+
+  // Optimistic concurrency: applies only against the version the caller last
+  // saw; a stale save gets a 409 WITH the current copy to reconcile.
   const [updated] = await db
     .update(notepadNotes)
-    .set({
-      content: sanitized,
-      version: sql`${notepadNotes.version} + 1`,
-      ...(detections.length > 0 ? { redactionCount: sql`${notepadNotes.redactionCount} + ${detections.length}` } : {}),
-      updatedAt: new Date(),
-    })
+    .set({ content: encrypt(res.content), sensitiveMeta: res.meta, version: sql`${notepadNotes.version} + 1`, updatedAt: new Date() })
     .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId), eq(notepadNotes.version, version)))
     .returning({ version: notepadNotes.version, updatedAt: notepadNotes.updatedAt });
 
@@ -155,23 +162,20 @@ export async function PUT(req: NextRequest) {
       .where(and(eq(notepadNotes.companyId, session.companyId), eq(notepadNotes.userId, session.userId)))
       .limit(1);
     if (!current) return NextResponse.json({ error: "Note not found — reload the page." }, { status: 404 });
-    return NextResponse.json({ error: "This note changed in another tab.", content: current.content, version: current.version }, { status: 409 });
+    return NextResponse.json({ error: "This note changed in another tab.", content: readStored(current.content), version: current.version }, { status: 409 });
   }
 
   // Audit counts/kinds only — NEVER values.
-  if (detections.length > 0) {
-    const kinds = detections.reduce<Record<string, number>>((acc, d) => ((acc[d.kind] = (acc[d.kind] || 0) + 1), acc), {});
-    await recordAudit({
-      companyId: session.companyId,
-      userId: session.userId,
-      action: "notepad.sensitive_protected",
-      entityType: "notepad_note",
-      metadata: { count: detections.length, kinds },
-    });
+  if (res.detected.length > 0) {
+    const kinds = res.detected.reduce<Record<string, number>>((acc: Record<string, number>, d: { kind: string }) => ((acc[d.kind] = (acc[d.kind] || 0) + 1), acc), {});
+    await recordAudit({ companyId: session.companyId, userId: session.userId, action: "notepad.sensitive_detected", entityType: "notepad_note", metadata: { count: res.detected.length, kinds } });
+  }
+  if (res.expired > 0) {
+    await recordAudit({ companyId: session.companyId, userId: session.userId, action: "notepad.sensitive_expired", entityType: "notepad_note", metadata: { expired: res.expired, trigger: "on_save" } });
   }
 
   return NextResponse.json(
-    { content: sanitized, version: updated.version, updatedAt: updated.updatedAt, redactions: detections.length },
+    { content: res.content, version: updated.version, updatedAt: updated.updatedAt, detected: res.detected.length, expired: res.expired },
     { headers: { "Cache-Control": "no-store" } }
   );
 }
