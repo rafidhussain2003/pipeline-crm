@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import crypto from "crypto";
 import { db } from "@/db";
 import { notepadNotes, companies } from "@/db/schema";
 import { and, eq, sql } from "drizzle-orm";
 import { requireCompanySession } from "@/lib/auth";
 import { applyRetention, NOTE_MAX_CHARS, type SensitiveMeta } from "@/lib/notepad/detect";
-import { encrypt, decrypt } from "@/lib/crypto";
+import { metaHmac, readStored } from "@/lib/notepad/server";
+import { encrypt } from "@/lib/crypto";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 
@@ -21,23 +21,6 @@ import { checkPolicy } from "@/lib/rate-limit";
 // to the owning agent and is never logged or audited (counts/kinds only). The
 // per-value clock lives in sensitive_meta (HMAC keys — no value).
 const ALLOWED_ROLES = new Set(["admin", "manager", "agent", "backend_agent"]);
-
-// Keyed HMAC over a value's identity — the retention clock key. Uses
-// ENCRYPTION_KEY so a low-entropy value (e.g. an SSN) can't be brute-forced
-// from the stored meta.
-function metaHmac(v: string): string {
-  return crypto.createHmac("sha256", process.env.ENCRYPTION_KEY || "notepad-dev-key").update(v).digest("hex");
-}
-// Decrypt stored content, tolerating legacy plaintext rows written before the
-// encryption switch (decrypt throws on non-ciphertext → treat as plaintext).
-function readStored(raw: string): string {
-  if (!raw) return "";
-  try {
-    return decrypt(raw);
-  } catch {
-    return raw;
-  }
-}
 const metaChanged = (a: SensitiveMeta, b: SensitiveMeta) => JSON.stringify(a) !== JSON.stringify(b);
 
 async function guard() {

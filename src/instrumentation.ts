@@ -34,4 +34,21 @@ export async function register() {
       err
     );
   }
+
+  // Secure Notepad — the 12h/7d retention sweep, run IN-PROCESS on the always-on
+  // web service so idle notes never keep sensitive values past their window,
+  // with no external cron required. Idempotent + version-guarded, so it's safe
+  // even if several instances run it or the /api/cron/notepad-cleanup endpoint
+  // is also scheduled. Errors are logged and swallowed — a sweep hiccup must
+  // never take the server down.
+  const runNotepadSweep = async () => {
+    try {
+      const { sweepExpiredNotes } = await import("@/lib/notepad/server");
+      await sweepExpiredNotes();
+    } catch (err) {
+      console.error("[notepad] retention sweep failed:", err);
+    }
+  };
+  setTimeout(runNotepadSweep, 60_000); // once shortly after boot
+  setInterval(runNotepadSweep, 60 * 60 * 1000); // then hourly
 }

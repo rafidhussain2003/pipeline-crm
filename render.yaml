@@ -26,6 +26,31 @@ services:
       - key: NODE_ENV
         value: production
 
+  # Secure Notepad retention sweep — OPTIONAL. The web service already runs this
+  # same sweep hourly in-process (src/instrumentation.ts) and lazily whenever an
+  # agent opens their notepad, so the 12h/7d expiry works WITHOUT this cron. It
+  # is defined here only as an external backstop; the app does not depend on it.
+  # (Left commented so a blueprint sync never disturbs the manually-configured
+  # web service. To enable: uncomment, ensure the runtime/region match the web
+  # service, then apply the blueprint.)
+  #
+  # - type: cron
+  #   name: notepad-cleanup
+  #   runtime: docker
+  #   dockerfilePath: ./Dockerfile
+  #   region: virginia
+  #   plan: starter
+  #   schedule: "0 * * * *"   # hourly (retention window is 12h)
+  #   dockerCommand: 'node -e "fetch(process.env.CRON_TARGET_URL,{method:''POST'',headers:{''x-cron-secret'':process.env.CRON_SECRET}}).then(async r=>{console.log(r.status,await r.text());if(!r.ok)process.exit(1)}).catch(e=>{console.error(e);process.exit(1)})"'
+  #   envVars:
+  #     - key: CRON_TARGET_URL
+  #       value: https://ziplod.com/api/cron/notepad-cleanup
+  #     - key: CRON_SECRET
+  #       fromService:
+  #         type: web
+  #         name: pipeline-crm
+  #         envVarKey: CRON_SECRET
+
 databases:
   - name: pipeline-crm-db
     plan: starter
