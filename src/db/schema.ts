@@ -3480,6 +3480,13 @@ export const notepadNotes = pgTable(
     // Stored ENCRYPTED at rest (AES-256-GCM) now that sensitive values are kept
     // readable for the 12h retention window. Legacy rows may hold plaintext;
     // the route decrypts with a plaintext fallback.
+    // A user now has MANY notes (tabs), each with its own title + order — so
+    // there is no longer a unique(company,user) constraint.
+    title: varchar("title", { length: 200 }).notNull().default("Note 1"),
+    position: integer("position").notNull().default(0),
+    // Stored ENCRYPTED at rest (AES-256-GCM) now that sensitive values are kept
+    // readable for the 12h retention window. Legacy rows may hold plaintext;
+    // the route decrypts with a plaintext fallback.
     content: text("content").notNull().default(""),
     version: integer("version").notNull().default(1),
     // Per-value retention clock: { hmac(value): { kind, t: firstSeenMs } }. Holds
@@ -3492,7 +3499,7 @@ export const notepadNotes = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => ({
-    userUniq: uniqueIndex("notepad_notes_company_user_uniq").on(t.companyId, t.userId),
+    companyUserIdx: index("notepad_notes_company_user_idx").on(t.companyId, t.userId),
   })
 );
 

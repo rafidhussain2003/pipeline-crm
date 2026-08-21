@@ -477,6 +477,13 @@
 			"when": 1786891579437,
 			"tag": "0067_notepad_sensitive_meta",
 			"breakpoints": true
+		},
+		{
+			"idx": 68,
+			"version": "7",
+			"when": 1786977979437,
+			"tag": "0068_notepad_tabs",
+			"breakpoints": true
 		}
 	]
 }
