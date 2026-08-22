@@ -484,6 +484,13 @@
 			"when": 1786977979437,
 			"tag": "0068_notepad_tabs",
 			"breakpoints": true
+		},
+		{
+			"idx": 68,
+			"version": "7",
+			"when": 1787064379437,
+			"tag": "0068_sales_account_number",
+			"breakpoints": true
 		}
 	]
 }

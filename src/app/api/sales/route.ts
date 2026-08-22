@@ -143,7 +143,7 @@ export async function GET(req: NextRequest) {
   if (status && isSaleStatus(status)) conditions.push(eq(sales.activationStatus, status));
   if (search) {
     const like = `%${search}%`;
-    const c = or(ilike(sales.customerName, like), ilike(sales.phone, like), ilike(sales.product, like), ilike(sales.notes, like));
+    const c = or(ilike(sales.customerName, like), ilike(sales.phone, like), ilike(sales.product, like), ilike(sales.accountNumber, like), ilike(sales.notes, like));
     if (c) conditions.push(c);
   }
   // Product-family filter — the exact product strings for the chosen family
@@ -168,6 +168,7 @@ export async function GET(req: NextRequest) {
         customerName: sales.customerName,
         phone: sales.phone,
         product: sales.product,
+        accountNumber: sales.accountNumber,
         autopay: sales.autopay,
         isCommercial: sales.isCommercial,
         activationStatus: sales.activationStatus,

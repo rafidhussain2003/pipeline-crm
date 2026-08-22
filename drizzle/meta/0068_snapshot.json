@@ -1,5 +1,5 @@
 {
-  "id": "9b6512b5-ba8e-4597-8cd3-4c3f46dffd49",
+  "id": "e0842281-c872-486b-9da8-6533d5c7d4e7",
   "prevId": "c4ad865c-a65b-49fa-a909-56355cec089d",
   "version": "7",
   "dialect": "postgresql",
@@ -13040,6 +13040,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "account_number": {
+          "name": "account_number",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "autopay": {
           "name": "autopay",
           "type": "boolean",
@@ -13595,6 +13601,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "account_number": {
+          "name": "account_number",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "activation_status": {
           "name": "activation_status",
           "type": "varchar(20)",
@@ -13730,20 +13742,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "title": {
-          "name": "title",
-          "type": "varchar(200)",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'Note 1'"
-        },
-        "position": {
-          "name": "position",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
         "content": {
           "name": "content",
           "type": "text",
@@ -13787,8 +13785,8 @@
         }
       },
       "indexes": {
-        "notepad_notes_company_user_idx": {
-          "name": "notepad_notes_company_user_idx",
+        "notepad_notes_company_user_uniq": {
+          "name": "notepad_notes_company_user_uniq",
           "columns": [
             {
               "expression": "company_id",
@@ -13803,7 +13801,7 @@
               "nulls": "last"
             }
           ],
-          "isUnique": false,
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}

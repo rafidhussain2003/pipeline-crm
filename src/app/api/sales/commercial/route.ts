@@ -49,6 +49,7 @@ export async function GET() {
       customerName: commercialSales.customerName,
       orderDate: commercialSales.orderDate,
       product: commercialSales.product,
+      accountNumber: commercialSales.accountNumber,
       activationStatus: commercialSales.activationStatus,
       addOns: commercialSales.addOns,
       fundsStatus: commercialSales.fundsStatus,

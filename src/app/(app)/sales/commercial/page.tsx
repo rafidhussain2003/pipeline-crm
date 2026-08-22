@@ -30,6 +30,7 @@ type Row = {
   saleId: string | null;
   addOns: string | null;
   fundsStatus: string | null;
+  accountNumber: string | null;
   orderDate: string | null;
   customerName: string | null;
   product: string | null;
@@ -161,6 +162,7 @@ export default function CommercialSalesPage() {
               <th className="px-2 py-2.5">Customer Name</th>
               <th className="px-2 py-2.5">Date</th>
               <th className="px-2 py-2.5">Product Sold</th>
+              <th className="px-2 py-2.5">Account #</th>
               <th className="px-2 py-2.5">Status</th>
               <th className="px-2 py-2.5">Add Ons</th>
               <th className="px-2 py-2.5">Funds Status</th>
@@ -170,12 +172,12 @@ export default function CommercialSalesPage() {
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">Loading…</td>
+                <td colSpan={9} className="px-4 py-8 text-center text-slate-400">Loading…</td>
               </tr>
             )}
             {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
                   No commercial sales yet — mark a sale as Commercial on the Sales Ledger and it appears here.
                 </td>
               </tr>
@@ -186,6 +188,7 @@ export default function CommercialSalesPage() {
                 <Td><Cell value={r.customerName} onSave={(v) => patchData(r, "customerName", v)} /></Td>
                 <Td><Cell value={r.orderDate} onSave={(v) => patchData(r, "orderDate", v)} /></Td>
                 <Td><Cell value={r.product} onSave={(v) => patchData(r, "product", v)} /></Td>
+                <Td><Cell value={r.accountNumber} onSave={(v) => patchData(r, "accountNumber", v)} /></Td>
                 <Td>
                   <select
                     value={r.activationStatus}

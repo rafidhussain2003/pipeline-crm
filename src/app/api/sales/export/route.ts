@@ -5,7 +5,7 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isValidSaleMonth } from "@/lib/sales/types";
 
-const HEADERS = ["Order Date", "Installation Date", "Customer Name", "Phone", "Product", "Autopay", "Activation Status", "Notes", "Agent"];
+const HEADERS = ["Order Date", "Installation Date", "Customer Name", "Phone", "Product", "Account #", "Autopay", "Activation Status", "Notes", "Agent"];
 // Same palette as the on-screen rows, so the exported Excel sheet looks familiar.
 const ROW_BG: Record<string, string> = { active: "#dcfce7", pending: "#ffedd5", cancelled: "#fee2e2", follow_up: "#fef9c3" };
 
@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
       customerName: sales.customerName,
       phone: sales.phone,
       product: sales.product,
+      accountNumber: sales.accountNumber,
       autopay: sales.autopay,
       activationStatus: sales.activationStatus,
       notes: sales.notes,
@@ -50,6 +51,7 @@ export async function GET(req: NextRequest) {
     r.customerName,
     r.phone,
     r.product,
+    r.accountNumber,
     r.autopay ? "Yes" : "No",
     r.activationStatus,
     r.notes,

@@ -102,6 +102,7 @@ export async function pullCommercialFromLedger(companyId: string): Promise<numbe
       customerName: commercialSales.customerName,
       orderDate: commercialSales.orderDate,
       product: commercialSales.product,
+      accountNumber: commercialSales.accountNumber,
       activationStatus: commercialSales.activationStatus,
       adminOverrides: commercialSales.adminOverrides,
     })
@@ -116,6 +117,7 @@ export async function pullCommercialFromLedger(companyId: string): Promise<numbe
       customerName: sales.customerName,
       orderDate: sales.orderDate,
       product: sales.product,
+      accountNumber: sales.accountNumber,
       activationStatus: sales.activationStatus,
     })
     .from(sales)
@@ -131,6 +133,7 @@ export async function pullCommercialFromLedger(companyId: string): Promise<numbe
     if (!overrides.has("customerName") && (s.customerName ?? null) !== (r.customerName ?? null)) set.customerName = s.customerName;
     if (!overrides.has("orderDate") && (s.orderDate ?? null) !== (r.orderDate ?? null)) set.orderDate = s.orderDate;
     if (!overrides.has("product") && (s.product ?? null) !== (r.product ?? null)) set.product = s.product;
+    if (!overrides.has("accountNumber") && (s.accountNumber ?? null) !== (r.accountNumber ?? null)) set.accountNumber = s.accountNumber;
     if (!overrides.has("activationStatus") && s.activationStatus !== r.activationStatus) set.activationStatus = s.activationStatus;
     if (Object.keys(set).length === 0) continue;
     set.updatedAt = new Date();

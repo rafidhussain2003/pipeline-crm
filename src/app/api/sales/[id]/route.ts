@@ -137,6 +137,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           customerName: updated.customerName,
           orderDate: updated.orderDate,
           product: updated.product,
+          accountNumber: updated.accountNumber,
           activationStatus: updated.activationStatus,
         })
         .onConflictDoNothing({ target: commercialSales.saleId });

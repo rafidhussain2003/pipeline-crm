@@ -3315,6 +3315,9 @@ export const sales = pgTable(
     customerName: varchar("customer_name", { length: 200 }),
     phone: varchar("phone", { length: 60 }),
     product: varchar("product", { length: 160 }),
+    // Customer's provider account number (e.g. the DirecTV account), captured
+    // by the agent so the backend team can handle installation / billing.
+    accountNumber: varchar("account_number", { length: 160 }),
     autopay: boolean("autopay").notNull().default(false),
     // Marked "commercial" by the agent while posting (business-account sale).
     // Marking catches the sale into the admin-only Commercial Sales sheet
@@ -3438,6 +3441,9 @@ export const commercialSales = pgTable(
     customerName: varchar("customer_name", { length: 200 }),
     orderDate: varchar("order_date", { length: 120 }),
     product: varchar("product", { length: 160 }),
+    // Customer's provider account number — pulled from the linked sale, or the
+    // admin's own for a standalone row.
+    accountNumber: varchar("account_number", { length: 160 }),
     activationStatus: varchar("activation_status", { length: 20 }).notNull().default("pending"),
     // Fields the ADMIN has edited on this sheet (e.g. ["activationStatus"]).
     // The one-way pull from the main ledger skips these, so an admin's own

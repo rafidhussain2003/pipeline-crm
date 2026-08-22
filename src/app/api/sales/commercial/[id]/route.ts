@@ -49,6 +49,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if ("customerName" in body) set.customerName = body.customerName === null ? null : String(body.customerName).slice(0, 200);
   if ("orderDate" in body) set.orderDate = body.orderDate === null ? null : String(body.orderDate).slice(0, 120);
   if ("product" in body) set.product = body.product === null ? null : String(body.product).slice(0, 160);
+  if ("accountNumber" in body) set.accountNumber = body.accountNumber === null ? null : String(body.accountNumber).slice(0, 160);
   if ("activationStatus" in body) {
     if (!isSaleStatus(body.activationStatus)) return NextResponse.json({ error: "Invalid activation status." }, { status: 400 });
     set.activationStatus = body.activationStatus;
@@ -58,7 +59,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // otherwise refresh → record it as an admin override so the pull leaves it
   // alone from now on. (Add ons / Funds Status are never pulled, so they
   // don't need recording.) One-way: nothing here is written to the main ledger.
-  const PULLED = ["customerName", "orderDate", "product", "activationStatus"] as const;
+  const PULLED = ["customerName", "orderDate", "product", "accountNumber", "activationStatus"] as const;
   const touched = PULLED.filter((k) => k in set);
   if (touched.length > 0) {
     const prev = Array.isArray(row.adminOverrides) ? row.adminOverrides : [];

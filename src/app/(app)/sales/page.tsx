@@ -34,6 +34,7 @@ type Row = {
   customerName: string | null;
   phone: string | null;
   product: string | null;
+  accountNumber: string | null;
   autopay: boolean;
   isCommercial: boolean;
   activationStatus: string;
@@ -302,7 +303,7 @@ export default function SalesLedgerPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name, phone, product, notes"
+              placeholder="Search name, phone, product, account #, notes"
               className="flex-1 min-w-[200px] max-w-sm rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <select value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-md border border-slate-200 px-2 py-2 text-sm">
@@ -394,6 +395,7 @@ export default function SalesLedgerPage() {
                   <th className="px-2 py-2.5">Customer Name</th>
                   <th className="px-2 py-2.5">Phone</th>
                   <th className="px-2 py-2.5">Product</th>
+                  <th className="px-2 py-2.5">Account #</th>
                   <th className="px-2 py-2.5">Autopay</th>
                   <th className="px-2 py-2.5">Commercial</th>
                   <th className="px-2 py-2.5">Activation Status</th>
@@ -405,12 +407,12 @@ export default function SalesLedgerPage() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={12} className="px-4 py-8 text-center text-slate-400">Loading…</td>
+                    <td colSpan={13} className="px-4 py-8 text-center text-slate-400">Loading…</td>
                   </tr>
                 )}
                 {!loading && rows.length === 0 && (
                   <tr>
-                    <td colSpan={12} className="px-4 py-8 text-center text-slate-400">No sales yet{canAdd ? " — click “+ Add sale”." : "."}</td>
+                    <td colSpan={13} className="px-4 py-8 text-center text-slate-400">No sales yet{canAdd ? " — click “+ Add sale”." : "."}</td>
                   </tr>
                 )}
                 {rows.map((r, i) => {
@@ -432,6 +434,7 @@ export default function SalesLedgerPage() {
                       <Td><Cell value={r.customerName} disabled={lockText(r.customerName)} onSave={(v) => patchCell(r.id, "customerName", v)} /></Td>
                       <Td><Cell value={r.phone} disabled={lockText(r.phone)} onSave={(v) => patchCell(r.id, "phone", v)} /></Td>
                       <Td><Cell value={r.product} disabled={lockText(r.product)} onSave={(v) => patchCell(r.id, "product", v)} /></Td>
+                      <Td><Cell value={r.accountNumber} disabled={lockText(r.accountNumber)} onSave={(v) => patchCell(r.id, "accountNumber", v)} /></Td>
                       <Td>
                         <button
                           disabled={lockToggle}
