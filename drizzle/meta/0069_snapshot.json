@@ -1,6 +1,6 @@
 {
-  "id": "9b6512b5-ba8e-4597-8cd3-4c3f46dffd49",
-  "prevId": "c4ad865c-a65b-49fa-a909-56355cec089d",
+  "id": "acc43111-51cc-4101-80ed-241f73b20f19",
+  "prevId": "9b6512b5-ba8e-4597-8cd3-4c3f46dffd49",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -13040,6 +13040,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "account_number": {
+          "name": "account_number",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "autopay": {
           "name": "autopay",
           "type": "boolean",
@@ -13591,6 +13597,12 @@
         },
         "product": {
           "name": "product",
+          "type": "varchar(160)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "account_number": {
+          "name": "account_number",
           "type": "varchar(160)",
           "primaryKey": false,
           "notNull": false
