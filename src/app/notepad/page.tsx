@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Ziplod Secure Notepad — a minimal, Windows-Notepad-feel editor with TABS.
 //
@@ -30,6 +30,7 @@ export default function SecureNotepadPage() {
   const [fatal, setFatal] = useState("");
   const [findOpen, setFindOpen] = useState(false);
   const [findQ, setFindQ] = useState("");
+  const [matchPos, setMatchPos] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
 
@@ -262,13 +263,21 @@ export default function SecureNotepadPage() {
     };
   }, [save]);
 
-  // ── Find (Ctrl+F) ──
+  // ── Find (Ctrl+F) — works like a normal notepad: search-as-you-type, a
+  //    match counter, and up/down navigation through every occurrence. ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
         e.preventDefault();
+        // Pre-fill the box with the current selection (like a real editor).
+        const ta = taRef.current;
+        const sel = ta && ta.selectionStart !== ta.selectionEnd ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : "";
+        if (sel && !sel.includes("\n")) setFindQ(sel);
         setFindOpen(true);
-        requestAnimationFrame(() => findRef.current?.focus());
+        requestAnimationFrame(() => {
+          findRef.current?.focus();
+          findRef.current?.select();
+        });
       }
       if (e.key === "Escape" && findOpen) {
         setFindOpen(false);
@@ -279,18 +288,46 @@ export default function SecureNotepadPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [findOpen]);
 
-  const findNext = () => {
-    const ta = taRef.current;
-    if (!ta || !findQ) return;
-    const hay = textRef.current.toLowerCase();
+  // Every match position for the current query (case-insensitive).
+  const matches = useMemo(() => {
+    if (!findQ) return [] as number[];
+    const hay = text.toLowerCase();
     const needle = findQ.toLowerCase();
-    const from = ta.selectionEnd || 0;
-    let idx = hay.indexOf(needle, from);
-    if (idx === -1) idx = hay.indexOf(needle);
-    if (idx === -1) return flashNotice("Not found.");
-    ta.focus();
-    ta.setSelectionRange(idx, idx + findQ.length);
-  };
+    const out: number[] = [];
+    let i = hay.indexOf(needle);
+    while (i !== -1) {
+      out.push(i);
+      i = hay.indexOf(needle, i + Math.max(1, needle.length));
+    }
+    return out;
+  }, [findQ, text]);
+
+  // Select + scroll a match into view WITHOUT stealing focus from the find box
+  // (so the user can keep typing / pressing the arrows). The selection shows on
+  // the textarea; closing the bar re-focuses it and the match highlights fully.
+  const goToMatch = useCallback(
+    (pos: number) => {
+      const ta = taRef.current;
+      if (!ta || matches.length === 0) return;
+      const p = ((pos % matches.length) + matches.length) % matches.length;
+      setMatchPos(p);
+      const idx = matches[p];
+      ta.setSelectionRange(idx, idx + findQ.length);
+      const line = text.slice(0, idx).split("\n").length - 1;
+      const lh = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+      ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 2);
+    },
+    [matches, findQ, text]
+  );
+  const findNext = useCallback(() => goToMatch(matchPos + 1), [goToMatch, matchPos]);
+  const findPrev = useCallback(() => goToMatch(matchPos - 1), [goToMatch, matchPos]);
+
+  // Jump to the first match as the query changes (search-as-you-type). Keyed on
+  // findQ only, so editing the note doesn't yank the cursor around.
+  useEffect(() => {
+    if (findOpen && findQ && matches.length > 0) goToMatch(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findQ]);
 
   const chip =
     status === "saved" ? { t: "Saved ✓", c: "text-emerald-700 bg-emerald-50 border-emerald-200" }
@@ -376,17 +413,52 @@ export default function SecureNotepadPage() {
       </div>
 
       {findOpen && (
-        <div className="flex items-center gap-2 px-4 py-1.5 border-b border-slate-200 bg-white shrink-0">
+        <div className="flex items-center gap-1.5 px-4 py-1.5 border-b border-slate-200 bg-white shrink-0">
           <input
             ref={findRef}
             value={findQ}
             onChange={(e) => setFindQ(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && findNext()}
-            placeholder="Find…"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (e.shiftKey) findPrev();
+                else findNext();
+              } else if (e.key === "Escape") {
+                setFindOpen(false);
+                taRef.current?.focus();
+              }
+            }}
+            placeholder="Find in note…"
             className="w-64 rounded-md border border-slate-200 px-2.5 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <button onClick={findNext} className="text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2.5 py-1">Next</button>
-          <button onClick={() => { setFindOpen(false); taRef.current?.focus(); }} className="text-xs text-slate-400 hover:text-slate-600 px-1">✕</button>
+          <span className="text-[11px] tabular-nums text-slate-500 min-w-[64px] text-center select-none">
+            {findQ ? (matches.length > 0 ? `${(matchPos % matches.length) + 1} / ${matches.length}` : "No results") : ""}
+          </span>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={findPrev}
+            disabled={matches.length === 0}
+            title="Previous match (Shift+Enter)"
+            className="w-7 h-7 inline-flex items-center justify-center rounded text-slate-600 hover:bg-slate-100 disabled:opacity-30"
+          >
+            ↑
+          </button>
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={findNext}
+            disabled={matches.length === 0}
+            title="Next match (Enter)"
+            className="w-7 h-7 inline-flex items-center justify-center rounded text-slate-600 hover:bg-slate-100 disabled:opacity-30"
+          >
+            ↓
+          </button>
+          <button
+            onClick={() => { setFindOpen(false); taRef.current?.focus(); }}
+            title="Close (Esc)"
+            className="w-7 h-7 inline-flex items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          >
+            ✕
+          </button>
         </div>
       )}
 
