@@ -289,6 +289,28 @@ export default function SecureNotepadPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [findOpen]);
 
+  // ── Block LOCAL SAVE of the notepad ──────────────────────────────────────
+  // The notepad holds customer PII readable for its retention window, so an
+  // agent must not be able to write the page to disk. Intercept Ctrl/Cmd+S and
+  // Ctrl/Cmd+Shift+S ("Save page as") and Ctrl/Cmd+P (print / Save-as-PDF — the
+  // same exfiltration path) in the CAPTURE phase and cancel the browser default.
+  // (This blocks the keyboard shortcuts; the browser's own ⋮ menu "Save/Print"
+  // can't be disabled by a web page — that limit is documented for the owner.)
+  useEffect(() => {
+    const block = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && (k === "s" || k === "p")) {
+        e.preventDefault();
+        e.stopPropagation();
+        setNotice(k === "s" ? "Saving this notepad to your computer is disabled." : "Printing this notepad is disabled.");
+        if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+        noticeTimerRef.current = setTimeout(() => setNotice(""), 4000);
+      }
+    };
+    window.addEventListener("keydown", block, { capture: true });
+    return () => window.removeEventListener("keydown", block, { capture: true });
+  }, []);
+
   // Every match position for the current query (case-insensitive).
   const matches = useMemo(() => {
     if (!findQ) return [] as number[];
