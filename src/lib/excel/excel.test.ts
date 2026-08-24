@@ -44,7 +44,9 @@ ck("csvCell quote", csvCell('a"b') === '"a""b"');
 }
 
 // ── sanitizeFormat: keeps valid, blocks injection ──
-ck("fmt keeps valid", eq(sanitizeFormat({ b: 1, i: 1, u: 1, a: "center", bg: "#ff0000", fg: "#000", sz: 16, bd: 1 }), { b: 1, i: 1, u: 1, a: "center", bg: "#ff0000", fg: "#000", sz: 16, bd: 1 }));
+ck("fmt keeps valid", eq(sanitizeFormat({ b: 1, i: 1, u: 1, w: 1, a: "center", bg: "#ff0000", fg: "#000", sz: 16, bd: 1 }), { b: 1, i: 1, u: 1, w: 1, a: "center", bg: "#ff0000", fg: "#000", sz: 16, bd: 1 }));
+ck("fmt wrap only 1/true", sanitizeFormat({ w: "yes" }) === undefined);
+ck("fmt wrap kept", eq(sanitizeFormat({ w: 1 }), { w: 1 }));
 ck("fmt blocks CSS injection in bg", sanitizeFormat({ bg: "red; background:url(x)" })?.bg === undefined);
 ck("fmt blocks html in fg", sanitizeFormat({ fg: "<script>alert(1)</script>" })?.fg === undefined);
 ck("fmt blocks bad align", sanitizeFormat({ a: "justify" }) === undefined);

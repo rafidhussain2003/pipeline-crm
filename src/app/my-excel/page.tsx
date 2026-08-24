@@ -10,7 +10,7 @@ import { cellKey as key, colLabel, toTSV, parseGrid } from "@/lib/excel/grid";
 // Autosave is DELTA-based: only changed cells are sent, merged server-side into
 // the sheet's sparse jsonb, version-guarded. All data is company + user scoped.
 
-type Fmt = { b?: 1; i?: 1; u?: 1; a?: "left" | "center" | "right"; bg?: string; fg?: string; sz?: number; bd?: 1 };
+type Fmt = { b?: 1; i?: 1; u?: 1; w?: 1; a?: "left" | "center" | "right"; bg?: string; fg?: string; sz?: number; bd?: 1 };
 type Cell = { v: string; f?: Fmt };
 type Cells = Record<string, Cell>;
 type Dims = Record<string, number>;
@@ -85,7 +85,7 @@ const GridRow = memo(function GridRow(props: RowProps) {
       <td
         key={c}
         id={`cell-${r}-${c}`}
-        className={`border border-slate-200 px-1 overflow-hidden whitespace-nowrap text-[13px] leading-tight ${selected ? "bg-emerald-50" : ""} ${active ? "outline outline-2 outline-emerald-500 -outline-offset-2 relative z-[5]" : ""}`}
+        className={`border border-slate-200 px-1 text-[13px] leading-tight ${f?.w ? "whitespace-pre-wrap break-words align-top" : "overflow-hidden whitespace-nowrap"} ${selected ? "bg-emerald-50" : ""} ${active ? "outline outline-2 outline-emerald-500 -outline-offset-2 relative z-[5]" : ""}`}
         style={style}
         onMouseDown={(e) => onDown(r, c, e.shiftKey)}
         onMouseEnter={(e) => onEnter(r, c, e.buttons)}
@@ -391,7 +391,7 @@ export default function MyExcelPage() {
     }
     applyCells(changes);
   };
-  const toggle = (k: "b" | "i" | "u" | "bd") => applyFormat((f) => { if (f[k]) delete f[k]; else f[k] = 1; return f; });
+  const toggle = (k: "b" | "i" | "u" | "bd" | "w") => applyFormat((f) => { if (f[k]) delete f[k]; else f[k] = 1; return f; });
   const setAlign = (a: "left" | "center" | "right") => applyFormat((f) => { f.a = a; return f; });
   const setColor = (which: "bg" | "fg", v: string) => applyFormat((f) => { if (v) f[which] = v; else delete f[which]; return f; });
   const setSize = (n: number) => applyFormat((f) => { if (n === 14) delete f.sz; else f.sz = n; return f; });
@@ -634,6 +634,7 @@ export default function MyExcelPage() {
         <label className={tbBtn} title="Fill color" onMouseDown={(e) => e.preventDefault()}>▦<input type="color" className="w-0 h-0 opacity-0" onChange={(e) => setColor("bg", e.target.value)} /></label>
         <button className={tbBtn} onMouseDown={(e) => e.preventDefault()} onClick={() => { setColor("fg", ""); setColor("bg", ""); }} title="Clear colors">⌫</button>
         <button className={`${tbBtn} ${curF.bd ? tbOn : ""}`} onMouseDown={(e) => e.preventDefault()} onClick={() => toggle("bd")} title="Border">▣</button>
+        <button className={`${tbBtn} ${curF.w ? tbOn : ""}`} onMouseDown={(e) => e.preventDefault()} onClick={() => toggle("w")} title="Wrap text">⤶ Wrap</button>
         <select className="h-7 text-[13px] border border-slate-200 rounded px-1" value={curF.sz || 14} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => setSize(Number(e.target.value))} title="Font size">
           {[10, 11, 12, 14, 16, 18, 20, 24].map((n) => <option key={n} value={n}>{n}</option>)}
         </select>

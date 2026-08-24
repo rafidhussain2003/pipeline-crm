@@ -16,13 +16,13 @@ export const LIMITS = {
   MAX_COL_W: 800,
 } as const;
 
-const FMT_KEYS = new Set(["b", "i", "u", "a", "bg", "fg", "sz", "bd"]);
+const FMT_KEYS = new Set(["b", "i", "u", "w", "a", "bg", "fg", "sz", "bd"]);
 export function sanitizeFormat(f: unknown): Record<string, unknown> | undefined {
   if (!f || typeof f !== "object") return undefined;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
     if (!FMT_KEYS.has(k)) continue;
-    if (k === "b" || k === "i" || k === "u" || k === "bd") {
+    if (k === "b" || k === "i" || k === "u" || k === "bd" || k === "w") {
       if (v === 1 || v === true) out[k] = 1;
     } else if (k === "a") {
       if (v === "left" || v === "center" || v === "right") out[k] = v;
