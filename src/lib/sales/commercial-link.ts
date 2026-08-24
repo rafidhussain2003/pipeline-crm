@@ -84,10 +84,10 @@ export async function linkOrphanCommercialRows(companyId: string): Promise<numbe
 
 // ── One-way PULL: main ledger → Commercial sheet ───────────────────────────
 // Refresh every LINKED commercial row from its live main-ledger sale —
-// customer / order date / product / activation status — so an agent's status
-// update on the main ledger shows up here. Strictly one-directional: this
-// reads the sale and writes the commercial row; nothing ever flows back to
-// the main ledger (agents can see that sheet).
+// customer / order date / product / account number from the sale. STATUS is
+// special: it mirrors the sale until the admin sets it here, after which the
+// Commercial sheet owns it and writes ONLY the status back to the sale (see
+// the per-row logic below). No other field ever flows back to the main ledger.
 //
 // The admin's own edits on the Commercial sheet win: any field listed in the
 // row's adminOverrides is skipped, so the pull never overwrites what the admin
@@ -134,11 +134,28 @@ export async function pullCommercialFromLedger(companyId: string): Promise<numbe
     if (!overrides.has("orderDate") && (s.orderDate ?? null) !== (r.orderDate ?? null)) set.orderDate = s.orderDate;
     if (!overrides.has("product") && (s.product ?? null) !== (r.product ?? null)) set.product = s.product;
     if (!overrides.has("accountNumber") && (s.accountNumber ?? null) !== (r.accountNumber ?? null)) set.accountNumber = s.accountNumber;
-    if (!overrides.has("activationStatus") && s.activationStatus !== r.activationStatus) set.activationStatus = s.activationStatus;
-    if (Object.keys(set).length === 0) continue;
-    set.updatedAt = new Date();
-    await db.update(commercialSales).set(set).where(eq(commercialSales.id, r.id));
-    pulled++;
+    // STATUS is the one field that flows BOTH ways, decided by who owns it:
+    //  • Until the admin sets the status on the Commercial sheet, the row just
+    //    MIRRORS the sale (pull main → commercial) — so it always shows the
+    //    agent's current status and an agent edit is never reverted.
+    //  • Once the admin HAS set it here (adminOverrides has "activationStatus"),
+    //    the Commercial sheet OWNS the status and writes it BACK to the sale on
+    //    the main ledger — status ONLY, nothing else.
+    if (!overrides.has("activationStatus")) {
+      if (s.activationStatus !== r.activationStatus) set.activationStatus = s.activationStatus; // pull → commercial
+    }
+    if (Object.keys(set).length > 0) {
+      set.updatedAt = new Date();
+      await db.update(commercialSales).set(set).where(eq(commercialSales.id, r.id));
+      pulled++;
+    }
+    if (overrides.has("activationStatus") && s.activationStatus !== r.activationStatus) {
+      await db
+        .update(sales)
+        .set({ activationStatus: r.activationStatus, updatedAt: new Date() })
+        .where(and(eq(sales.id, s.id), eq(sales.companyId, companyId))); // push commercial → main (status only)
+      pulled++;
+    }
   }
   return pulled;
 }

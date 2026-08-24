@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { commercialSales } from "@/db/schema";
+import { commercialSales, sales } from "@/db/schema";
 import { and, eq } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isSaleStatus } from "@/lib/sales/types";
@@ -22,11 +22,12 @@ async function requireCommercialAdmin() {
   return auth;
 }
 
-// Edit a commercial row. Every field is editable here on every row. The sheet
-// PULLS customer/date/product/status from the main ledger (one-way), but an
-// admin edit here wins: it is recorded as an admin override and the pull skips
-// that field from then on. Nothing the admin changes here is ever written to
-// the main ledger (agents can see that sheet).
+// Edit a commercial row. Every field is editable here on every row. Customer /
+// date / product / account are PULLED from the main ledger until the admin
+// edits them here (then the pull skips that field). The ACTIVATION/CANCELLATION
+// STATUS is the exception: once the admin sets it here it is written BACK to the
+// linked main-ledger sale — status ONLY, nothing else — so the agent sees the
+// outcome.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireCommercialAdmin();
   if (!auth.ok) return auth.response;
@@ -79,6 +80,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // disconnected duplicate. Attaching never changes this row's data/status.
   if (!row.saleId && ("customerName" in set || "product" in set)) {
     await linkOrphanCommercialRows(session.companyId);
+  }
+
+  // The activation/cancellation status set here is written BACK to the linked
+  // main-ledger sale — status ONLY, nothing else (no notes, no other fields).
+  // This is the one thing the Commercial sheet pushes to the main ledger, so
+  // the agent who made the sale sees the real outcome.
+  if (row.saleId && typeof set.activationStatus === "string") {
+    await db
+      .update(sales)
+      .set({ activationStatus: set.activationStatus, updatedAt: new Date() })
+      .where(and(eq(sales.id, row.saleId), eq(sales.companyId, session.companyId)));
   }
 
   await recordAudit({

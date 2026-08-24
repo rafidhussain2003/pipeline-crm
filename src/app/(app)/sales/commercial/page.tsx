@@ -127,7 +127,7 @@ export default function CommercialSalesPage() {
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Commercial Sales</h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Pulls every “Commercial” sale and its status from the main ledger (one-way). Anything you change here stays here — it never goes back to the main ledger, and it won’t be overwritten. Admin-only.
+            Pulls each “Commercial” sale’s details from the main ledger. The activation/cancellation status you set here is written back to that sale on the main Sales Ledger (status only — nothing else). Admin-only.
           </p>
         </div>
         <button onClick={addSale} className="text-sm font-semibold text-white bg-green-700 hover:bg-green-800 rounded-md px-3 py-2">
