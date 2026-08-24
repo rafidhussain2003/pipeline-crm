@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 // Ziplod Secure Notepad — a minimal, Windows-Notepad-feel editor with TABS.
 //
@@ -43,6 +43,7 @@ export default function SecureNotepadPage() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const findRef = useRef<HTMLInputElement | null>(null);
   const reloadRef = useRef<() => void>(() => {}); // set to bootstrap() below (breaks the load/bootstrap cycle)
 
@@ -316,11 +317,34 @@ export default function SecureNotepadPage() {
       const line = text.slice(0, idx).split("\n").length - 1;
       const lh = parseFloat(getComputedStyle(ta).lineHeight) || 20;
       ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 2);
+      if (backdropRef.current) backdropRef.current.scrollTop = ta.scrollTop; // keep the highlight aligned
     },
     [matches, findQ, text]
   );
   const findNext = useCallback(() => goToMatch(matchPos + 1), [goToMatch, matchPos]);
   const findPrev = useCallback(() => goToMatch(matchPos - 1), [goToMatch, matchPos]);
+
+  // Blue highlight overlay: every match is painted behind the text (current
+  // match darker), so it shows in true blue whether or not the textarea is
+  // focused — the textarea sits transparently on top, this div mirrors it.
+  const highlightNodes = useMemo<ReactNode>(() => {
+    if (!findOpen || !findQ || matches.length === 0) return null;
+    const len = findQ.length;
+    const cur = matchPos % matches.length;
+    const parts: ReactNode[] = [];
+    let cursor = 0;
+    matches.forEach((start, i) => {
+      if (start > cursor) parts.push(text.slice(cursor, start));
+      parts.push(
+        <mark key={i} className={`rounded-[2px] text-transparent ${i === cur ? "bg-blue-400" : "bg-blue-200"}`}>
+          {text.slice(start, start + len)}
+        </mark>
+      );
+      cursor = start + len;
+    });
+    parts.push(text.slice(cursor));
+    return parts;
+  }, [findOpen, findQ, matches, matchPos, text]);
 
   // Jump to the first match as the query changes (search-as-you-type). Keyed on
   // findQ only, so editing the note doesn't yank the cursor around.
@@ -439,7 +463,7 @@ export default function SecureNotepadPage() {
             onClick={findPrev}
             disabled={matches.length === 0}
             title="Previous match (Shift+Enter)"
-            className="w-7 h-7 inline-flex items-center justify-center rounded text-slate-600 hover:bg-slate-100 disabled:opacity-30"
+            className="w-7 h-7 inline-flex items-center justify-center rounded border border-slate-300 text-slate-800 text-sm font-bold hover:bg-slate-100 disabled:opacity-30"
           >
             ↑
           </button>
@@ -448,7 +472,7 @@ export default function SecureNotepadPage() {
             onClick={findNext}
             disabled={matches.length === 0}
             title="Next match (Enter)"
-            className="w-7 h-7 inline-flex items-center justify-center rounded text-slate-600 hover:bg-slate-100 disabled:opacity-30"
+            className="w-7 h-7 inline-flex items-center justify-center rounded border border-slate-300 text-slate-800 text-sm font-bold hover:bg-slate-100 disabled:opacity-30"
           >
             ↓
           </button>
@@ -462,15 +486,33 @@ export default function SecureNotepadPage() {
         </div>
       )}
 
-      <textarea
-        ref={taRef}
-        value={text}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={status === "loading"}
-        spellCheck={false}
-        placeholder="Type your notes here…"
-        className="flex-1 w-full resize-none p-4 font-mono text-[13.5px] leading-relaxed text-slate-900 focus:outline-none disabled:bg-slate-50"
-      />
+      <div className="relative flex-1 min-h-0 bg-white">
+        {highlightNodes && (
+          <div
+            ref={backdropRef}
+            aria-hidden
+            className="pointer-events-none absolute inset-0 overflow-hidden p-4 font-mono text-[13.5px] leading-relaxed whitespace-pre-wrap break-words text-transparent [scrollbar-gutter:stable]"
+          >
+            {highlightNodes}
+          </div>
+        )}
+        <textarea
+          ref={taRef}
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
+          onScroll={(e) => {
+            const b = backdropRef.current;
+            if (b) {
+              b.scrollTop = e.currentTarget.scrollTop;
+              b.scrollLeft = e.currentTarget.scrollLeft;
+            }
+          }}
+          disabled={status === "loading"}
+          spellCheck={false}
+          placeholder="Type your notes here…"
+          className="absolute inset-0 w-full h-full resize-none p-4 font-mono text-[13.5px] leading-relaxed text-slate-900 bg-transparent focus:outline-none disabled:bg-slate-50 [scrollbar-gutter:stable]"
+        />
+      </div>
     </div>
   );
 }
