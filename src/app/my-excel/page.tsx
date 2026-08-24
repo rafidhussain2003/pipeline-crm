@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cellKey as key, colLabel, toTSV, parseGrid, csvCell } from "@/lib/excel/grid";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cellKey as key, colLabel, toTSV, parseGrid } from "@/lib/excel/grid";
 
 // Ziplod — My Excel. A lightweight, fast, personal spreadsheet (separate from
 // the Sales Ledger). One workbook per user, many sheets. The grid renders cells
@@ -22,6 +22,97 @@ const DEF_COL_W = 96;
 const ROWNUM_W = 46;
 const HEADER_H = 24;
 
+
+const EMPTY_ROW: Record<number, Cell> = {};
+function sameRow(a: Record<number, Cell>, b: Record<number, Cell>): boolean {
+  const ak = Object.keys(a);
+  if (ak.length !== Object.keys(b).length) return false;
+  for (const k of ak) if (a[k as unknown as number] !== b[k as unknown as number]) return false;
+  return true;
+}
+
+// One memoized row. Re-renders ONLY when its own data or selection state
+// changes — so arrow-key navigation touches just the 2 affected rows instead
+// of the whole grid, which is what makes editing feel native-fast.
+type RowProps = {
+  r: number;
+  colCount: number;
+  height: number;
+  rowCells: Record<number, Cell>;
+  rowSelected: boolean;
+  selLeft: number;
+  selRight: number;
+  activeCol: number;
+  editingCol: number;
+  editSeed: string;
+  editInputRef: React.RefObject<HTMLInputElement | null>;
+  onDown: (r: number, c: number, shift: boolean) => void;
+  onEnter: (r: number, c: number, buttons: number) => void;
+  onDbl: (r: number, c: number) => void;
+  onRowNum: (r: number) => void;
+  onRowResize: (r: number, clientY: number, base: number) => void;
+  onEditKeyDown: (e: React.KeyboardEvent) => void;
+  onEditBlur: () => void;
+};
+function gridRowEqual(a: RowProps, b: RowProps): boolean {
+  return (
+    a.r === b.r && a.colCount === b.colCount && a.height === b.height &&
+    a.rowSelected === b.rowSelected && a.selLeft === b.selLeft && a.selRight === b.selRight &&
+    a.activeCol === b.activeCol && a.editingCol === b.editingCol && a.editSeed === b.editSeed &&
+    sameRow(a.rowCells, b.rowCells)
+  );
+}
+const GridRow = memo(function GridRow(props: RowProps) {
+  const { r, colCount, height, rowCells, rowSelected, selLeft, selRight, activeCol, editingCol, editSeed, editInputRef, onDown, onEnter, onDbl, onRowNum, onRowResize, onEditKeyDown, onEditBlur } = props;
+  const tds: React.ReactNode[] = [];
+  for (let c = 0; c < colCount; c++) {
+    const cell = rowCells[c];
+    const f = cell?.f;
+    const active = c === activeCol;
+    const selected = selLeft >= 0 && c >= selLeft && c <= selRight;
+    const isEditing = c === editingCol;
+    const style: React.CSSProperties = {
+      fontWeight: f?.b ? 700 : undefined,
+      fontStyle: f?.i ? "italic" : undefined,
+      textDecoration: f?.u ? "underline" : undefined,
+      textAlign: f?.a || undefined,
+      background: f?.bg || undefined,
+      color: f?.fg || undefined,
+      fontSize: f?.sz ? `${f.sz}px` : undefined,
+      boxShadow: f?.bd ? "inset 0 0 0 1px #64748b" : undefined,
+    };
+    tds.push(
+      <td
+        key={c}
+        id={`cell-${r}-${c}`}
+        className={`border border-slate-200 px-1 overflow-hidden whitespace-nowrap text-[13px] leading-tight ${selected ? "bg-emerald-50" : ""} ${active ? "outline outline-2 outline-emerald-500 -outline-offset-2 relative z-[5]" : ""}`}
+        style={style}
+        onMouseDown={(e) => onDown(r, c, e.shiftKey)}
+        onMouseEnter={(e) => onEnter(r, c, e.buttons)}
+        onDoubleClick={() => onDbl(r, c)}
+      >
+        {isEditing ? (
+          <input ref={editInputRef} defaultValue={editSeed} onKeyDown={onEditKeyDown} onBlur={onEditBlur} className="w-full h-full outline-none bg-white text-[13px] px-0" style={{ textAlign: f?.a || undefined }} />
+        ) : (
+          cell?.v ?? ""
+        )}
+      </td>
+    );
+  }
+  return (
+    <tr style={{ height }}>
+      <th
+        className={`sticky left-0 z-10 border border-slate-300 text-[11px] font-medium text-slate-600 text-center relative ${rowSelected ? "bg-emerald-100" : "bg-slate-100"}`}
+        style={{ width: ROWNUM_W }}
+        onClick={() => onRowNum(r)}
+      >
+        {r + 1}
+        <span className="absolute bottom-0 left-0 w-full h-1.5 cursor-row-resize" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onRowResize(r, e.clientY, height); }} />
+      </th>
+      {tds}
+    </tr>
+  );
+}, gridRowEqual);
 
 export default function MyExcelPage() {
   const [sheets, setSheets] = useState<SheetMeta[]>([]);
@@ -71,8 +162,8 @@ export default function MyExcelPage() {
     setNotice(m);
     setTimeout(() => setNotice(""), 4000);
   };
-  const setCellsBoth = (next: Cells) => { cellsRef.current = next; setCells(next); };
-  const setSelBoth = (s: typeof sel) => { selRef.current = s; setSel(s); };
+  const setCellsBoth = useCallback((next: Cells) => { cellsRef.current = next; setCells(next); }, []);
+  const setSelBoth = useCallback((sv: { r: number; c: number; r2: number; c2: number }) => { selRef.current = sv; setSel(sv); }, []);
   const norm = (s: typeof sel) => ({ r1: Math.min(s.r, s.r2), c1: Math.min(s.c, s.c2), r2: Math.max(s.r, s.r2), c2: Math.max(s.c, s.c2) });
 
   // ── Load workbook + first sheet ──
@@ -234,13 +325,13 @@ export default function MyExcelPage() {
   };
 
   // ── Editing ──
-  const startEdit = (r: number, c: number, seed?: string) => {
+  const startEdit = useCallback((r: number, c: number, seed?: string) => {
     const initial = seed !== undefined ? seed : cellsRef.current[key(r, c)]?.v ?? "";
     editingRef.current = { r, c, seed: initial };
     setEditing({ r, c, seed: initial });
     requestAnimationFrame(() => { const el = editInputRef.current; if (el) { el.focus(); if (seed === undefined) el.select(); else el.setSelectionRange(el.value.length, el.value.length); } });
-  };
-  const commitEdit = (moveTo?: { r: number; c: number }) => {
+  }, []);
+  const commitEdit = useCallback((moveTo?: { r: number; c: number }) => {
     const ed = editingRef.current;
     if (ed) {
       const v = editInputRef.current?.value ?? "";
@@ -251,8 +342,23 @@ export default function MyExcelPage() {
     }
     if (moveTo) setSelBoth({ r: moveTo.r, c: moveTo.c, r2: moveTo.r, c2: moveTo.c });
     requestAnimationFrame(() => gridRef.current?.focus());
-  };
-  const cancelEdit = () => { editingRef.current = null; setEditing(null); requestAnimationFrame(() => gridRef.current?.focus()); };
+  }, [applyCells, setSelBoth]);
+  const cancelEdit = useCallback(() => { editingRef.current = null; setEditing(null); requestAnimationFrame(() => gridRef.current?.focus()); }, []);
+
+  // Stable per-cell handlers so memoized rows don't re-render on navigation.
+  const onCellDown = useCallback((r: number, c: number, shift: boolean) => {
+    if (editingRef.current) commitEdit();
+    if (shift) setSelBoth({ ...selRef.current, r2: r, c2: c });
+    else setSelBoth({ r, c, r2: r, c2: c });
+    requestAnimationFrame(() => gridRef.current?.focus());
+  }, [commitEdit, setSelBoth]);
+  const onCellEnter = useCallback((r: number, c: number, buttons: number) => {
+    if (buttons === 1 && !editingRef.current) setSelBoth({ ...selRef.current, r2: r, c2: c });
+  }, [setSelBoth]);
+  const onCellDbl = useCallback((r: number, c: number) => startEdit(r, c), [startEdit]);
+  const onRowNum = useCallback((r: number) => setSelBoth({ r, c: 0, r2: r, c2: colCountRef.current - 1 }), [setSelBoth]);
+  const onRowResize = useCallback((r: number, clientY: number, base: number) => { dragRef.current = { kind: "row", idx: r, start: clientY, base }; }, []);
+  const onEditBlur = useCallback(() => commitEdit(), [commitEdit]);
 
   const clampR = (r: number) => Math.min(Math.max(r, 0), rowCountRef.current - 1);
   const clampC = (c: number) => Math.min(Math.max(c, 0), colCountRef.current - 1);
@@ -442,16 +548,6 @@ export default function MyExcelPage() {
   };
 
   // ── CSV import / export ──
-  const exportCsv = () => {
-    let maxR = 0, maxC = 0;
-    for (const k of Object.keys(cellsRef.current)) { const [r, c] = k.split(":").map(Number); maxR = Math.max(maxR, r); maxC = Math.max(maxC, c); }
-    const lines: string[] = [];
-    for (let r = 0; r <= maxR; r++) { const row: string[] = []; for (let c = 0; c <= maxC; c++) row.push(csvCell(cellsRef.current[key(r, c)]?.v ?? "")); lines.push(row.join(",")); }
-    const name = (sheets.find((s) => s.id === activeIdRef.current)?.name || "sheet").replace(/[^\w.-]+/g, "_");
-    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `${name}.csv`; a.click(); URL.revokeObjectURL(url);
-  };
   const importCsv = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -483,11 +579,22 @@ export default function MyExcelPage() {
     requestAnimationFrame(() => document.getElementById(`cell-${r}-${c}`)?.scrollIntoView({ block: "nearest", inline: "nearest" }));
   };
 
+  // Per-row cell slices with STABLE refs — rebuilt only when `cells` changes,
+  // and a row's ref is reused when its cells are unchanged, so an edit
+  // re-renders only the one changed row (not the whole grid).
+  const rowMap = useMemo(() => {
+    const byRow: Record<number, Record<number, Cell>> = {};
+    for (const k in cells) {
+      const i = k.indexOf(":");
+      (byRow[+k.slice(0, i)] ||= {})[+k.slice(i + 1)] = cells[k];
+    }
+    return byRow;
+  }, [cells]);
+
   // ── Render ──
   const sname = sheets.find((s) => s.id === activeId)?.name || "";
   const curF = cells[key(sel.r, sel.c)]?.f || {};
   const nsel = norm(sel);
-  const inSel = (r: number, c: number) => r >= nsel.r1 && r <= nsel.r2 && c >= nsel.c1 && c <= nsel.c2;
 
   if (fatal) return <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6"><div className="text-sm text-slate-600 bg-white border border-slate-200 rounded-lg px-5 py-4 max-w-md text-center">{fatal}</div></div>;
 
@@ -537,7 +644,6 @@ export default function MyExcelPage() {
         <button className={tbBtn} onClick={() => deleteCol(nsel.c1)} title="Delete column">−Col</button>
         <div className="w-px h-5 bg-slate-200 mx-0.5" />
         <button className={tbBtn} onClick={() => fileRef.current?.click()} title="Import CSV">Import</button>
-        <button className={tbBtn} onClick={exportCsv} title="Export CSV">Export</button>
         <button className={tbBtn} onClick={() => setFindOpen(true)} title="Find (Ctrl+F)">Find</button>
         <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importCsv(f); e.currentTarget.value = ""; }} />
       </div>
@@ -571,44 +677,32 @@ export default function MyExcelPage() {
             </tr>
           </thead>
           <tbody>
-            {Array.from({ length: rowCount }, (_, r) => (
-              <tr key={r} style={{ height: rowHeights[r] || DEF_ROW_H }}>
-                <th className={`sticky left-0 z-10 border border-slate-300 text-[11px] font-medium text-slate-600 text-center relative ${r >= nsel.r1 && r <= nsel.r2 ? "bg-emerald-100" : "bg-slate-100"}`} style={{ width: ROWNUM_W }} onClick={() => setSelBoth({ r, c: 0, r2: r, c2: colCount - 1 })}>
-                  {r + 1}
-                  <span className="absolute bottom-0 left-0 w-full h-1.5 cursor-row-resize" onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); dragRef.current = { kind: "row", idx: r, start: e.clientY, base: rowHeights[r] || DEF_ROW_H }; }} />
-                </th>
-                {Array.from({ length: colCount }, (_, c) => {
-                  const cell = cells[key(r, c)];
-                  const f = cell?.f;
-                  const active = sel.r === r && sel.c === c;
-                  const selected = inSel(r, c);
-                  const isEditing = editing?.r === r && editing?.c === c;
-                  const style: React.CSSProperties = {
-                    fontWeight: f?.b ? 700 : undefined, fontStyle: f?.i ? "italic" : undefined,
-                    textDecoration: f?.u ? "underline" : undefined, textAlign: f?.a || undefined,
-                    background: f?.bg || undefined, color: f?.fg || undefined, fontSize: f?.sz ? `${f.sz}px` : undefined,
-                    boxShadow: f?.bd ? "inset 0 0 0 1px #64748b" : undefined,
-                  };
-                  return (
-                    <td
-                      key={c}
-                      id={`cell-${r}-${c}`}
-                      className={`border border-slate-200 px-1 overflow-hidden whitespace-nowrap text-[13px] leading-tight ${selected ? "bg-emerald-50" : ""} ${active ? "outline outline-2 outline-emerald-500 -outline-offset-2 relative z-[5]" : ""}`}
-                      style={style}
-                      onMouseDown={(e) => { if (editingRef.current) commitEdit(); if (e.shiftKey) setSelBoth({ ...selRef.current, r2: r, c2: c }); else setSelBoth({ r, c, r2: r, c2: c }); requestAnimationFrame(() => gridRef.current?.focus()); }}
-                      onMouseEnter={(e) => { if (e.buttons === 1 && !editingRef.current) setSelBoth({ ...selRef.current, r2: r, c2: c }); }}
-                      onDoubleClick={() => startEdit(r, c)}
-                    >
-                      {isEditing ? (
-                        <input ref={editInputRef} defaultValue={editing.seed} onKeyDown={onEditKeyDown} onBlur={() => commitEdit()} className="w-full h-full outline-none bg-white text-[13px] px-0" style={{ textAlign: f?.a || undefined }} />
-                      ) : (
-                        cell?.v ?? ""
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+            {Array.from({ length: rowCount }, (_, r) => {
+              const rowSel = r >= nsel.r1 && r <= nsel.r2;
+              return (
+                <GridRow
+                  key={r}
+                  r={r}
+                  colCount={colCount}
+                  height={rowHeights[r] || DEF_ROW_H}
+                  rowCells={rowMap[r] || EMPTY_ROW}
+                  rowSelected={rowSel}
+                  selLeft={rowSel ? nsel.c1 : -1}
+                  selRight={rowSel ? nsel.c2 : -1}
+                  activeCol={sel.r === r ? sel.c : -1}
+                  editingCol={editing?.r === r ? editing.c : -1}
+                  editSeed={editing?.r === r ? editing.seed : ""}
+                  editInputRef={editInputRef}
+                  onDown={onCellDown}
+                  onEnter={onCellEnter}
+                  onDbl={onCellDbl}
+                  onRowNum={onRowNum}
+                  onRowResize={onRowResize}
+                  onEditKeyDown={onEditKeyDown}
+                  onEditBlur={onEditBlur}
+                />
+              );
+            })}
           </tbody>
         </table>
       </div>
