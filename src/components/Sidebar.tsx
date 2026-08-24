@@ -147,6 +147,8 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   // server-side; the company admin can switch the feature off in Company
   // Settings (the API enforces it).
   { href: "/notepad", label: "Secure Notepad", roles: ["admin", "manager", "agent"], newTab: true },
+  // My Excel — a personal, private spreadsheet workspace; opens in its own tab.
+  { href: "/my-excel", label: "My Excel", roles: ["admin", "manager", "agent"], newTab: true },
   { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration", roles: ["admin", "manager"] },
   // Facebook Forms alias management — admin only (the page shows real Meta form
   // names, which managers/agents must never see).

@@ -3509,3 +3509,52 @@ export const notepadNotes = pgTable(
   })
 );
 
+
+// ── My Excel — a personal, lightweight spreadsheet workspace per user. ───────
+// A completely separate module from the Sales Ledger. One workbook per
+// (company, user); each workbook has sheets; each sheet stores its cells and
+// dimensions as compact jsonb (sparse maps), so a save transmits only changed
+// cells (delta) and the whole sheet is one row. Strictly company + user scoped
+// — no cross-user or cross-company access is possible.
+export const excelWorkbooks = pgTable(
+  "excel_workbooks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({ userUniq: uniqueIndex("excel_workbooks_company_user_uniq").on(t.companyId, t.userId) })
+);
+
+export const excelSheets = pgTable(
+  "excel_sheets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workbookId: uuid("workbook_id")
+      .references(() => excelWorkbooks.id, { onDelete: "cascade" })
+      .notNull(),
+    // Denormalized owner scoping so every sheet query is company + user scoped
+    // directly (no join needed) — this is what makes IDOR structurally
+    // impossible: a sheet id from a tampered request only resolves when it also
+    // matches the caller's companyId AND userId.
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }).notNull(),
+    name: varchar("name", { length: 120 }).notNull().default("Sheet1"),
+    position: integer("position").notNull().default(0),
+    // Sparse cell map: { "row:col": { v: text, f?: { b,i,u,a,bg,fg,sz } } }.
+    cells: jsonb("cells").$type<Record<string, { v: string; f?: Record<string, unknown> }>>().notNull().default({}),
+    rowHeights: jsonb("row_heights").$type<Record<string, number>>().notNull().default({}),
+    colWidths: jsonb("col_widths").$type<Record<string, number>>().notNull().default({}),
+    rowCount: integer("row_count").notNull().default(100),
+    colCount: integer("col_count").notNull().default(26),
+    version: integer("version").notNull().default(1),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    wbIdx: index("excel_sheets_workbook_idx").on(t.workbookId, t.position),
+    ownerIdx: index("excel_sheets_owner_idx").on(t.companyId, t.userId),
+  })
+);

@@ -91,6 +91,8 @@ export async function proxy(req: NextRequest) {
   const isAppRoute =
     pathname === "/notepad" ||
     pathname.startsWith("/notepad/") ||
+    pathname === "/my-excel" ||
+    pathname.startsWith("/my-excel/") ||
     pathname === "/home" ||
     pathname.startsWith("/home/") ||
     pathname.startsWith("/leads") ||
@@ -330,6 +332,8 @@ export const config = {
     "/super-admin/:path*",
     "/notepad/:path*",
     "/notepad",
+    "/my-excel/:path*",
+    "/my-excel",
     "/api/:path*",
   ],
 };
