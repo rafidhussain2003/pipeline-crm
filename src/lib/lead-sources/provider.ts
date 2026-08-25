@@ -33,7 +33,7 @@ export interface LeadSourceProvider {
   readonly platform: string; // matches sourcePlatformEnum, e.g. "facebook"
   readonly displayName: string; // "Meta Lead Ads"
 
-  getAuthorizeUrl(redirectUri: string, state: string): string;
+  getAuthorizeUrl(redirectUri: string, state: string, opts?: { forceReauth?: boolean }): string;
 
   exchangeCodeForToken(
     code: string,

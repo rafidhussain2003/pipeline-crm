@@ -42,7 +42,7 @@ const SCOPES = [
   "email",
 ].join(",");
 
-export function getFacebookAuthorizeUrl(redirectUri: string, state: string) {
+export function getFacebookAuthorizeUrl(redirectUri: string, state: string, opts?: { forceReauth?: boolean }) {
   const params = new URLSearchParams({
     client_id: FB_APP_ID,
     redirect_uri: redirectUri,
@@ -50,6 +50,13 @@ export function getFacebookAuthorizeUrl(redirectUri: string, state: string) {
     scope: SCOPES,
     response_type: "code",
   });
+  // Connecting ANOTHER account (the company already has one): force Facebook
+  // to show its login/confirm screen instead of silently re-authorizing the
+  // browser's already-logged-in identity. Without this, "Connect another
+  // Account" returns the SAME Meta account every time and a second, different
+  // account can never be added. auth_type=reauthenticate is Facebook's
+  // documented way to make the person confirm/choose which account to use.
+  if (opts?.forceReauth) params.set("auth_type", "reauthenticate");
   return `https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth?${params.toString()}`;
 }
 

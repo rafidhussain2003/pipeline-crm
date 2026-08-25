@@ -434,6 +434,11 @@ function ConnectorContent() {
           >
             {accountBlocks.length > 0 ? "Connect another Account" : "Connect Meta"}
           </a>
+          {accountBlocks.length > 0 && (
+            <p className="text-[11px] text-slate-400 mt-2">
+              Facebook will ask you to log in — sign in with (or switch to) the account you want to add. Each connected account keeps delivering leads on its own.
+            </p>
+          )}
         </div>
 
         {[

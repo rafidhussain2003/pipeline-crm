@@ -86,6 +86,28 @@ export async function GET(req: NextRequest) {
     verifiedReconnectAccountId = existing.id;
   }
 
+  // Adding ANOTHER account: if this company already has a live Meta account,
+  // force Facebook's login/account screen on a fresh connect so a DIFFERENT
+  // account can be added. Without this, Facebook silently re-authorizes the
+  // browser's already-logged-in identity and "Connect another Account" can
+  // only ever return the account that's already connected. A reconnect keeps
+  // the silent path on purpose — it WANTS the same login refreshed.
+  let forceReauth = false;
+  if (!verifiedReconnectSourceId && !verifiedReconnectAccountId) {
+    const [existingAccount] = await db
+      .select({ id: connectedAccounts.id })
+      .from(connectedAccounts)
+      .where(
+        and(
+          eq(connectedAccounts.companyId, session.companyId),
+          eq(connectedAccounts.platform, "facebook"),
+          isNull(connectedAccounts.deletedAt)
+        )
+      )
+      .limit(1);
+    forceReauth = !!existingAccount;
+  }
+
   const provider = getProvider("facebook")!;
 
   // This must exactly match what the callback route uses when exchanging
@@ -103,5 +125,5 @@ export async function GET(req: NextRequest) {
     "10m"
   );
 
-  return NextResponse.redirect(provider.getAuthorizeUrl(redirectUri, state));
+  return NextResponse.redirect(provider.getAuthorizeUrl(redirectUri, state, { forceReauth }));
 }
