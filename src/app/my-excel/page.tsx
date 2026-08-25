@@ -130,6 +130,7 @@ export default function MyExcelPage() {
   const [findOpen, setFindOpen] = useState(false);
   const [findQ, setFindQ] = useState("");
   const [notice, setNotice] = useState("");
+  const [painterOn, setPainterOn] = useState(false); // Format Painter armed?
 
   // Refs mirror state for use inside event handlers (no stale closures).
   const cellsRef = useRef<Cells>({});
@@ -396,6 +397,34 @@ export default function MyExcelPage() {
   const setColor = (which: "bg" | "fg", v: string) => applyFormat((f) => { if (v) f[which] = v; else delete f[which]; return f; });
   const setSize = (n: number) => applyFormat((f) => { if (n === 14) delete f.sz; else f.sz = n; return f; });
 
+  // ── Format Painter ── copy one cell's formatting onto other cells (Excel's
+  // paintbrush). Arm from the active cell's format; the next click/drag on the
+  // grid paints that format onto the target cell(s) — values untouched. Single
+  // click = one-shot; double-click the button = sticky (paint many until Esc or
+  // clicking the button again). Painting REPLACES the target's format, like Excel.
+  // Mirror ref + state together (same pattern as setCellsBoth), so the mouseup
+  // handler can read the armed format synchronously while the toolbar/cursor
+  // re-render off the state.
+  const setPainter = useCallback((p: { f: Fmt; sticky: boolean } | null) => { painterRef.current = p; setPainterOn(p !== null); }, []);
+  const disarmPainter = useCallback(() => setPainter(null), [setPainter]);
+  const armPainter = (sticky: boolean) => {
+    const src = cellsRef.current[key(selRef.current.r, selRef.current.c)]?.f;
+    setPainter({ f: { ...(src || {}) }, sticky });
+  };
+  const togglePainter = () => { if (painterRef.current) disarmPainter(); else armPainter(false); };
+  const paintSelection = useCallback(() => {
+    const p = painterRef.current;
+    if (!p) return;
+    const { r1, c1, r2, c2 } = norm(selRef.current);
+    const hasFmt = Object.keys(p.f).length > 0;
+    const changes: Record<string, Cell | null> = {};
+    for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) {
+      const v = cellsRef.current[key(r, c)]?.v ?? "";
+      changes[key(r, c)] = hasFmt ? { v, f: { ...p.f } } : v === "" ? null : { v };
+    }
+    if (Object.keys(changes).length) applyCells(changes);
+  }, [applyCells]);
+
   // ── Clipboard ──
   const copyRange = useCallback(async () => {
     const { r1, c1, r2, c2 } = norm(selRef.current);
@@ -463,6 +492,8 @@ export default function MyExcelPage() {
 
   // ── Resizing (drag row/col borders) ──
   const dragRef = useRef<{ kind: "row" | "col"; idx: number; start: number; base: number } | null>(null);
+  // Format Painter: the copied source format + whether it stays armed (sticky).
+  const painterRef = useRef<{ f: Fmt; sticky: boolean } | null>(null);
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const d = dragRef.current; if (!d) return;
@@ -477,6 +508,30 @@ export default function MyExcelPage() {
     window.addEventListener("mousemove", onMove); window.addEventListener("mouseup", onUp);
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, []);
+
+  // Format Painter application: while armed, a mouseup that lands on a real data
+  // cell paints the copied format onto the just-selected range. Guarded to cells
+  // so header/resize-handle releases (and the arming button click, whose target
+  // is the toolbar) never paint.
+  useEffect(() => {
+    const onUp = (e: MouseEvent) => {
+      if (!painterRef.current) return;
+      const t = e.target;
+      if (!(t instanceof Element) || !t.closest('td[id^="cell-"]')) return;
+      paintSelection();
+      if (!painterRef.current?.sticky) disarmPainter();
+    };
+    window.addEventListener("mouseup", onUp);
+    return () => window.removeEventListener("mouseup", onUp);
+  }, [paintSelection, disarmPainter]);
+
+  // Esc cancels an armed painter (bound only while armed).
+  useEffect(() => {
+    if (!painterOn) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") disarmPainter(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [painterOn, disarmPainter]);
 
   // ── Keyboard (grid focused, not editing) ──
   const onGridKeyDown = (e: React.KeyboardEvent) => {
@@ -635,6 +690,7 @@ export default function MyExcelPage() {
         <button className={tbBtn} onMouseDown={(e) => e.preventDefault()} onClick={() => { setColor("fg", ""); setColor("bg", ""); }} title="Clear colors">⌫</button>
         <button className={`${tbBtn} ${curF.bd ? tbOn : ""}`} onMouseDown={(e) => e.preventDefault()} onClick={() => toggle("bd")} title="Border">▣</button>
         <button className={`${tbBtn} ${curF.w ? tbOn : ""}`} onMouseDown={(e) => e.preventDefault()} onClick={() => toggle("w")} title="Wrap text">⤶ Wrap</button>
+        <button className={`${tbBtn} ${painterOn ? tbOn : ""}`} onMouseDown={(e) => e.preventDefault()} onClick={togglePainter} onDoubleClick={() => armPainter(true)} title="Format Painter — copy this cell's formatting, then click a cell to apply it (double-click to keep painting; Esc to cancel)">🖌</button>
         <select className="h-7 text-[13px] border border-slate-200 rounded px-1" value={curF.sz || 14} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => setSize(Number(e.target.value))} title="Font size">
           {[10, 11, 12, 14, 16, 18, 20, 24].map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
@@ -660,7 +716,7 @@ export default function MyExcelPage() {
       )}
 
       {/* Grid */}
-      <div ref={gridRef} tabIndex={0} onKeyDown={onGridKeyDown} onPaste={(e) => { e.preventDefault(); pasteText(e.clipboardData.getData("text")); }} className="flex-1 overflow-auto outline-none [scrollbar-gutter:stable]">
+      <div ref={gridRef} tabIndex={0} onKeyDown={onGridKeyDown} onPaste={(e) => { e.preventDefault(); pasteText(e.clipboardData.getData("text")); }} className={`flex-1 overflow-auto outline-none [scrollbar-gutter:stable]${painterOn ? " cursor-copy" : ""}`}>
         <table className="border-collapse" style={{ tableLayout: "fixed" }}>
           <colgroup>
             <col style={{ width: ROWNUM_W }} />
