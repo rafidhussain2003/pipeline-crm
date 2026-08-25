@@ -1,4 +1,4 @@
-// Sales Ledger V2 — installation reminders.
+// Sales Ledger V2 — installation reminders (DB side).
 //
 // Reminders are generated EVENT-DRIVEN at write time (when a sale's
 // installationDate is set/changed), never by scanning the whole sales table on
@@ -6,82 +6,18 @@
 // calendar date we precompute two reminder rows — two days before, and on the
 // day — each with an indexed dueAt. The daily dashboard reads them directly;
 // a cron backstop turns a due reminder into an in-app notification.
+//
+// The pure parsing + timing + copy lives in ./parse-date (unit-tested there);
+// it is re-exported here so existing import sites (`@/lib/sales/reminders`)
+// are unchanged.
 import { db } from "@/db";
-import { salesReminders } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { sales, salesReminders } from "@/db/schema";
+import { and, asc, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { computeDueAts, parseInstallationDate, type ReminderKind } from "./parse-date";
 
-export type ReminderKind = "before_2d" | "day_of";
-
-// The exact agent-facing copy for each reminder (dashboard + notification).
-export const REMINDER_COPY: Record<ReminderKind, { title: string; body: string }> = {
-  before_2d: {
-    title: "Installation in 2 days",
-    body: "Customer installation is in 2 days. Please call the customer and confirm the appointment.",
-  },
-  day_of: {
-    title: "Installation today",
-    body: "Customer installation is scheduled for today.",
-  },
-};
-
-const MONTHS: Record<string, number> = {
-  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
-};
-
-function makeLocalDate(y: number, mo: number, d: number): Date | null {
-  // 09:00 local — a morning nudge, and a stable time the "day_of"/"before_2d"
-  // dueAts derive from. Reject impossible dates (e.g. 31 Feb) via round-trip.
-  const dt = new Date(y, mo, d, 9, 0, 0, 0);
-  if (Number.isNaN(dt.getTime()) || dt.getFullYear() !== y || dt.getMonth() !== mo || dt.getDate() !== d) return null;
-  return dt;
-}
-
-// Best-effort parse of the FREE-TEXT installation date into a real datetime.
-// Deliberately conservative: it recognises the common, unambiguous shapes
-// ("05 Aug 2026", "5 August 2026", "Aug 5, 2026", "2026-08-05") and returns
-// null for anything else ("TBD", "Delivery", a bare "Morning") — a null just
-// means "no reminders for this row", never a wrong date. Ambiguous numeric
-// slash formats (05/08/2026) are intentionally NOT guessed.
-export function parseInstallationDate(raw: string | null | undefined): Date | null {
-  if (!raw) return null;
-  const s = raw.trim();
-  if (!s) return null;
-
-  // ISO: YYYY-MM-DD
-  let m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (m) return makeLocalDate(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-
-  // DD Mon YYYY  ("10 Aug 2026", "5 August 2026")
-  m = s.match(/\b(\d{1,2})\s+([A-Za-z]{3,9})\.?\s+(\d{4})\b/);
-  if (m) {
-    const mo = MONTHS[m[2].toLowerCase().slice(0, 3)];
-    if (mo !== undefined) return makeLocalDate(Number(m[3]), mo, Number(m[1]));
-  }
-
-  // Mon DD, YYYY  ("Aug 10, 2026", "August 5 2026")
-  m = s.match(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})\b/);
-  if (m) {
-    const mo = MONTHS[m[1].toLowerCase().slice(0, 3)];
-    if (mo !== undefined) return makeLocalDate(Number(m[3]), mo, Number(m[2]));
-  }
-
-  return null;
-}
-
-// The two reminder times for an installation datetime.
-export function computeDueAts(installationAt: Date): Record<ReminderKind, Date> {
-  const dayOf = new Date(
-    installationAt.getFullYear(),
-    installationAt.getMonth(),
-    installationAt.getDate(),
-    9, 0, 0, 0
-  );
-  const before = new Date(dayOf);
-  before.setDate(before.getDate() - 2);
-  return { before_2d: before, day_of: dayOf };
-}
+export { REMINDER_COPY, parseInstallationDate, computeDueAts } from "./parse-date";
+export type { ReminderKind } from "./parse-date";
 
 function startOfToday(): Date {
   const d = new Date();
@@ -136,4 +72,66 @@ export async function syncSaleReminders(params: {
       count: toCreate.length,
     },
   });
+}
+
+// One-time backfill / self-heal. A sale can carry a free-text installationDate
+// whose parsed installationAt is NULL — either it was entered before the parser
+// understood that shape, or the shape genuinely isn't a date. Such rows never
+// surfaced on the dashboard and never generated reminders. This walks them once
+// (keyset by id, so each row is visited exactly once: rows that now parse leave
+// the predicate as they're fixed, and rows that still don't are simply stepped
+// over), re-derives installationAt, and for any that now parse sets it and
+// (re)creates the reminders. Bounded + idempotent, so it's safe to run on every
+// boot; genuinely unparseable rows just cost one visit and are left as-is.
+export async function reconcileInstallationDates(
+  opts: { batchSize?: number; maxRows?: number } = {}
+): Promise<{ scanned: number; fixed: number }> {
+  const batchSize = opts.batchSize ?? 500;
+  const maxRows = opts.maxRows ?? 50_000;
+  let cursor = "00000000-0000-0000-0000-000000000000";
+  let scanned = 0;
+  let fixed = 0;
+
+  while (scanned < maxRows) {
+    const batch = await db
+      .select({
+        id: sales.id,
+        companyId: sales.companyId,
+        agentId: sales.agentId,
+        installationDate: sales.installationDate,
+      })
+      .from(sales)
+      .where(
+        and(
+          isNotNull(sales.installationDate),
+          isNull(sales.installationAt),
+          isNull(sales.deletedAt),
+          gt(sales.id, cursor)
+        )
+      )
+      .orderBy(asc(sales.id))
+      .limit(batchSize);
+
+    if (batch.length === 0) break;
+
+    for (const row of batch) {
+      scanned++;
+      const installationAt = parseInstallationDate(row.installationDate);
+      if (!installationAt) continue;
+      await db.update(sales).set({ installationAt, updatedAt: new Date() }).where(eq(sales.id, row.id));
+      await syncSaleReminders({
+        saleId: row.id,
+        companyId: row.companyId,
+        agentId: row.agentId,
+        installationAt,
+        actorUserId: null,
+      });
+      fixed++;
+    }
+
+    cursor = batch[batch.length - 1].id;
+    if (batch.length < batchSize) break;
+  }
+
+  return { scanned, fixed };
 }

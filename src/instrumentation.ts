@@ -51,4 +51,20 @@ export async function register() {
   };
   setTimeout(runNotepadSweep, 60_000); // once shortly after boot
   setInterval(runNotepadSweep, 60 * 60 * 1000); // then hourly
+
+  // Sales Ledger — one-time backfill of parsed installation dates. Existing
+  // sales whose free-text installation date the parser can now understand (but
+  // couldn't when they were entered) get their installationAt derived and their
+  // reminders created, so the daily dashboard's "Upcoming Installations" and the
+  // reminder nudges light up without anyone re-typing a date. Runs ONCE shortly
+  // after boot (not on an interval); bounded, keyset-paged, and idempotent.
+  setTimeout(async () => {
+    try {
+      const { reconcileInstallationDates } = await import("@/lib/sales/reminders");
+      const res = await reconcileInstallationDates();
+      if (res.fixed > 0) console.log(`[sales] installation-date backfill: derived ${res.fixed} of ${res.scanned} scanned`);
+    } catch (err) {
+      console.error("[sales] installation-date backfill failed:", err);
+    }
+  }, 90_000);
 }
