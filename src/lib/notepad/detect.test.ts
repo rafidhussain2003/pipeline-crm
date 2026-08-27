@@ -152,6 +152,28 @@ for (const payload of ['<script>alert(1)</script>', '<img src=x onerror=alert(1)
   const twoRes = applyRetention(two, {}, NOW, H);
   check("blocks: Active block A erased", !twoRes.content.includes(card));
   check("blocks: Follow Up block B kept", twoRes.content.includes("5500005555555559"));
+
+  // ── Real agent layout: the marker sits a BLANK LINE under the customer ──
+  // (regression) A blank line between the details and "Follow Up" dropped the
+  // marker into its own block, so the customer fell back to 12h and got erased.
+  const gap = "Tyrone card " + card + "\n\nFollow Up";
+  const gapFresh = applyRetention(gap, {}, NOW, H);
+  check("followup(gap): kept at 13h", applyRetention(gap, age(gapFresh.meta, 13 * 60 * 60 * 1000), NOW, H).content.includes(card));
+  check("followup(gap): erased after 8 days", !applyRetention(gap, age(gapFresh.meta, 8 * 24 * 60 * 60 * 1000), NOW, H).content.includes(card));
+
+  // The exact sheet shape: "****" dividers + multiple blank lines around it.
+  const sheet = "************\nMoody card " + card + "\nDL info\n\nFollow Up\n\n\n************\nNext one";
+  const sheetFresh = applyRetention(sheet, {}, NOW, H);
+  check("followup(sheet): kept at 13h across **** layout", applyRetention(sheet, age(sheetFresh.meta, 13 * 60 * 60 * 1000), NOW, H).content.includes(card));
+
+  // "Active" a blank line under the customer still erases it (propagates up).
+  check("active(gap): erased immediately", !applyRetention("Sold card " + card + "\n\nActive", {}, NOW, H).content.includes(card));
+
+  // Direction: a standalone marker governs the customer ABOVE it, not below.
+  const dir = "A card " + card + "\n\nFollow Up\n\nB card 5500005555555559";
+  const dir13h = applyRetention(dir, age(applyRetention(dir, {}, NOW, H).meta, 13 * 60 * 60 * 1000), NOW, H);
+  check("direction: A above marker kept at 13h", dir13h.content.includes(card));
+  check("direction: B below marker on default 12h (erased)", !dir13h.content.includes("5500005555555559"));
 }
 
 // ── 9. Guards ────────────────────────────────────────────────────────────────

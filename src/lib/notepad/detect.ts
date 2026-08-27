@@ -266,31 +266,41 @@ export const FOLLOWUP_MS = 7 * 24 * 60 * 60 * 1000; // "Follow Up" block: 7 days
 export type SensitiveMeta = Record<string, { kind: SensitiveKind; t: number }>;
 
 // Per-customer-block retention control. The note is split into blocks by blank
-// lines (one blank line between customers). A standalone marker LINE inside a
-// block changes how long that block's sensitive values live:
-//   "Active" / "Activated"  → 0  (erase immediately — the order is done)
-//   "Follow Up" / "Followup"→ 7 days (kept longer while the order is pending)
-//   otherwise               → 12 hours (default)
+// lines. A standalone marker LINE governs how long a block's sensitive values
+// live:
+//   "Active" / "Activated"   → 0  (erase immediately — the order is done)
+//   "Follow Up" / "Followup" → 7 days (kept longer while the order is pending)
+//   otherwise                → 12 hours (default)
 // The marker must be its OWN line (optionally with trailing punctuation) so an
 // ordinary sentence like "wants active service" never triggers it. Active wins
-// over Follow Up if a block somehow has both.
+// over Follow Up.
+//
+// CRUCIALLY, agents write the marker UNDERNEATH the customer, usually with a
+// blank line (or two, plus a "****" divider) between the details and the marker
+// — which drops the marker into its OWN block, so on its own it would leave the
+// customer on the 12h default and erase the data the agent meant to keep. So a
+// block that is ONLY a marker also governs the customer block directly ABOVE it.
+// That is the whole promise of the feature: "Follow Up written below a customer
+// keeps that customer".
 const lineIsActive = (l: string) => /^\s*activ(?:e|ated)\s*[!.:*-]*\s*$/i.test(l);
 const lineIsFollowUp = (l: string) => /^\s*follow[\s-]?up\s*[!.:*-]*\s*$/i.test(l);
 
 type Block = { start: number; end: number; win: number };
 function blockWindows(content: string): Block[] {
-  const blocks: Block[] = [];
+  type Raw = { start: number; end: number; active: boolean; follow: boolean; markerOnly: boolean };
+  const raw: Raw[] = [];
   const lines = content.split("\n");
   let offset = 0;
   let start = -1;
   let active = false;
   let follow = false;
+  let hasOther = false; // saw a real (non-marker) content line in this block
   const flush = (end: number) => {
-    if (start < 0) return;
-    blocks.push({ start, end, win: active ? 0 : follow ? FOLLOWUP_MS : RETENTION_MS });
+    if (start >= 0) raw.push({ start, end, active, follow, markerOnly: (active || follow) && !hasOther });
     start = -1;
     active = false;
     follow = false;
+    hasOther = false;
   };
   for (const line of lines) {
     const lineStart = offset;
@@ -298,13 +308,25 @@ function blockWindows(content: string): Block[] {
       flush(lineStart);
     } else {
       if (start < 0) start = lineStart;
-      if (lineIsActive(line)) active = true;
-      if (lineIsFollowUp(line)) follow = true;
+      const act = lineIsActive(line);
+      const fol = lineIsFollowUp(line);
+      if (act) active = true;
+      if (fol) follow = true;
+      if (!act && !fol) hasOther = true;
     }
     offset = lineStart + line.length + 1; // +1 for the "\n"
   }
   flush(offset);
-  return blocks;
+
+  // A marker-only block ("Follow Up" / "Active" alone, blank lines around it)
+  // governs the customer block directly above it — that's how agents write it.
+  for (let i = 1; i < raw.length; i++) {
+    if (!raw[i].markerOnly) continue;
+    if (raw[i].active) raw[i - 1].active = true;
+    if (raw[i].follow) raw[i - 1].follow = true;
+  }
+
+  return raw.map((b) => ({ start: b.start, end: b.end, win: b.active ? 0 : b.follow ? FOLLOWUP_MS : RETENTION_MS }));
 }
 function windowForOffset(blocks: Block[], pos: number): number {
   for (const b of blocks) if (pos >= b.start && pos < b.end) return b.win;
