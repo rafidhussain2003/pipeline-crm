@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ZiplodMark } from "@/components/brand/ZiplodMark";
 
 // Shared footer for every public/marketing page. Phase 14: professional layout
 // with the registered company address + a full link set. One component so the
@@ -10,7 +11,7 @@ export function Footer() {
         <div className="grid gap-8 sm:grid-cols-2 md:grid-cols-4">
           <div className="sm:col-span-2 md:col-span-1">
             <div className="flex items-center gap-2 text-lg font-bold tracking-tight text-slate-900">
-              <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-slate-900 text-white text-xs">Z</span>
+              <ZiplodMark className="w-6 h-6" />
               Ziplod
             </div>
             <p className="text-sm text-slate-500 mt-3 max-w-xs">AI CRM built for lead generation teams. Connect Meta Lead Ads and let AI route every lead.</p>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ZiplodMark } from "@/components/brand/ZiplodMark";
 
 // Ziplod Secure Notepad — a minimal, Windows-Notepad-feel editor with TABS.
 //
@@ -435,7 +436,7 @@ export default function SecureNotepadPage() {
 
       {/* Status bar */}
       <div className="flex items-center gap-3 px-4 py-1.5 border-b border-slate-200 bg-slate-50 shrink-0">
-        <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-slate-900 text-white text-[10px] font-bold shrink-0">Z</span>
+        <ZiplodMark className="w-5 h-5 shrink-0" />
         <span className="text-xs font-semibold text-slate-800">Secure Notepad</span>
         <span className={`text-[11px] font-medium border rounded-full px-2.5 py-0.5 ${chip.c}`}>{chip.t}</span>
         {notice && <span className="text-[11px] font-medium text-blue-800 bg-blue-50 border border-blue-200 rounded-full px-2.5 py-0.5 truncate">{notice}</span>}

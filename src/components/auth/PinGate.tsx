@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ZiplodMark } from "@/components/brand/ZiplodMark";
 
 // The full-screen PIN gate. `unlock` = the user has a PIN and this session
 // needs to re-enter it (fresh login / after inactivity). `setup` = the
@@ -16,7 +17,7 @@ export default function PinGate({ mode }: { mode: "unlock" | "setup" }) {
       <div className="w-full max-w-sm">
         <div className="text-center mb-6">
           <div className="flex items-center justify-center gap-2 text-2xl font-bold text-slate-900 tracking-tight">
-            <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-slate-900 text-white text-sm">Z</span>
+            <ZiplodMark className="w-7 h-7" />
             Ziplod
           </div>
         </div>

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ZiplodMark } from "@/components/brand/ZiplodMark";
 
 // Phase 14 — shared marketing site header. Sticky, responsive (nav links hide
 // on the smallest screens, CTAs always visible), and keyboard-accessible.
@@ -7,7 +8,7 @@ export function MarketingNav() {
     <header className="sticky top-0 z-30 border-b border-slate-100 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60">
       <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2 text-lg font-bold tracking-tight text-slate-900" aria-label="Ziplod home">
-          <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-slate-900 text-white text-sm">Z</span>
+          <ZiplodMark className="w-7 h-7" />
           Ziplod
         </Link>
         <nav className="flex items-center gap-1 sm:gap-2" aria-label="Primary">

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Footer } from "@/components/Footer";
+import { ZiplodMark } from "@/components/brand/ZiplodMark";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -95,7 +96,7 @@ export default function LoginPage() {
             {/* Ziplod product branding (same mark as the marketing pages and
                 the in-app sidebar). */}
             <div className="flex items-center justify-center gap-2 text-2xl font-bold text-slate-900 tracking-tight">
-              <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-slate-900 text-white text-sm shrink-0">Z</span>
+              <ZiplodMark className="w-7 h-7 shrink-0" />
               Ziplod
             </div>
             <p className="text-sm text-slate-500 mt-1">Sign in to your account</p>

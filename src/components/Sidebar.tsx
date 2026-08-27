@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import PresenceHeartbeat from "./PresenceHeartbeat";
+import { ZiplodMark } from "@/components/brand/ZiplodMark";
 
 // Finance module navigation (Phase 19) — rendered only when the company's
 // feature profile has "finance" AND the role can at least view it. A single
@@ -288,7 +289,7 @@ export default function Sidebar({
         >
           <span aria-hidden="true" className="block text-lg leading-none">☰</span>
         </button>
-        <span className="inline-flex items-center justify-center w-5 h-5 rounded bg-slate-900 text-white text-[10px] font-bold shrink-0">Z</span>
+        <ZiplodMark className="w-5 h-5 shrink-0" />
         <span className="text-sm font-semibold text-slate-900 truncate">
           Ziplod<span className="font-normal text-slate-400"> · {companyName}</span>
         </span>
@@ -320,7 +321,7 @@ export default function Sidebar({
           {/* Ziplod product branding (same mark as the marketing pages), with
               the signed-in company underneath. */}
           <div className="flex items-center gap-2 text-lg font-bold text-slate-900 tracking-tight">
-            <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-slate-900 text-white text-xs shrink-0">Z</span>
+            <ZiplodMark className="w-6 h-6 shrink-0" />
             Ziplod
           </div>
           <div className="text-xs text-slate-500 mt-1 truncate">{companyName}</div>
