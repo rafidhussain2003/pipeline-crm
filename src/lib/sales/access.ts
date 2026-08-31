@@ -35,6 +35,23 @@ export function currentSaleMonth(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// AUTOMATIC agent cutoff: a month's sheet stays fully visible to agents through
+// the 15th of the FOLLOWING month, then flips to summary-only. e.g. the
+// 2026-08 sheet shows in full until 15 Sep 2026 (end of day); from 16 Sep 2026
+// agents see only the counts. Returns the cutoff instant (ms) — the first
+// moment agents no longer see detail (16th, 00:00 local). This is the default;
+// an admin's manual "visible to agents until" setting, when present, overrides
+// it for that month (see resolveSalesScope).
+export function autoAgentCutoffMs(month: string): number {
+  const m = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!m) return Number.POSITIVE_INFINITY; // unknown month → never auto-hide (safe default)
+  let year = Number(m[1]);
+  let mo = Number(m[2]) + 1; // the FOLLOWING month (1-based)
+  if (mo > 12) { mo = 1; year += 1; }
+  // 16th, 00:00 local → agents see detail strictly before this (through the 15th).
+  return new Date(year, mo - 1, 16, 0, 0, 0, 0).getTime();
+}
+
 export type SalesScope = {
   // admin + backend_agent see every agent's rows; an agent is hard-scoped to
   // their own.
@@ -63,8 +80,12 @@ export async function resolveSalesScope(session: CompanySession, month: string):
     // NO export/download — both stay admin-only.
     return { viewAll: true, canSeeDetail: true, canEdit: true, canManage: false, canExport: false };
   }
-  // agent: own rows only; detail until the admin-set cutoff for this month.
+  // agent: own rows only. Detail is visible until the cutoff for this month —
+  // by default the 15th of the following month (automatic), unless an admin has
+  // set a manual "visible to agents until" date, which overrides it. Past the
+  // cutoff the API returns summary counts only (no rows, no PII).
   const { agentVisibleUntilMs } = await getPeriodSetting(session.companyId, month);
-  const pastCutoff = agentVisibleUntilMs !== null && Date.now() > agentVisibleUntilMs;
+  const cutoffMs = agentVisibleUntilMs ?? autoAgentCutoffMs(month);
+  const pastCutoff = Date.now() > cutoffMs;
   return { viewAll: false, canSeeDetail: !pastCutoff, canEdit: !pastCutoff, canManage: false, canExport: false };
 }
