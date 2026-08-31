@@ -586,7 +586,7 @@ export async function renderOfferLetterPdf(input: OfferLetterInput): Promise<Uin
   return d.bytes();
 }
 
-// ── Document 2: Employment & Data Protection Agreement (two pages) ───────────
+// ── Document 2: Employment & Data Protection Agreement (three pages) ─────────
 export async function renderAgreementPdf(input: OfferLetterInput): Promise<Uint8Array> {
   const v = vars(input);
   const d = await Doc.create(`Employment Agreement - ${v.name}`);
@@ -649,41 +649,63 @@ export async function renderAgreementPdf(input: OfferLetterInput): Promise<Uint8
     `The Employee acknowledges that these consequences are reasonable and proportionate to the harm such theft causes the Company and its clients, and agrees to them knowingly and voluntarily.`
   );
 
-  // Sections 4–9 flow on naturally (the zero-tolerance box above continues
-  // across the page boundary), landing the whole agreement on two pages.
-  d.heading("4. Systems, monitoring and conduct", { before: 2 });
+  // Section 4 — the second red ZERO-TOLERANCE box (conduct / lawful behaviour).
+  // It continues the flow after the data-theft box; sections 5-10 follow. The
+  // extra red box + conduct clauses carry the agreement onto a third page.
+  d.heading("4. Code of conduct, lawful behaviour and discipline", { before: 2 });
   d.paragraph(
-    `4.1 The Employee shall use only Company-provided systems, credentials and tools for work, keep credentials secret, and not install unauthorised software or connect unauthorised devices. 4.2 The Employee acknowledges that the Company's systems, calls, screens and premises may be monitored and recorded for quality, security and compliance, and consents to such monitoring. 4.3 The Employee shall follow the client's calling scripts, disclosures and compliance requirements, treat customers courteously and honestly, and shall not misrepresent any product, price or term, nor place any order without the customer's clear consent.`
+    `The Company runs a lawful business and requires every Employee to conduct themselves lawfully, honestly, soberly and respectfully on the Company's premises, systems and network and during working hours. The acts in the highlighted clause below are prohibited absolutely and are treated by the Company with **zero tolerance**.`
   );
 
-  d.heading("5. Attendance, hours and leave");
-  d.paragraph(
-    `5.1 Working hours: ${v.workingHours}. The Employee shall report punctually for every scheduled shift; the Company may change shift timings with reasonable notice as client requirements demand. 5.2 Leave is granted as per the Company's leave policy and must be applied for and approved in advance; unapproved absence is treated as leave without pay. 5.3 Unauthorised absence for three (3) or more consecutive working days shall be treated as abandonment of service.`
+  d.alertBox(
+    "!  4.1  CONDUCT - ZERO TOLERANCE",
+    [
+      `The following acts are strictly prohibited on the Company's premises and during working hours. Each carries the consequence stated against it, in addition to disciplinary action up to immediate termination:`,
+    ],
+    [
+      `**No illegal or unlawful activity of any kind.** The Employee shall not do, assist or attempt any illegal, fraudulent or unlawful act - including fraud, cheating, unauthorised transactions, impersonation, theft, or any act punishable under law - on the Company's premises, systems or network, or during working hours. Any such act is the Employee's own act in their individual capacity, wholly outside the scope of employment and against the Company's express instructions; the **Employee alone is criminally and civilly liable** for it and shall indemnify and hold the Company harmless in full.`,
+      `**No intoxicants ("nasha").** Consuming, possessing, carrying, selling or being under the influence of alcohol, drugs, narcotics or any intoxicating or psychotropic substance ("nasha") on the Company's premises or during working hours is strictly forbidden. Any Employee found doing so shall be **handed over to the police**, shall pay a **fine of INR 10,000 (Rupees Ten Thousand)**, and is liable to immediate termination. Such conduct is the Employee's personal and criminal act - the **Company bears no responsibility or liability whatsoever** for it or for any consequence of the Employee consuming, carrying or dealing in any such substance, whether on or off the premises, and even where it occurs during working hours away from the office.`,
+      `**No abuse or misbehaviour towards customers.** The Employee shall treat every customer and prospective customer with courtesy and respect at all times, **including those who decline, refuse or do not take the Company's or its clients' services.** Abusing, threatening, insulting, harassing, using foul language against or otherwise misbehaving with any customer is strictly prohibited. Any Employee found doing so shall be liable to a **fine of INR 10,000 (Rupees Ten Thousand), which the Employee authorises the Company to deduct from their salary**, in addition to disciplinary action up to immediate termination.`,
+      `**No harassment or discrimination.** The Employee shall not bully, harass, discriminate against or sexually harass any colleague, customer or other person. The Company maintains a **zero-tolerance policy on sexual harassment** in line with the Sexual Harassment of Women at Workplace (Prevention, Prohibition and Redressal) Act, 2013; any such act invites disciplinary action, termination and referral to the Internal Committee and the authorities.`,
+      `**No bribes, kickbacks or personal collection of money.** The Employee shall not solicit, demand or accept any money, gift or favour from any customer, client, colleague or vendor for personal benefit, and shall never collect any payment from a customer except strictly through the client's authorised process.`,
+      `**No violence, weapons or damage.** The Employee shall not threaten or commit violence, carry weapons or dangerous items on the premises, or damage or misappropriate any property of the Company, its clients, colleagues or customers.`,
+    ],
+    `Each fine stated above is a fair, agreed pre-estimate of the damage the breach causes the Company; it is in addition to (not instead of) the Company's other rights - including termination, forfeiture and recovery of loss - and is payable by the Employee on demand or by deduction from any amount due to the Employee, to the extent permitted by law. The Employee acknowledges that every act prohibited in this Section is a personal act outside the scope of employment, for which the Employee alone is responsible and the Company is not liable.`
   );
 
-  d.heading("6. Salary, incentives and deductions");
+  d.heading("5. Systems, monitoring and conduct", { before: 2 });
   d.paragraph(
-    `6.1 Salary is payable monthly in arrears, subject to statutory deductions and to attendance. 6.2 Incentives and commissions, where offered, are payable strictly as per the Company's incentive policy in force, on sales that are activated and not cancelled or charged back within the client's qualifying period, and are not payable for any period in which the Employee is in breach of this Agreement. 6.3 The Company may recover from any amount due to the Employee any advance, loss or damage caused by the Employee's negligence, misconduct or breach.`
+    `5.1 The Employee shall use only Company-provided systems, credentials and tools for work, keep credentials secret, and not install unauthorised software or connect unauthorised devices. 5.2 The Employee acknowledges that the Company's systems, calls, screens and premises may be monitored and recorded for quality, security and compliance, and consents to such monitoring. 5.3 The Employee shall follow the client's calling scripts, disclosures and compliance requirements, treat customers courteously and honestly, and shall not misrepresent any product, price or term, nor place any order without the customer's clear consent.`
   );
 
-  d.heading("7. Confidentiality and non-solicitation");
+  d.heading("6. Attendance, hours and leave");
   d.paragraph(
-    `7.1 The Employee shall keep confidential, during and after employment, all Company Data, client identities, pricing, processes and any information not publicly known. 7.2 For twelve (12) months after leaving, the Employee shall not solicit or divert the Company's clients or customers, nor solicit the Company's employees to leave, and shall not use or disclose any Company Data or lead in any other business.`
+    `6.1 Working hours: ${v.workingHours}. The Employee shall report punctually for every scheduled shift; the Company may change shift timings with reasonable notice as client requirements demand. 6.2 Leave is granted as per the Company's leave policy and must be applied for and approved in advance; unapproved absence is treated as leave without pay. 6.3 Unauthorised absence for three (3) or more consecutive working days shall be treated as abandonment of service.`
   );
 
-  d.heading("8. Termination");
+  d.heading("7. Salary, incentives and deductions");
   d.paragraph(
-    `8.1 After confirmation, either party may end this employment by giving **${v.notice} days'** written notice or salary in lieu; during probation of ${v.probation} month${v.probation === 1 ? "" : "s"}, 7 days' notice applies. 8.2 The Company may terminate employment immediately, without notice or payment in lieu, for misconduct, dishonesty, breach of this Agreement or of confidentiality, poor performance after warning, or any act that brings the Company or its clients into disrepute. 8.3 On leaving for any reason, the Employee shall immediately return all Company property, data, documents and access credentials, retain no copy, and complete the exit formalities; final settlement is made only after clearance. 8.4 The obligations in Sections 2, 3 and 7 **survive** the end of employment indefinitely.`
+    `7.1 Salary is payable monthly in arrears, subject to statutory deductions and to attendance. 7.2 Incentives and commissions, where offered, are payable strictly as per the Company's incentive policy in force, on sales that are activated and not cancelled or charged back within the client's qualifying period, and are not payable for any period in which the Employee is in breach of this Agreement. 7.3 The Company may recover from any amount due to the Employee any advance, loss, fine or damage caused by the Employee's negligence, misconduct or breach.`
   );
 
-  d.heading("9. General");
+  d.heading("8. Confidentiality and non-solicitation");
   d.paragraph(
-    `9.1 The Employee confirms that the particulars and documents given to the Company are true; any false statement or forged document is grounds for immediate termination. 9.2 This Agreement, together with the Offer of Employment and the Company's policies, is the entire agreement between the parties and may be amended only in writing signed by both. 9.3 This Agreement is governed by the laws of India; the courts at ${v.C.city}, Maharashtra shall have exclusive jurisdiction.`
+    `8.1 The Employee shall keep confidential, during and after employment, all Company Data, client identities, pricing, processes and any information not publicly known. 8.2 For twelve (12) months after leaving, the Employee shall not solicit or divert the Company's clients or customers, nor solicit the Company's employees to leave, and shall not use or disclose any Company Data or lead in any other business.`
+  );
+
+  d.heading("9. Termination");
+  d.paragraph(
+    `9.1 After confirmation, either party may end this employment by giving **${v.notice} days'** written notice or salary in lieu; during probation of ${v.probation} month${v.probation === 1 ? "" : "s"}, 7 days' notice applies. 9.2 The Company may terminate employment immediately, without notice or payment in lieu, for misconduct, dishonesty, breach of this Agreement or of confidentiality, poor performance after warning, or any act that brings the Company or its clients into disrepute. 9.3 On leaving for any reason, the Employee shall immediately return all Company property, data, documents and access credentials, retain no copy, and complete the exit formalities; final settlement is made only after clearance. 9.4 The obligations in Sections 2, 3, 4 and 8 **survive** the end of employment indefinitely.`
+  );
+
+  d.heading("10. General");
+  d.paragraph(
+    `10.1 The Employee confirms that the particulars and documents given to the Company are true; any false statement or forged document is grounds for immediate termination. 10.2 This Agreement, together with the Offer of Employment and the Company's policies, is the entire agreement between the parties and may be amended only in writing signed by both. 10.3 This Agreement is governed by the laws of India; the courts at ${v.C.city}, Maharashtra shall have exclusive jurisdiction.`
   );
 
   d.heading("Declaration by the Employee");
   d.paragraph(
-    `I, **${v.name}**, confirm that I have read and fully understood this Agreement (including Section 3.3 highlighted on the previous page), that it has been explained to me in a language I understand, and that I accept it of my own free will as a condition of my employment with ${v.C.shortName}.`
+    `I, **${v.name}**, confirm that I have read and fully understood this Agreement (including the highlighted zero-tolerance clauses in Sections 3.3 and 4.1), that it has been explained to me in a language I understand, and that I accept it of my own free will as a condition of my employment with ${v.C.shortName}.`
   );
 
   d.signatures(
