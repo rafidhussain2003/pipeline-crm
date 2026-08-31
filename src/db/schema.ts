@@ -14,9 +14,16 @@ import {
   numeric,
   date,
   bigint,
+  customType,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
+
+// Raw binary column (Postgres bytea) — stores small HR document files (scanned
+// IDs, signed offer letters/agreements) directly in the database, so uploads
+// work with no external object storage. Kept in its own table (hr_document_files)
+// so document-list queries never load the bytes.
+const bytea = customType<{ data: Buffer }>({ dataType: () => "bytea" });
 
 // "manager" sits between admin and agent (Leads + Agents + Reports, but not
 // company-wide settings/API keys/audit log/integrations — see
@@ -3024,6 +3031,10 @@ export const hrEmployees = pgTable(
     // reporting). Payroll's salary STRUCTURES remain the payout source of
     // truth — this is the HR file's own field, per the workspace spec.
     monthlySalary: numeric("monthly_salary", { precision: 12, scale: 2 }),
+    // Itemised salary structure shown on the HR profile:
+    //   { currency?: string, components: [{ label, amount, kind: "earning"|"deduction" }] }
+    // Display/HR record only; Payroll's structures remain the payout source of truth.
+    salaryStructure: jsonb("salary_structure"),
     emergencyContact: jsonb("emergency_contact"), // placeholder — { name, phone, relation }
     profilePhotoUrl: varchar("profile_photo_url", { length: 500 }), // placeholder — no upload
     notes: text("notes"),
@@ -3054,7 +3065,12 @@ export const hrDocuments = pgTable(
     // offer_letter | employment_contract | id_document | certificate | other
     type: varchar("type", { length: 30 }).notNull(),
     title: varchar("title", { length: 160 }).notNull(),
-    reference: varchar("reference", { length: 500 }), // placeholder — external URL/ref, no storage
+    reference: varchar("reference", { length: 500 }), // external URL/ref (kept for back-compat); null for an uploaded file
+    // Uploaded-file metadata — the bytes live in hr_document_files. Null for a
+    // reference-only (external URL) document.
+    fileName: varchar("file_name", { length: 255 }),
+    mimeType: varchar("mime_type", { length: 100 }),
+    fileSize: integer("file_size"),
     notes: text("notes"),
     uploadedBy: uuid("uploaded_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -3063,6 +3079,17 @@ export const hrDocuments = pgTable(
     employeeIdx: index("hr_documents_employee_idx").on(t.employeeId),
   })
 );
+
+// The raw bytes of an uploaded HR document — one row per hr_documents row that
+// is a real file (not an external reference). Separate table so listing
+// documents never pulls the binary; removed with its parent (cascade).
+export const hrDocumentFiles = pgTable("hr_document_files", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+  documentId: uuid("document_id").references(() => hrDocuments.id, { onDelete: "cascade" }).notNull().unique(),
+  data: bytea("data").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
 
 export const hrSettings = pgTable("hr_settings", {
   id: uuid("id").primaryKey().defaultRandom(),

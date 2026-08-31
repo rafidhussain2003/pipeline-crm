@@ -124,6 +124,7 @@ function employeeQuery(companyId: string, extra?: SQL, opts: { includeSalary?: b
       managerName: sql<string | null>`(select u.name from users u where u.id = ${hrEmployees.managerUserId})`,
       workLocation: hrEmployees.workLocation,
       monthlySalary: includeSalary ? hrEmployees.monthlySalary : sql<string | null>`null`,
+      salaryStructure: hrEmployees.salaryStructure,
       emergencyContact: hrEmployees.emergencyContact,
       profilePhotoUrl: hrEmployees.profilePhotoUrl,
       notes: hrEmployees.notes,
@@ -199,6 +200,7 @@ export interface CreateEmployeeInput {
   // Enterprise Workspace: optional HR-side salary record (Payroll's salary
   // structures stay the payout source of truth).
   monthlySalary?: number | string | null;
+  salaryStructure?: unknown;
   notes?: string | null;
 }
 
@@ -208,6 +210,31 @@ function normalizeSalary(v: number | string | null | undefined): string | null {
   const n = Number(v);
   if (!Number.isFinite(n) || n < 0) throw new HRError("Salary must be a non-negative number");
   return n.toFixed(2);
+}
+
+// Itemised salary structure kept on the HR profile (display / HR record). Each
+// component is an earning or a deduction; the profile computes gross/net.
+export type SalaryComponent = { label: string; amount: number; kind: "earning" | "deduction" };
+export type SalaryStructure = { currency?: string; components: SalaryComponent[] };
+
+function normalizeSalaryStructure(v: unknown): SalaryStructure | null {
+  if (v === undefined || v === null || v === "") return null;
+  if (typeof v !== "object") throw new HRError("Invalid salary structure");
+  const obj = v as { currency?: unknown; components?: unknown };
+  const raw = Array.isArray(obj.components) ? obj.components : [];
+  if (raw.length > 40) throw new HRError("Too many salary components (max 40)");
+  const components: SalaryComponent[] = [];
+  for (const c of raw) {
+    if (!c || typeof c !== "object") continue;
+    const cc = c as { label?: unknown; amount?: unknown; kind?: unknown };
+    const label = String(cc.label ?? "").trim().slice(0, 80);
+    if (!label) continue;
+    const amount = Number(cc.amount);
+    if (!Number.isFinite(amount) || amount < 0) throw new HRError("Salary component amounts must be non-negative numbers");
+    components.push({ label, amount: Math.round(amount * 100) / 100, kind: cc.kind === "deduction" ? "deduction" : "earning" });
+  }
+  const currency = obj.currency ? String(obj.currency).trim().slice(0, 8) : undefined;
+  return currency ? { currency, components } : { components };
 }
 
 async function validateRefs(companyId: string, input: { departmentId?: string | null; designationId?: string | null; employmentTypeId?: string | null; managerUserId?: string | null; dateOfBirth?: string | null; joiningDate?: string | null; employmentStatus?: string }) {
@@ -269,6 +296,7 @@ export async function createEmployee(companyId: string, actorUserId: string, inp
         managerUserId: input.managerUserId ?? null,
         workLocation: input.workLocation?.trim() || null,
         monthlySalary: normalizeSalary(input.monthlySalary),
+        salaryStructure: normalizeSalaryStructure(input.salaryStructure),
         notes: input.notes?.trim() || null,
       })
       .returning();
@@ -305,6 +333,7 @@ export async function updateEmployee(companyId: string, actorUserId: string, id:
     }
   }
   if (patch.monthlySalary !== undefined) set.monthlySalary = normalizeSalary(patch.monthlySalary);
+  if (patch.salaryStructure !== undefined) set.salaryStructure = normalizeSalaryStructure(patch.salaryStructure);
   const [row] = await db.update(hrEmployees).set(set).where(eq(hrEmployees.id, id)).returning();
   const statusChanged = patch.employmentStatus !== undefined && patch.employmentStatus !== existing.employmentStatus;
   await recordAudit({

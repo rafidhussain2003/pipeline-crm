@@ -18,7 +18,7 @@ export {
 export type { CreateEmployeeInput, ListEmployeesOpts } from "./employees";
 export { getOrgChart, getDirectReports, assertNoCycle } from "./organization";
 export type { OrgNode } from "./organization";
-export { listDocuments, addDocument, deleteDocument } from "./documents";
+export { listDocuments, addDocument, addDocumentFile, getDocumentFile, deleteDocument, MAX_DOC_BYTES, ALLOWED_DOC_MIME } from "./documents";
 export { hrDashboard } from "./dashboard";
 
 // THE integration seam other modules consume.

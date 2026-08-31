@@ -1,10 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { EMPLOYMENT_STATUSES, Field, PageHeader, StatusBadge } from "@/components/hr/shared";
 
 type Employee = { id: string; userId: string; employeeCode: string; firstName: string; lastName: string | null; email: string; employmentStatus: string; departmentName: string | null; designationTitle: string | null; managerUserId: string | null };
-type Detail = Employee & { phone: string | null; loginName: string; preferredName: string | null; dateOfBirth: string | null; gender: string | null; joiningDate: string | null; confirmationDate: string | null; employmentTypeName: string | null; managerName: string | null; workLocation: string | null; monthlySalary: string | null; notes: string | null };
+type SalaryComp = { label: string; amount: number; kind: "earning" | "deduction" };
+type SalaryStructure = { currency?: string; components: SalaryComp[] };
+type Doc = { id: string; type: string; title: string; reference: string | null; fileName: string | null; mimeType: string | null; fileSize: number | null; notes: string | null; createdAt: string };
+type Detail = Employee & { phone: string | null; loginName: string; preferredName: string | null; dateOfBirth: string | null; gender: string | null; joiningDate: string | null; confirmationDate: string | null; employmentTypeName: string | null; managerName: string | null; workLocation: string | null; monthlySalary: string | null; salaryStructure: SalaryStructure | null; notes: string | null };
+
+const DOC_TYPES: { value: string; label: string }[] = [
+  { value: "offer_letter", label: "Offer letter" },
+  { value: "employment_contract", label: "Agreement / contract" },
+  { value: "id_document", label: "ID document" },
+  { value: "certificate", label: "Certificate" },
+  { value: "other", label: "Other" },
+];
 type AuditEntry = { id: string; action: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null; createdAt: string; actorName: string | null };
 type ModuleDef = { key: string; label: string; description: string };
 type Ref = { id: string; name?: string; title?: string };
@@ -110,12 +121,167 @@ function DetailModal({ detail, onClose, onEdit, onDeleted, onError }: { detail: 
         </div>
         {detail.notes && <div className="mt-3"><Field label="Notes" value={detail.notes} /></div>}
 
+        <SalaryStructureCard employeeId={detail.id} initial={detail.salaryStructure} onError={onError} />
+        <DocumentsCard employeeId={detail.id} onError={onError} />
         <ModuleAccessCard userId={detail.userId} />
         <AuditHistoryCard employeeId={detail.id} />
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={del} className="text-sm font-medium text-red-600 px-3 py-2 rounded-md hover:bg-red-50">Delete</button>
           <button onClick={onEdit} className="text-sm font-medium text-slate-600 bg-slate-100 px-4 py-2 rounded-md">Edit</button>
           <button onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Salary structure on the profile: itemised earnings/deductions with computed
+// gross/net, edited inline and saved to the employee record.
+function SalaryStructureCard({ employeeId, initial, onError }: { employeeId: string; initial: SalaryStructure | null; onError: (s: string) => void }) {
+  const [comps, setComps] = useState<SalaryComp[]>(initial?.components ?? []);
+  const [currency, setCurrency] = useState(initial?.currency || "INR");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const earnings = comps.filter((c) => c.kind === "earning").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const deductions = comps.filter((c) => c.kind === "deduction").reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const fmt = (n: number) => `${currency} ${n.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+
+  async function save() {
+    setSaving(true);
+    const clean = comps.map((c) => ({ label: c.label.trim(), amount: Number(c.amount) || 0, kind: c.kind })).filter((c) => c.label);
+    const res = await fetch(`/api/hr/employees/${employeeId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ salaryStructure: { currency: currency.trim() || "INR", components: clean } }) });
+    setSaving(false);
+    if (!res.ok) { onError((await res.json().catch(() => ({}))).error || "Could not save salary structure"); return; }
+    onError("");
+    setComps(clean);
+    setEditing(false);
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-slate-100">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Salary structure</h3>
+        {!editing && <button onClick={() => setEditing(true)} className="text-xs font-medium text-blue-600">{comps.length ? "Edit" : "Add structure"}</button>}
+      </div>
+      {!editing ? (
+        comps.length === 0 ? (
+          <p className="text-xs text-slate-400">No salary structure set.</p>
+        ) : (
+          <div className="text-sm">
+            <div className="divide-y divide-slate-50">
+              {comps.map((c, i) => (
+                <div key={i} className="flex items-center justify-between py-1">
+                  <span className="text-slate-700">{c.label}{c.kind === "deduction" && <span className="text-[10px] text-red-500"> (deduction)</span>}</span>
+                  <span className={`tabular-nums ${c.kind === "deduction" ? "text-red-600" : "text-slate-800"}`}>{c.kind === "deduction" ? "-" : ""}{fmt(Number(c.amount) || 0)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-x-4 text-xs">
+              <span className="text-slate-500">Gross {fmt(earnings)} · Deductions {fmt(deductions)}</span>
+              <span className="font-semibold text-slate-900">Net {fmt(earnings - deductions)}</span>
+            </div>
+          </div>
+        )
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-slate-500">Currency</label>
+            <input value={currency} onChange={(e) => setCurrency(e.target.value)} className="w-20 rounded border border-slate-200 px-2 py-1 text-xs" />
+          </div>
+          {comps.map((c, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <input value={c.label} onChange={(e) => setComps((a) => a.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))} placeholder="e.g. Basic" className="flex-1 min-w-0 rounded border border-slate-200 px-2 py-1 text-xs" />
+              <input type="number" step="0.01" min="0" value={c.amount} onChange={(e) => setComps((a) => a.map((x, j) => (j === i ? { ...x, amount: Number(e.target.value) } : x)))} className="w-24 rounded border border-slate-200 px-2 py-1 text-xs" />
+              <select value={c.kind} onChange={(e) => setComps((a) => a.map((x, j) => (j === i ? { ...x, kind: e.target.value as "earning" | "deduction" } : x)))} className="rounded border border-slate-200 px-1 py-1 text-xs">
+                <option value="earning">Earning</option>
+                <option value="deduction">Deduction</option>
+              </select>
+              <button onClick={() => setComps((a) => a.filter((_, j) => j !== i))} className="text-slate-400 hover:text-red-600 text-sm">✕</button>
+            </div>
+          ))}
+          <button onClick={() => setComps((a) => [...a, { label: "", amount: 0, kind: "earning" }])} className="text-xs font-medium text-blue-600">+ Add component</button>
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={() => { setComps(initial?.components ?? []); setCurrency(initial?.currency || "INR"); setEditing(false); }} className="text-xs text-slate-500 px-3 py-1">Cancel</button>
+            <button onClick={save} disabled={saving} className="text-xs font-medium text-white bg-slate-900 px-3 py-1 rounded disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Employee documents: upload scanned IDs, signed offer letters / agreements and
+// photos of paper docs (stored server-side), view/download them, and remove them.
+function DocumentsCard({ employeeId, onError }: { employeeId: string; onError: (s: string) => void }) {
+  const [docs, setDocs] = useState<Doc[] | null>(null);
+  const [type, setType] = useState("id_document");
+  const [title, setTitle] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  const load = useCallback(async () => {
+    const res = await fetch(`/api/hr/documents?employeeId=${employeeId}`);
+    if (res.ok) setDocs((await res.json()).documents || []);
+  }, [employeeId]);
+  useEffect(() => { load(); }, [load]);
+
+  async function upload() {
+    if (!file) return;
+    setUploading(true);
+    const fd = new FormData();
+    fd.set("file", file);
+    fd.set("employeeId", employeeId);
+    fd.set("type", type);
+    fd.set("title", title.trim() || file.name);
+    const res = await fetch("/api/hr/documents", { method: "POST", body: fd });
+    setUploading(false);
+    if (!res.ok) { onError((await res.json().catch(() => ({}))).error || "Upload failed"); return; }
+    onError("");
+    setTitle(""); setFile(null); if (fileRef.current) fileRef.current.value = "";
+    load();
+  }
+
+  async function del(id: string) {
+    if (!confirm("Delete this document?")) return;
+    const res = await fetch(`/api/hr/documents/${id}`, { method: "DELETE" });
+    if (!res.ok) { onError((await res.json().catch(() => ({}))).error || "Could not delete"); return; }
+    load();
+  }
+
+  const size = (n: number | null) => (n ? (n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`) : "");
+
+  return (
+    <div className="mt-4 pt-4 border-t border-slate-100">
+      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-2">Documents</h3>
+      <div className="space-y-1.5 mb-3">
+        {docs?.map((d) => (
+          <div key={d.id} className="flex items-center gap-2 text-sm">
+            <span className="text-[10px] font-medium text-slate-500 bg-slate-100 rounded px-1.5 py-0.5 shrink-0">{DOC_TYPES.find((t) => t.value === d.type)?.label || d.type}</span>
+            <span className="flex-1 min-w-0 truncate text-slate-700">{d.title}{d.fileSize ? <span className="text-slate-400"> · {size(d.fileSize)}</span> : null}</span>
+            {d.fileName ? (
+              <a href={`/api/hr/documents/${d.id}/file`} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-blue-600 shrink-0">View</a>
+            ) : d.reference ? (
+              <a href={d.reference} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-blue-600 shrink-0">Link</a>
+            ) : null}
+            <button onClick={() => del(d.id)} className="text-slate-400 hover:text-red-600 text-xs shrink-0">Delete</button>
+          </div>
+        ))}
+        {docs && docs.length === 0 && <p className="text-xs text-slate-400">No documents yet.</p>}
+        {!docs && <p className="text-xs text-slate-400">Loading…</p>}
+      </div>
+      <div className="rounded-md border border-slate-200 p-2.5 space-y-2 bg-slate-50">
+        <div className="flex gap-2">
+          <select value={type} onChange={(e) => setType(e.target.value)} className="rounded border border-slate-200 px-2 py-1.5 text-xs bg-white">
+            {DOC_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (optional)" className="flex-1 min-w-0 rounded border border-slate-200 px-2 py-1.5 text-xs" />
+        </div>
+        <input ref={fileRef} type="file" accept="application/pdf,image/png,image/jpeg,image/webp" onChange={(e) => setFile(e.target.files?.[0] || null)} className="block w-full text-xs text-slate-600 file:mr-2 file:rounded file:border-0 file:bg-slate-200 file:px-2 file:py-1 file:text-xs" />
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-slate-400">PDF, PNG, JPG or WebP · up to 10 MB</span>
+          <button onClick={upload} disabled={!file || uploading} className="text-xs font-medium text-white bg-slate-900 px-3 py-1.5 rounded disabled:opacity-50">{uploading ? "Uploading…" : "Upload"}</button>
         </div>
       </div>
     </div>
