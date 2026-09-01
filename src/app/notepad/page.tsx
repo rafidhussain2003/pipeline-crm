@@ -92,7 +92,10 @@ export default function SecureNotepadPage() {
       const d = await res.json();
       const list: Tab[] = d.tabs || [];
       syncTabs(list);
-      const first = list.find((t) => t.id === activeIdRef.current) || list[0];
+      // Deep-link support: /notepad?tab=<id> opens straight to that note, so a
+      // tab can be popped out into its own browser tab (see openTabInNewWindow).
+      const urlTab = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null;
+      const first = (urlTab ? list.find((t) => t.id === urlTab) : null) || list.find((t) => t.id === activeIdRef.current) || list[0];
       if (first) {
         activeIdRef.current = first.id;
         setActiveId(first.id);
@@ -232,6 +235,14 @@ export default function SecureNotepadPage() {
       }
     }
   }, [loadTab, bootstrap]);
+
+  // Pop a tab out into its own browser tab — opens /notepad?tab=<id>, which
+  // loads straight to that note. Lets an agent keep two notes open side by side
+  // in separate browser tabs (e.g. leads in one, follow-ups in another), the way
+  // a normal notepad / browser lets you open something in a new tab.
+  const openTabInNewWindow = useCallback((id: string) => {
+    window.open(`/notepad?tab=${id}`, "_blank", "noopener");
+  }, []);
 
   const commitRename = useCallback(async (id: string) => {
     const title = editTitle.trim().replace(/[\r\n]+/g, " ").slice(0, 200);
@@ -401,7 +412,8 @@ export default function SecureNotepadPage() {
           return (
             <div
               key={t.id}
-              onClick={() => switchTab(t.id)}
+              onClick={(e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); openTabInNewWindow(t.id); } else switchTab(t.id); }}
+              onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); openTabInNewWindow(t.id); } }}
               onDoubleClick={() => { setEditingId(t.id); setEditTitle(t.title); }}
               className={`group flex items-center gap-1.5 px-3 py-1.5 rounded-t-md text-xs font-medium cursor-pointer max-w-[200px] shrink-0 ${
                 active ? "bg-white text-slate-900 border border-b-white border-slate-200" : "bg-slate-200/60 text-slate-600 hover:bg-slate-200"
@@ -422,6 +434,14 @@ export default function SecureNotepadPage() {
                 <span className="truncate">{t.title}</span>
               )}
               <button
+                onClick={(e) => { e.stopPropagation(); openTabInNewWindow(t.id); }}
+                className="text-slate-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 shrink-0 text-[13px] leading-none"
+                aria-label="Open tab in a new browser tab"
+                title="Open in a new browser tab"
+              >
+                ↗
+              </button>
+              <button
                 onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
                 className="text-slate-400 hover:text-red-600 opacity-60 group-hover:opacity-100 shrink-0"
                 aria-label="Close tab"
@@ -440,7 +460,7 @@ export default function SecureNotepadPage() {
         <span className="text-xs font-semibold text-slate-800">Secure Notepad</span>
         <span className={`text-[11px] font-medium border rounded-full px-2.5 py-0.5 ${chip.c}`}>{chip.t}</span>
         {notice && <span className="text-[11px] font-medium text-blue-800 bg-blue-50 border border-blue-200 rounded-full px-2.5 py-0.5 truncate">{notice}</span>}
-        <span className="ml-auto text-[11px] text-slate-400 hidden md:block">Double-click a tab to rename · Ctrl+F to search</span>
+        <span className="ml-auto text-[11px] text-slate-400 hidden md:block">Double-click a tab to rename · ↗ (or Ctrl/middle-click) opens a tab in a new window · Ctrl+F to search</span>
       </div>
 
       {/* Retention legend — always visible so agents remember how long sensitive

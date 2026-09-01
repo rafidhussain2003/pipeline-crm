@@ -325,6 +325,29 @@ export default function MyExcelPage() {
     scheduleSave();
   };
 
+  // App-wide undo/redo. Ctrl/Cmd+Z undoes, Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z redoes
+  // — from anywhere on the page, not only when the grid holds focus (the old
+  // grid-only handler meant Ctrl+Z did nothing after clicking a control). While
+  // a cell editor or the Find box is focused, the browser's native input undo
+  // takes over instead. Latest-ref pattern so the single listener always runs
+  // current logic without re-binding.
+  const undoRef = useRef(doUndo);
+  const redoRef = useRef(doRedo);
+  useEffect(() => { undoRef.current = doUndo; redoRef.current = doRedo; });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey || !(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k !== "z" && k !== "y") return;
+      if ((document.activeElement as HTMLElement | null)?.tagName === "INPUT") return;
+      e.preventDefault();
+      if (k === "y" || (k === "z" && e.shiftKey)) redoRef.current();
+      else undoRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // ── Editing ──
   const startEdit = useCallback((r: number, c: number, seed?: string) => {
     const initial = seed !== undefined ? seed : cellsRef.current[key(r, c)]?.v ?? "";
@@ -540,8 +563,8 @@ export default function MyExcelPage() {
     const meta = e.ctrlKey || e.metaKey;
     if (meta && e.key.toLowerCase() === "c") { e.preventDefault(); copyRange(); return; }
     if (meta && e.key.toLowerCase() === "x") { e.preventDefault(); copyRange().then(clearRange); return; }
-    if (meta && e.key.toLowerCase() === "z") { e.preventDefault(); doUndo(); return; }
-    if (meta && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); return; }
+    // Undo/redo (z / y / shift+z) are handled by a window-level listener below
+    // so they work regardless of which element holds focus — not just the grid.
     if (meta && e.key.toLowerCase() === "a") { e.preventDefault(); setSelBoth({ r: 0, c: 0, r2: rowCountRef.current - 1, c2: colCountRef.current - 1 }); return; }
     if (meta && e.key.toLowerCase() === "f") { e.preventDefault(); setFindOpen(true); return; }
     if (meta && e.key.toLowerCase() === "b") { e.preventDefault(); toggle("b"); return; }
