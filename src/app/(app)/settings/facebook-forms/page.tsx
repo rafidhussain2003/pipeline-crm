@@ -127,8 +127,8 @@ export default function FacebookFormsPage() {
         <p className="text-sm text-slate-500">
           Give each Facebook Lead Form a friendly <strong>Display Name</strong> — this is the only name agents and
           managers ever see. The actual Facebook form name is shown here for your reference and can never be changed.
-          Use <strong>Lead capture</strong> to turn a form on or off: a form created on Facebook <em>after</em> its Page
-          was connected starts <strong>Disabled</strong> and won&apos;t deliver leads until you enable it here.
+          Use <strong>Lead capture</strong> to turn a form on or off. Any <em>new</em> form you create on Facebook is
+          accepted automatically and starts receiving leads right away — switch it off here if you don&apos;t want it.
         </p>
       </div>
 

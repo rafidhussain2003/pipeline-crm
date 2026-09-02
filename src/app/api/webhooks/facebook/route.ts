@@ -98,17 +98,20 @@ async function processLeadgenChange(value: LeadgenValue, startedAt: number, webh
 
   // Facebook's page-level webhook subscription can't be scoped to
   // individual forms — it delivers events for every form on the page.
-  // Only act on ones the customer explicitly ticked when connecting (see
-  // finalize/route.ts). A source with zero enabled forms is intentional,
-  // not broken — logged as skipped so "why didn't this lead show up" is
-  // always answerable without a server-log search.
+  // OWNER'S RULE: a form this company has never seen before (created on
+  // Facebook after the Page was connected) is ACCEPTED AUTOMATICALLY — it is
+  // registered here, enabled, on its very first lead, so a new campaign never
+  // loses leads waiting for someone to click Sync. Only a form an admin has
+  // explicitly DISABLED (Facebook Forms page) is skipped — and that is logged
+  // so "why didn't this lead show up" is always answerable without a
+  // server-log search.
   if (formId) {
-    const [enabledForm] = await db
-      .select({ id: leadForms.id })
+    const [known] = await db
+      .select({ id: leadForms.id, enabled: leadForms.enabled })
       .from(leadForms)
-      .where(and(eq(leadForms.sourceId, source.id), eq(leadForms.formId, formId), eq(leadForms.enabled, true)))
+      .where(and(eq(leadForms.sourceId, source.id), eq(leadForms.formId, formId)))
       .limit(1);
-    if (!enabledForm) {
+    if (known && !known.enabled) {
       await recordDeliveryLog({
         sourceId: source.id,
         companyId: source.companyId,
@@ -117,9 +120,26 @@ async function processLeadgenChange(value: LeadgenValue, startedAt: number, webh
         startedAt,
         formId,
         webhookLatencyMs,
-        error: "This form is not enabled for lead capture",
+        error: "This form is switched off for lead capture (turn it on under Facebook Forms)",
       });
       return;
+    }
+    if (!known) {
+      // Best-effort name lookup so the new form carries its real Facebook title
+      // in the CRM from the first lead (falls back to the Meta form id). A
+      // naming hiccup must never cost the lead itself, so failures only warn.
+      let formName: string | null = null;
+      try {
+        const list = await metaProvider.listForms(pageId, decrypt(source.accessToken));
+        formName = list.find((f) => f.id === formId)?.name ?? null;
+      } catch (err) {
+        logger.warn("new_form_name_lookup_failed", { sourceId: source.id, formId, error: err instanceof Error ? err.message : String(err) });
+      }
+      await db
+        .insert(leadForms)
+        .values({ sourceId: source.id, formId, formName, agentDisplayName: formName, enabled: true })
+        .onConflictDoNothing({ target: [leadForms.sourceId, leadForms.formId] });
+      logger.info("new_form_auto_registered", { sourceId: source.id, companyId: source.companyId, formId, formName });
     }
   }
 

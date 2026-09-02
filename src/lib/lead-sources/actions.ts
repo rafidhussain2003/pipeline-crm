@@ -22,9 +22,10 @@ type Source = typeof leadSources.$inferSelect;
 
 // Re-validates a source's stored token against its provider and discovers
 // any Lead Ad forms created since it was connected. Newly-discovered forms
-// are added disabled by default — same principle as the initial connect,
-// a form appearing here can't silently start sending leads without the
-// customer explicitly ticking it.
+// are registered ENABLED (owner's rule: every new form created on Facebook is
+// accepted automatically, so a new campaign never loses leads waiting for
+// someone to tick it). The webhook applies the same rule on a form's very
+// first lead; an admin can still turn a form off on the Facebook Forms page.
 export async function syncOneSource(
   source: Source,
   actor: { userId: string; companyId: string }
@@ -49,7 +50,7 @@ export async function syncOneSource(
         .insert(leadForms)
         // Display name initializes to the actual form name (agent-facing),
         // customizable by an admin later — additive to form discovery.
-        .values(newForms.map((f) => ({ sourceId: source.id, formId: f.id, formName: f.name, agentDisplayName: f.name, enabled: false })));
+        .values(newForms.map((f) => ({ sourceId: source.id, formId: f.id, formName: f.name, agentDisplayName: f.name, enabled: true })));
     }
 
     await db
