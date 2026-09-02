@@ -82,6 +82,35 @@ export default function FacebookFormsPage() {
     }
   }
 
+  // Turn a form's lead capture on/off. A form that Sync discovers after the
+  // Page was connected starts DISABLED on purpose (a new form must never start
+  // feeding leads without an admin approving it) — this is where it gets
+  // enabled. The webhook honours the flag on the very next lead Facebook sends.
+  async function toggleEnabled(form: FormRow) {
+    const next = !form.enabled;
+    const label = form.agentDisplayName || form.formName || form.formId;
+    setSavingId(form.id);
+    setNotice("");
+    try {
+      const res = await fetch(`/api/lead-sources/${form.sourceId}/forms/${form.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!res.ok) {
+        setError((await res.json().catch(() => ({}))).error || "Could not update this form.");
+        return;
+      }
+      setForms((prev) => prev.map((f) => (f.id === form.id ? { ...f, enabled: next } : f)));
+      setError("");
+      setNotice(next ? `"${label}" is now receiving leads.` : `"${label}" is disabled — new leads from it will be skipped.`);
+    } catch {
+      setError("Could not update this form.");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   // Group by Page for a readable layout when a company has several pages.
   const byPage = new Map<string, FormRow[]>();
   for (const f of forms) {
@@ -98,6 +127,8 @@ export default function FacebookFormsPage() {
         <p className="text-sm text-slate-500">
           Give each Facebook Lead Form a friendly <strong>Display Name</strong> — this is the only name agents and
           managers ever see. The actual Facebook form name is shown here for your reference and can never be changed.
+          Use <strong>Lead capture</strong> to turn a form on or off: a form created on Facebook <em>after</em> its Page
+          was connected starts <strong>Disabled</strong> and won&apos;t deliver leads until you enable it here.
         </p>
       </div>
 
@@ -124,20 +155,16 @@ export default function FacebookFormsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wide border-b border-slate-100">
-                    <th className="px-4 py-2.5 w-1/2">Actual Facebook Form (read-only)</th>
+                    <th className="px-4 py-2.5 w-[42%]">Actual Facebook Form (read-only)</th>
                     <th className="px-4 py-2.5">Display Name (agents see this)</th>
+                    <th className="px-4 py-2.5 whitespace-nowrap">Lead capture</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((f) => (
-                    <tr key={f.id} className="border-b border-slate-50 last:border-0">
+                    <tr key={f.id} className={`border-b border-slate-50 last:border-0 ${f.enabled ? "" : "bg-slate-50/60"}`}>
                       <td className="px-4 py-3 align-middle">
-                        <span className="text-slate-700">{f.formName || f.formId}</span>
-                        {!f.enabled && (
-                          <span className="ml-2 text-[10px] font-semibold text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">
-                            Disabled
-                          </span>
-                        )}
+                        <span className={f.enabled ? "text-slate-700" : "text-slate-500"}>{f.formName || f.formId}</span>
                       </td>
                       <td className="px-4 py-3 align-middle">
                         <input
@@ -149,6 +176,21 @@ export default function FacebookFormsPage() {
                           aria-label={`Display name for ${f.formName || f.formId}`}
                           className="w-full max-w-sm text-sm rounded-md border border-slate-200 px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50"
                         />
+                      </td>
+                      <td className="px-4 py-3 align-middle whitespace-nowrap">
+                        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={f.enabled}
+                            disabled={savingId === f.id}
+                            onChange={() => toggleEnabled(f)}
+                            aria-label={`Lead capture for ${f.formName || f.formId}`}
+                            className="h-4 w-4 rounded border-slate-300 accent-emerald-600"
+                          />
+                          <span className={`text-xs font-semibold ${f.enabled ? "text-emerald-700" : "text-slate-500"}`}>
+                            {savingId === f.id ? "Saving…" : f.enabled ? "Receiving leads" : "Disabled"}
+                          </span>
+                        </label>
                       </td>
                     </tr>
                   ))}
