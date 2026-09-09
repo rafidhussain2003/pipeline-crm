@@ -16,8 +16,8 @@ export type { CreateJournalInput } from "./journal";
 export { getAccountLedger, ledgerIntegrity, FINANCE_REPORTS } from "./ledger";
 export type { LedgerQuery, FinanceReportDef } from "./ledger";
 
-export { createRevenue, voidRevenue, listRevenues, createExpense, voidExpense, listExpenses } from "./documents";
-export type { CreateRevenueInput, CreateExpenseInput } from "./documents";
+export { createRevenue, voidRevenue, listRevenues, createExpense, voidExpense, listExpenses, revenueMonthlySummary, expenseMonthlySummary } from "./documents";
+export type { CreateRevenueInput, CreateExpenseInput, RevenueMonthSummary, ExpenseMonthSummary } from "./documents";
 
 export { listInvestments, createInvestment, updateInvestment, withdrawInvestment, ensureInvestmentsAccount } from "./investments";
 export type { CreateInvestmentInput } from "./investments";

@@ -7,7 +7,7 @@
 // Documents are never edited after creation (their journal is posted);
 // corrections = void (reversing entry) + re-enter.
 import { db } from "@/db";
-import { financeExpenses, financeRevenues, financeSettings } from "@/db/schema";
+import { financeAccounts, financeExpenses, financeRevenues, financeSettings } from "@/db/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { FinanceError, PAYMENT_METHODS, isValidDateString, toCents, toMoneyString } from "./types";
@@ -94,11 +94,12 @@ export async function voidRevenue(companyId: string, actorUserId: string, revenu
   return row;
 }
 
-export async function listRevenues(companyId: string, opts: { limit?: number; offset?: number } = {}) {
+// A 'YYYY-MM' month narrows the list to that calendar month (entry_date).
+export async function listRevenues(companyId: string, opts: { limit?: number; offset?: number; month?: string | null } = {}) {
   return db
     .select()
     .from(financeRevenues)
-    .where(eq(financeRevenues.companyId, companyId))
+    .where(and(eq(financeRevenues.companyId, companyId), opts.month ? sql`to_char(${financeRevenues.entryDate}, 'YYYY-MM') = ${opts.month}` : undefined))
     .orderBy(desc(financeRevenues.entryDate), desc(financeRevenues.docNumber))
     .limit(Math.min(opts.limit ?? 50, 200))
     .offset(Math.max(opts.offset ?? 0, 0));
@@ -190,12 +191,85 @@ export async function voidExpense(companyId: string, actorUserId: string, expens
   return row;
 }
 
-export async function listExpenses(companyId: string, opts: { limit?: number; offset?: number } = {}) {
+export async function listExpenses(companyId: string, opts: { limit?: number; offset?: number; month?: string | null } = {}) {
   return db
     .select()
     .from(financeExpenses)
-    .where(eq(financeExpenses.companyId, companyId))
+    .where(and(eq(financeExpenses.companyId, companyId), opts.month ? sql`to_char(${financeExpenses.entryDate}, 'YYYY-MM') = ${opts.month}` : undefined))
     .orderBy(desc(financeExpenses.entryDate), desc(financeExpenses.docNumber))
     .limit(Math.min(opts.limit ?? 50, 200))
     .offset(Math.max(opts.offset ?? 0, 0));
+}
+
+// ── Monthly summaries ────────────────────────────────────────────────────────
+// Per-calendar-month totals computed IN THE DATABASE over every POSTED document
+// (voided excluded), so the figures are exact no matter how many rows the list
+// endpoints page through. Grouped by month + classification in ONE query and
+// folded here, newest month first.
+type Bucket = { label: string; total: number; count: number };
+const round2 = (n: number) => Math.round(n * 100) / 100;
+function foldBuckets(items: { label: string; total: number; count: number }[]): Bucket[] {
+  const m = new Map<string, Bucket>();
+  for (const it of items) {
+    const b = m.get(it.label) ?? { label: it.label, total: 0, count: 0 };
+    b.total = round2(b.total + it.total);
+    b.count += it.count;
+    m.set(it.label, b);
+  }
+  return [...m.values()].sort((a, b) => b.total - a.total);
+}
+
+export type RevenueMonthSummary = { month: string; total: number; count: number; byAccount: Bucket[] };
+export async function revenueMonthlySummary(companyId: string): Promise<RevenueMonthSummary[]> {
+  const month = sql<string>`to_char(${financeRevenues.entryDate}, 'YYYY-MM')`;
+  const rows = await db
+    .select({ month, account: financeAccounts.name, total: sql<string>`sum(${financeRevenues.amount})`, count: sql<number>`count(*)::int` })
+    .from(financeRevenues)
+    .innerJoin(financeAccounts, eq(financeAccounts.id, financeRevenues.incomeAccountId))
+    .where(and(eq(financeRevenues.companyId, companyId), eq(financeRevenues.status, "posted")))
+    .groupBy(month, financeAccounts.name);
+  const byMonth = new Map<string, { total: number; count: number; items: Bucket[] }>();
+  for (const r of rows) {
+    const m = byMonth.get(r.month) ?? { total: 0, count: 0, items: [] };
+    const t = Number(r.total) || 0;
+    m.total = round2(m.total + t);
+    m.count += Number(r.count) || 0;
+    m.items.push({ label: r.account, total: round2(t), count: Number(r.count) || 0 });
+    byMonth.set(r.month, m);
+  }
+  return [...byMonth.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([mo, m]) => ({ month: mo, total: m.total, count: m.count, byAccount: foldBuckets(m.items) }));
+}
+
+export type ExpenseMonthSummary = { month: string; total: number; count: number; byCategory: Bucket[]; byMethod: Bucket[]; byType: Bucket[] };
+export async function expenseMonthlySummary(companyId: string): Promise<ExpenseMonthSummary[]> {
+  const month = sql<string>`to_char(${financeExpenses.entryDate}, 'YYYY-MM')`;
+  const rows = await db
+    .select({
+      month,
+      category: financeExpenses.category,
+      method: financeExpenses.paymentMethod,
+      docType: financeExpenses.docType,
+      total: sql<string>`sum(${financeExpenses.amount})`,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(financeExpenses)
+    .where(and(eq(financeExpenses.companyId, companyId), eq(financeExpenses.status, "posted")))
+    .groupBy(month, financeExpenses.category, financeExpenses.paymentMethod, financeExpenses.docType);
+  const byMonth = new Map<string, { total: number; count: number; cat: Bucket[]; method: Bucket[]; type: Bucket[] }>();
+  for (const r of rows) {
+    const m = byMonth.get(r.month) ?? { total: 0, count: 0, cat: [], method: [], type: [] };
+    const t = round2(Number(r.total) || 0);
+    const c = Number(r.count) || 0;
+    m.total = round2(m.total + t);
+    m.count += c;
+    m.cat.push({ label: (r.category || "").trim() || "Uncategorized", total: t, count: c });
+    m.method.push({ label: r.method || "other", total: t, count: c });
+    m.type.push({ label: r.docType || "expense", total: t, count: c });
+    byMonth.set(r.month, m);
+  }
+  return [...byMonth.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([mo, m]) => ({ month: mo, total: m.total, count: m.count, byCategory: foldBuckets(m.cat), byMethod: foldBuckets(m.method), byType: foldBuckets(m.type) }));
 }

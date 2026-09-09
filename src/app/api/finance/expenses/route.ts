@@ -6,7 +6,8 @@ export async function GET(req: NextRequest) {
   const auth = await requireFinance("finance:view");
   if (!auth.ok) return auth.response;
   const p = req.nextUrl.searchParams;
-  const expenses = await listExpenses(auth.session.companyId, { limit: Number(p.get("limit")) || 50, offset: Number(p.get("offset")) || 0 });
+  const month = /^\d{4}-\d{2}$/.test(p.get("month") || "") ? p.get("month") : null; // optional YYYY-MM filter
+  const expenses = await listExpenses(auth.session.companyId, { limit: Number(p.get("limit")) || 50, offset: Number(p.get("offset")) || 0, month });
   return NextResponse.json({ expenses });
 }
 
