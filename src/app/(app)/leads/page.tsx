@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { subscribeLeadStream } from "@/lib/leads/stream-client";
 import AgentCopyGuard from "./AgentCopyGuard";
+import { DuplicateBadge } from "@/components/leads/DuplicateBadge";
 
 type Lead = {
   id: string;
@@ -969,11 +970,7 @@ export default function LeadsPage() {
                       {lead.name || "—"}
                     </Link>
                   )}
-                  {lead.isDuplicate && (
-                    <span className="ml-2 text-[10px] font-semibold text-amber-700 bg-amber-50 rounded-full px-2 py-0.5">
-                      POSSIBLE DUPLICATE
-                    </span>
-                  )}
+                  {lead.isDuplicate && <DuplicateBadge role={role} className="ml-2" />}
                 </td>
                 <td className="px-4 py-3 text-slate-700">{lead.phone || "—"}</td>
                 <td className="px-4 py-3 text-slate-500">{lead.email || "—"}</td>
