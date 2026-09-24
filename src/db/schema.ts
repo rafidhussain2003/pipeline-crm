@@ -3585,3 +3585,37 @@ export const excelSheets = pgTable(
     ownerIdx: index("excel_sheets_owner_idx").on(t.companyId, t.userId),
   })
 );
+
+// My Home — a personal home-building budget tracker that lives INSIDE the
+// Finance section (admin + finance_employee use it) but is deliberately NOT
+// part of the company's books: no journal, no accounts, no ledger, no report
+// ever reads these tables. One budget per company, a flat list of expenses
+// spent from it. Amounts are integer cents like every other money column.
+export const homeBudgets = pgTable("home_budgets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull().unique(),
+  totalCents: bigint("total_cents", { mode: "number" }).notNull().default(0),
+  updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const homeExpenses = pgTable(
+  "home_expenses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    // Where the money went — free text, the only description an entry has.
+    note: text("note").notNull().default(""),
+    spentOn: date("spent_on").notNull().defaultNow(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    // Soft delete: a removed expense goes back into "budget left" but the row
+    // stays for the record.
+    deletedAt: timestamp("deleted_at"),
+  },
+  (t) => ({
+    companyIdx: index("home_expenses_company_idx").on(t.companyId, t.spentOn),
+  })
+);
