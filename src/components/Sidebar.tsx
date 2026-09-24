@@ -76,7 +76,7 @@ const AUTOMATION_ITEMS: { href: string; label: string }[] = [
 // `requires` = for a finance_employee, show this item only if they hold ANY of
 // these capabilities (admins/managers see everything, so it's ignored for
 // them). `adminOnly` = Finance Team management, admin-only for every role.
-const FINANCE_ITEMS: { href: string; label: string; requires?: string[]; adminOnly?: boolean }[] = [
+const FINANCE_ITEMS: { href: string; label: string; requires?: string[]; adminOnly?: boolean; roles?: string[] }[] = [
   { href: "/finance", label: "Dashboard" },
   { href: "/finance/accounts", label: "Chart of Accounts", requires: ["view_reports", "manage"] },
   { href: "/finance/revenue", label: "Revenue", requires: ["record_income", "view_reports"] },
@@ -89,6 +89,10 @@ const FINANCE_ITEMS: { href: string; label: string; requires?: string[]; adminOn
   { href: "/finance/years", label: "Financial Year", requires: ["manage"] },
   { href: "/finance/settings", label: "Settings", requires: ["manage"] },
   { href: "/finance/team", label: "Team", adminOnly: true },
+  // My Home — the admin's personal home-building budget, kept by the same
+  // people who keep the books (admin + finance employees, every capability),
+  // but NOT company finance. `roles` limits it to exactly those two.
+  { href: "/finance/home", label: "My Home", roles: ["admin", "finance_employee"] },
 ];
 
 // Which FINANCE_ITEMS to show for a given viewer. Admins/managers see all
@@ -97,6 +101,7 @@ const FINANCE_ITEMS: { href: string; label: string; requires?: string[]; adminOn
 function financeItemsFor(role: string, financeCaps: string[]): typeof FINANCE_ITEMS {
   return FINANCE_ITEMS.filter((item) => {
     if (item.adminOnly && role !== "admin") return false;
+    if (item.roles && !item.roles.includes(role)) return false;
     if (role === "finance_employee" && item.requires && !item.requires.some((c) => financeCaps.includes(c))) return false;
     return true;
   });

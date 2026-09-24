@@ -6,6 +6,7 @@ import { subscribeLeadStream } from "@/lib/leads/stream-client";
 import LeadCallbacks from "@/components/callbacks/LeadCallbacks";
 import ScheduleCallbackModal from "@/components/callbacks/ScheduleCallbackModal";
 import { isSafeHttpUrl } from "@/lib/url";
+import { DuplicateBadge } from "@/components/leads/DuplicateBadge";
 
 // Enterprise Lead Workspace — the same Lead Detail page, restructured into a
 // three-panel working surface (customer info / activity / quick actions) so
@@ -528,11 +529,7 @@ export default function LeadWorkspacePage({ params }: { params: Promise<{ id: st
           >
             {lead.disposition}
           </span>
-          {lead.isDuplicate && (
-            <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 rounded-full px-2 py-0.5">
-              POSSIBLE DUPLICATE
-            </span>
-          )}
+          {lead.isDuplicate && <DuplicateBadge role={viewerRole} />}
         </div>
         <div className="flex items-center gap-2 mt-3 flex-wrap">
           <button

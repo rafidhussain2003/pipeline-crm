@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { DuplicateBadge } from "@/components/leads/DuplicateBadge";
 import { subscribeLeadStream } from "@/lib/leads/stream-client";
 import {
   startNewLeadAlert,
@@ -419,7 +420,7 @@ export default function FreshLeadsPage() {
                     <Link href={`/leads/${l.id}`} className="font-medium text-blue-700 hover:underline">{l.name || "—"}</Link>
                   )}
                   {isNew && <span className="ml-2 text-[10px] font-bold uppercase tracking-wide text-white bg-amber-500 rounded-full px-2 py-0.5 animate-pulse">New</span>}
-                  {l.isDuplicate && <span className="ml-2 text-[10px] font-semibold text-amber-700 bg-amber-50 rounded-full px-2 py-0.5">DUPLICATE</span>}
+                  {l.isDuplicate && <DuplicateBadge role="manager" className="ml-2" />}
                 </td>
                 <td className="px-3 py-3 text-slate-700">{l.phone || "—"}</td>
                 <td className="px-3 py-3"><span className="text-xs font-medium text-slate-600 bg-slate-100 rounded-full px-2 py-0.5">{l.disposition}</span></td>
