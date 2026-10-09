@@ -335,6 +335,61 @@ export async function expenseMonthlySummary(companyId: string): Promise<ExpenseM
     .map(([mo, m]) => ({ month: mo, total: m.total, count: m.count, byCategory: foldBuckets(m.cat), byMethod: foldBuckets(m.method), byType: foldBuckets(m.type) }));
 }
 
+// Attach a client + invoice details to an EXISTING revenue entry (recorded
+// before invoicing existed, or needing its invoice details corrected). The
+// posted journal — amount, date, accounts — is never touched; this only fills
+// the invoice fields and allocates an invoice number the first time. Voided
+// entries can't be invoiced.
+export interface AttachInvoiceInput {
+  clientId: string;
+  invoiceDate?: string | null;
+  servicePeriod: string;
+  serviceDescription?: string | null;
+  invoiceCurrency?: string | null;
+  invoiceAmount?: number | null;
+}
+
+export async function attachInvoiceToRevenue(companyId: string, actorUserId: string, revenueId: string, input: AttachInvoiceInput) {
+  const [doc] = await db.select().from(financeRevenues).where(and(eq(financeRevenues.id, revenueId), eq(financeRevenues.companyId, companyId))).limit(1);
+  if (!doc) throw new FinanceError("Revenue entry not found", 404);
+  if (doc.status === "voided") throw new FinanceError("A voided entry cannot be invoiced");
+  const client = await getClient(companyId, input.clientId);
+  if (!client) throw new FinanceError("Choose a client");
+  const invoiceDate = input.invoiceDate || doc.invoiceDate || doc.entryDate;
+  if (!isValidDateString(invoiceDate)) throw new FinanceError("A valid invoice date is required");
+  const servicePeriod = input.servicePeriod?.trim() || "";
+  if (!servicePeriod) throw new FinanceError("Service period is required (e.g. July 2026)");
+  const serviceDescription = (input.serviceDescription?.trim() || `${client.serviceDescription} for ${servicePeriod}`).slice(0, 200);
+  const invoiceCurrency = (input.invoiceCurrency?.trim() || client.invoiceCurrency).toUpperCase();
+  if (!/^[A-Z]{3}$/.test(invoiceCurrency)) throw new FinanceError("Invoice currency must be a 3-letter code");
+  const invoiceCents = toCents(input.invoiceAmount ?? doc.amount);
+  if (invoiceCents <= 0) throw new FinanceError("Invoice amount must be greater than zero");
+
+  const invoiceNumber = doc.invoiceNumber ?? (await nextInvoiceNumber(companyId, invoiceDate));
+  const [row] = await db
+    .update(financeRevenues)
+    .set({
+      clientId: client.id,
+      customerName: client.name,
+      invoiceNumber,
+      invoiceRef: invoiceNumber,
+      invoiceDate,
+      servicePeriod,
+      serviceDescription,
+      invoiceCurrency,
+      invoiceAmount: toMoneyString(invoiceCents),
+      updatedAt: new Date(),
+    })
+    .where(eq(financeRevenues.id, revenueId))
+    .returning();
+  await recordAudit({
+    companyId, userId: actorUserId, action: doc.invoiceNumber ? "finance.revenue_invoice_updated" : "finance.revenue_invoice_attached", entityType: "finance_revenue", entityId: revenueId,
+    before: { clientId: doc.clientId, invoiceNumber: doc.invoiceNumber, customer: doc.customerName },
+    after: { clientId: client.id, invoiceNumber, customer: client.name, servicePeriod, invoiceCurrency, invoiceAmount: row.invoiceAmount },
+  });
+  return row;
+}
+
 // Everything the invoice PDF needs for one revenue entry (company-scoped).
 export async function getRevenueForInvoice(companyId: string, revenueId: string) {
   const [[doc], [settings]] = await Promise.all([

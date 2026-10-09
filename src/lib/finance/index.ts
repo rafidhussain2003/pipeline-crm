@@ -16,10 +16,10 @@ export type { CreateJournalInput } from "./journal";
 export { getAccountLedger, ledgerIntegrity, FINANCE_REPORTS } from "./ledger";
 export type { LedgerQuery, FinanceReportDef } from "./ledger";
 
-export { createRevenue, voidRevenue, listRevenues, createExpense, voidExpense, listExpenses, revenueMonthlySummary, expenseMonthlySummary, getRevenueForInvoice, financialYearLabel } from "./documents";
+export { createRevenue, voidRevenue, listRevenues, createExpense, voidExpense, listExpenses, revenueMonthlySummary, expenseMonthlySummary, getRevenueForInvoice, financialYearLabel, attachInvoiceToRevenue } from "./documents";
 export { listClients, getClient, createClient, updateClient, setClientActive, clientAddressLines } from "./clients";
 export type { ClientInput } from "./clients";
-export type { CreateRevenueInput, CreateExpenseInput, RevenueMonthSummary, ExpenseMonthSummary } from "./documents";
+export type { CreateRevenueInput, CreateExpenseInput, RevenueMonthSummary, ExpenseMonthSummary, AttachInvoiceInput } from "./documents";
 
 export { listInvestments, createInvestment, updateInvestment, withdrawInvestment, ensureInvestmentsAccount } from "./investments";
 export type { CreateInvestmentInput } from "./investments";
