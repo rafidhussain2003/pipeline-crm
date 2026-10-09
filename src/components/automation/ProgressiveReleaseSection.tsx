@@ -34,6 +34,8 @@ const TIERS: { key: TierName; label: string }[] = [
 export default function ProgressiveReleaseSection() {
   const [config, setConfig] = useState<Config | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
+  const [now, setNow] = useState(0); // captured per status poll, never read in render
+  useEffect(() => { setNow(new Date().getTime()); }, [status]);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
@@ -105,7 +107,7 @@ export default function ProgressiveReleaseSection() {
                   <span className="font-semibold text-slate-900">{status.waveInitialBacklog}</span> released
                 </span>
               )}
-              {status.nextReleaseAt && new Date(status.nextReleaseAt).getTime() > Date.now() && (
+              {status.nextReleaseAt && new Date(status.nextReleaseAt).getTime() > now && (
                 <span>Next release ≈ {new Date(status.nextReleaseAt).toLocaleTimeString()}</span>
               )}
             </div>

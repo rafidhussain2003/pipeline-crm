@@ -44,7 +44,7 @@ export default function CallbackReminders() {
   // lead, the spec asks for the subtle treatment — they're already on it.
   const viewingLeadId = pathname.startsWith("/leads/") ? pathname.split("/")[2] : null;
   const viewingRef = useRef<string | null>(null);
-  viewingRef.current = viewingLeadId;
+  useEffect(() => { viewingRef.current = viewingLeadId; }, [viewingLeadId]);
 
   const add = useCallback((r: Reminder, sound: boolean) => {
     setReminders((prev) => (prev.some((x) => x.callbackId === r.callbackId) ? prev.map((x) => (x.callbackId === r.callbackId ? r : x)) : [...prev, r]));
