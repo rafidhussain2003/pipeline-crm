@@ -52,9 +52,17 @@ export default function RevenuePage() {
   useEffect(() => { if (month !== null) loadRows(month); }, [month]);
 
   async function voidDoc(id: string) {
+    if (!confirm("Void this revenue entry? A reversing journal is posted. You can unvoid it later.")) return;
     setError("");
     const res = await fetch(`/api/finance/revenues/${id}/void`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
     if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Could not void");
+    reload();
+  }
+  async function unvoidDoc(id: string) {
+    if (!confirm("Unvoid this revenue entry? It is reinstated in the books on its original date and its invoice becomes valid again.")) return;
+    setError("");
+    const res = await fetch(`/api/finance/revenues/${id}/unvoid`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+    if (!res.ok) setError((await res.json().catch(() => ({}))).error || "Could not unvoid");
     reload();
   }
 
@@ -118,10 +126,10 @@ export default function RevenuePage() {
             )}
             <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-100">
               {list.map((r) => (
-                <div key={r.id} className={`flex items-center gap-3 px-4 py-3 ${r.status === "voided" ? "opacity-50" : ""}`}>
-                  <span className="text-xs font-mono text-slate-400 w-16 shrink-0">RV-{r.docNumber}</span>
+                <div key={r.id} className="flex items-center gap-3 px-4 py-3">
+                  <span className={`text-xs font-mono text-slate-400 w-16 shrink-0 ${r.status === "voided" ? "opacity-50" : ""}`}>RV-{r.docNumber}</span>
                   <div
-                    className={`flex-1 min-w-0 ${r.status === "posted" ? "cursor-pointer" : ""}`}
+                    className={`flex-1 min-w-0 ${r.status === "posted" ? "cursor-pointer" : "opacity-50"}`}
                     role={r.status === "posted" ? "button" : undefined}
                     tabIndex={r.status === "posted" ? 0 : undefined}
                     title={r.status === "posted" ? (r.invoiceNumber ? "Edit invoice details" : "Select client & create invoice") : undefined}
@@ -138,9 +146,14 @@ export default function RevenuePage() {
                     </div>
                   </div>
                   <StatusBadge status={r.status} />
-                  <span className="text-sm font-semibold text-slate-900 w-24 text-right">{moneyNum(r.amount)}</span>
+                  <span className={`text-sm font-semibold text-slate-900 w-24 text-right ${r.status === "voided" ? "line-through opacity-50" : ""}`}>{moneyNum(r.amount)}</span>
                   {r.invoiceNumber ? (
-                    <a href={`/api/finance/revenues/${r.id}/invoice`} className="text-[11px] font-medium text-white bg-slate-900 hover:bg-slate-700 rounded px-2 py-1">Invoice</a>
+                    <>
+                      <a href={`/api/finance/revenues/${r.id}/invoice`} className="text-[11px] font-medium text-white bg-slate-900 hover:bg-slate-700 rounded px-2 py-1">Invoice</a>
+                      {r.status === "posted" && (
+                        <button onClick={() => setInvoicing(r)} title="Edit invoice details and download the updated PDF" className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1">Edit</button>
+                      )}
+                    </>
                   ) : r.status === "posted" ? (
                     <button onClick={() => setInvoicing(r)} className="text-[11px] font-medium text-slate-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded px-2 py-1">Create invoice</button>
                   ) : (
@@ -148,6 +161,9 @@ export default function RevenuePage() {
                   )}
                   {r.status === "posted" && (
                     <button onClick={() => voidDoc(r.id)} className="text-[11px] font-medium text-red-600 bg-red-50 rounded px-2 py-1">Void</button>
+                  )}
+                  {r.status === "voided" && (
+                    <button onClick={() => unvoidDoc(r.id)} title="Reinstate this entry in the books" className="text-[11px] font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded px-2 py-1">Unvoid</button>
                   )}
                 </div>
               ))}
@@ -392,6 +408,7 @@ function InvoiceDetailsModal({ revenue, baseCurrency, onClose, onSaved }: { reve
   const [clients, setClients] = useState<Client[]>([]);
   const [clientId, setClientId] = useState(revenue.clientId ?? "");
   const [newClient, setNewClient] = useState(false);
+  const [invoiceNumber, setInvoiceNumber] = useState(revenue.invoiceNumber ?? "");
   const [invoiceDate, setInvoiceDate] = useState(revenue.invoiceDate ?? revenue.entryDate);
   const [period, setPeriod] = useState(() => monthInputFrom(revenue));
   const [description, setDescription] = useState(revenue.serviceDescription ?? "");
@@ -433,7 +450,7 @@ function InvoiceDetailsModal({ revenue, baseCurrency, onClose, onSaved }: { reve
     const res = await fetch(`/api/finance/revenues/${revenue.id}/invoice`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ clientId, invoiceDate, servicePeriod: periodLabel(period), serviceDescription: description, invoiceCurrency, invoiceAmount: Number(invoiceAmount) }),
+      body: JSON.stringify({ clientId, invoiceNumber: revenue.invoiceNumber ? invoiceNumber : null, invoiceDate, servicePeriod: periodLabel(period), serviceDescription: description, invoiceCurrency, invoiceAmount: Number(invoiceAmount) }),
     });
     setSaving(false);
     if (!res.ok) {
@@ -454,8 +471,8 @@ function InvoiceDetailsModal({ revenue, baseCurrency, onClose, onSaved }: { reve
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
         <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 text-center" onClick={(e) => e.stopPropagation()}>
           <div className="mx-auto w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl mb-3">✓</div>
-          <h2 className="text-base font-semibold text-slate-900">Invoice ready</h2>
-          <p className="text-sm text-slate-500 mt-1">RV-{revenue.docNumber} · Invoice <strong className="text-slate-900">{saved.invoiceNumber}</strong></p>
+          <h2 className="text-base font-semibold text-slate-900">{revenue.invoiceNumber ? "Invoice updated" : "Invoice ready"}</h2>
+          <p className="text-sm text-slate-500 mt-1">RV-{revenue.docNumber} · Invoice <strong className="text-slate-900">{saved.invoiceNumber}</strong>{revenue.invoiceNumber ? " — download the new PDF below." : ""}</p>
           <div className="flex justify-center gap-2 mt-5">
             <a href={`/api/finance/revenues/${revenue.id}/invoice`} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Download invoice (PDF)</a>
             <button onClick={onClose} className="text-sm font-medium text-slate-600 bg-slate-100 px-4 py-2 rounded-md">Done</button>
@@ -493,15 +510,30 @@ function InvoiceDetailsModal({ revenue, baseCurrency, onClose, onSaved }: { reve
               </div>
             )}
           </div>
+          {revenue.invoiceNumber && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice number</label>
+                <input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} maxLength={40} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm font-mono" />
+                <p className="text-[11px] text-slate-400 mt-1">Must be unique. Change only to align with your records.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice date</label>
+                <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">Service period <span className="text-red-500">*</span></label>
               <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice date</label>
-              <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
-            </div>
+            {!revenue.invoiceNumber && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice date</label>
+                <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              </div>
+            )}
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">Description of services</label>

@@ -155,6 +155,35 @@ export async function voidRevenue(companyId: string, actorUserId: string, revenu
   return row;
 }
 
+// UNVOID: a void can't be "undone" (its reversal is posted history), so the
+// entry is REINSTATED: a fresh journal with the original lines is posted on
+// the original entry date and the document points at it. Ledger trail:
+// original (voided) → reversal → reinstatement. The invoice number, client
+// and invoice details are kept, so the same invoice becomes valid again.
+export async function unvoidRevenue(companyId: string, actorUserId: string, revenueId: string, reason?: string) {
+  const [doc] = await db.select().from(financeRevenues).where(and(eq(financeRevenues.id, revenueId), eq(financeRevenues.companyId, companyId))).limit(1);
+  if (!doc) throw new FinanceError("Revenue entry not found", 404);
+  if (doc.status !== "voided") throw new FinanceError("This revenue entry is not voided");
+  const cents = toCents(doc.amount);
+
+  const journal = await createAndPost(companyId, actorUserId, {
+    entryDate: doc.entryDate,
+    memo: `Revenue — ${doc.customerName} (reinstated after void${reason ? `: ${reason}` : ""})`,
+    sourceType: "revenue",
+    lines: [
+      { accountId: doc.depositAccountId, debit: cents / 100, description: `Received from ${doc.customerName}` },
+      { accountId: doc.incomeAccountId, credit: cents / 100, description: doc.notes || null },
+    ],
+  });
+  const [row] = await db
+    .update(financeRevenues)
+    .set({ status: "posted", voidReason: null, journalId: journal.id, updatedAt: new Date() })
+    .where(eq(financeRevenues.id, revenueId))
+    .returning();
+  await recordAudit({ companyId, userId: actorUserId, action: "finance.revenue_unvoided", entityType: "finance_revenue", entityId: revenueId, before: { journalId: doc.journalId }, after: { journalId: journal.id, reason: reason ?? null } });
+  return row;
+}
+
 // A 'YYYY-MM' month narrows the list to that calendar month (entry_date).
 export async function listRevenues(companyId: string, opts: { limit?: number; offset?: number; month?: string | null } = {}) {
   return db
@@ -342,6 +371,7 @@ export async function expenseMonthlySummary(companyId: string): Promise<ExpenseM
 // entries can't be invoiced.
 export interface AttachInvoiceInput {
   clientId: string;
+  invoiceNumber?: string | null; // edit an existing number (must stay unique per company); blank = keep / allocate
   invoiceDate?: string | null;
   servicePeriod: string;
   serviceDescription?: string | null;
@@ -365,7 +395,16 @@ export async function attachInvoiceToRevenue(companyId: string, actorUserId: str
   const invoiceCents = toCents(input.invoiceAmount ?? doc.amount);
   if (invoiceCents <= 0) throw new FinanceError("Invoice amount must be greater than zero");
 
-  const invoiceNumber = doc.invoiceNumber ?? (await nextInvoiceNumber(companyId, invoiceDate));
+  const requested = input.invoiceNumber?.trim().slice(0, 40) || null;
+  if (requested && requested !== doc.invoiceNumber) {
+    const [clash] = await db
+      .select({ id: financeRevenues.id })
+      .from(financeRevenues)
+      .where(and(eq(financeRevenues.companyId, companyId), eq(financeRevenues.invoiceNumber, requested)))
+      .limit(1);
+    if (clash) throw new FinanceError(`Invoice number ${requested} is already used by another entry`);
+  }
+  const invoiceNumber = requested ?? doc.invoiceNumber ?? (await nextInvoiceNumber(companyId, invoiceDate));
   const [row] = await db
     .update(financeRevenues)
     .set({
