@@ -79,6 +79,7 @@ const AUTOMATION_ITEMS: { href: string; label: string }[] = [
 const FINANCE_ITEMS: { href: string; label: string; requires?: string[]; adminOnly?: boolean; roles?: string[] }[] = [
   { href: "/finance", label: "Dashboard" },
   { href: "/finance/accounts", label: "Chart of Accounts", requires: ["view_reports", "manage"] },
+  { href: "/finance/clients", label: "Clients", requires: ["record_income", "view_reports", "manage"] },
   { href: "/finance/revenue", label: "Revenue", requires: ["record_income", "view_reports"] },
   { href: "/finance/expenses", label: "Expenses", requires: ["record_expense", "record_payout", "view_reports"] },
   { href: "/finance/investments", label: "Investments", requires: ["manage"] },

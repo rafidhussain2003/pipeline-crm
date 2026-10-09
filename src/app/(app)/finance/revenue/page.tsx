@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AccountSelect, moneyNum, PageHeader, StatusBadge, todayInput, useAccounts, useFinanceCurrency } from "@/components/finance/shared";
+import { ClientModal, clientAddress, type Client } from "@/components/finance/ClientModal";
 
 type Revenue = {
   id: string; docNumber: number; entryDate: string; customerName: string; invoiceRef: string | null;
   amount: string; status: string; notes: string | null;
+  invoiceNumber: string | null; invoiceCurrency: string | null; invoiceAmount: string | null; servicePeriod: string | null;
 };
 // Server-computed per-month totals (exact: every posted entry, voided excluded,
 // regardless of the list page size) with a breakdown by income account.
@@ -19,7 +21,7 @@ function monthLabel(ym: string): string {
 const LIST_LIMIT = 200;
 
 export default function RevenuePage() {
-  useFinanceCurrency();
+  const currency = useFinanceCurrency();
   const { accounts } = useAccounts();
   const [rows, setRows] = useState<Revenue[]>([]);
   const [months, setMonths] = useState<MonthSummary[]>([]);
@@ -118,11 +120,21 @@ export default function RevenuePage() {
                   <span className="text-xs font-mono text-slate-400 w-16 shrink-0">RV-{r.docNumber}</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-slate-900 truncate">{r.customerName}</div>
-                    <div className="text-xs text-slate-400">{r.entryDate}{r.invoiceRef ? ` · Invoice ${r.invoiceRef}` : ""}{r.notes ? ` · ${r.notes}` : ""}</div>
+                    <div className="text-xs text-slate-400">
+                      {r.entryDate}
+                      {r.invoiceNumber ? ` · ${r.invoiceNumber}` : r.invoiceRef ? ` · Invoice ${r.invoiceRef}` : ""}
+                      {r.servicePeriod ? ` · ${r.servicePeriod}` : ""}
+                      {r.invoiceAmount && r.invoiceCurrency && r.invoiceCurrency !== currency ? ` · ${r.invoiceCurrency} ${Number(r.invoiceAmount).toLocaleString("en-US", { minimumFractionDigits: 2 })}` : ""}
+                      {r.notes ? ` · ${r.notes}` : ""}
+                    </div>
                   </div>
                   <StatusBadge status={r.status} />
                   <span className="text-sm font-semibold text-slate-900 w-24 text-right">{moneyNum(r.amount)}</span>
-                  <a href={`/api/finance/revenues/${r.id}/receipt`} className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1">Receipt</a>
+                  {r.invoiceNumber ? (
+                    <a href={`/api/finance/revenues/${r.id}/invoice`} className="text-[11px] font-medium text-white bg-slate-900 hover:bg-slate-700 rounded px-2 py-1">Invoice</a>
+                  ) : (
+                    <a href={`/api/finance/revenues/${r.id}/receipt`} className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1">Receipt</a>
+                  )}
                   {r.status === "posted" && (
                     <button onClick={() => voidDoc(r.id)} className="text-[11px] font-medium text-red-600 bg-red-50 rounded px-2 py-1">Void</button>
                   )}
@@ -146,21 +158,55 @@ export default function RevenuePage() {
         <p className="text-xs text-slate-400 mb-4">Showing the latest {LIST_LIMIT} entries across months. Monthly totals above are exact; pick a month to see all of its entries.</p>
       )}
 
-      {showForm && <RevenueModal accounts={accounts} onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); reload(); }} />}
+      {showForm && <RevenueModal accounts={accounts} baseCurrency={currency} onClose={() => setShowForm(false)} onSaved={() => reload()} />}
     </div>
   );
 }
 
-function RevenueModal({ accounts, onClose, onSaved }: { accounts: ReturnType<typeof useAccounts>["accounts"]; onClose: () => void; onSaved: () => void }) {
-  const [entryDate, setEntryDate] = useState(todayInput());
-  const [customerName, setCustomerName] = useState("");
-  const [invoiceRef, setInvoiceRef] = useState("");
-  const [amount, setAmount] = useState("");
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+// "2026-07" (month input) → "July 2026" (what the invoice prints).
+function periodLabel(ym: string): string {
+  const [y, m] = ym.split("-").map(Number);
+  return y && m >= 1 && m <= 12 ? `${MONTHS[m - 1]} ${y}` : "";
+}
+function lastMonthInput(): string {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function RevenueModal({ accounts, baseCurrency, onClose, onSaved }: { accounts: ReturnType<typeof useAccounts>["accounts"]; baseCurrency: string; onClose: () => void; onSaved: () => void }) {
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientId, setClientId] = useState("");
+  const [newClient, setNewClient] = useState(false);
+  const [entryDate, setEntryDate] = useState(todayInput()); // payment received
+  const [invoiceDate, setInvoiceDate] = useState(todayInput());
+  const [period, setPeriod] = useState(lastMonthInput());
+  const [description, setDescription] = useState("");
+  const [descriptionTouched, setDescriptionTouched] = useState(false);
+  const [invoiceCurrency, setInvoiceCurrency] = useState("USD");
+  const [invoiceAmount, setInvoiceAmount] = useState("");
+  const [amount, setAmount] = useState(""); // base-currency amount received
   const [incomeAccountId, setIncomeAccountId] = useState("");
   const [depositAccountId, setDepositAccountId] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [posted, setPosted] = useState<{ id: string; invoiceNumber: string | null; docNumber: number } | null>(null);
+
+  const client = clients.find((c) => c.id === clientId) ?? null;
+  const sameCurrency = invoiceCurrency.toUpperCase() === baseCurrency;
+
+  useEffect(() => {
+    fetch("/api/finance/clients").then(async (r) => { if (r.ok) setClients((await r.json()).clients || []); });
+  }, []);
+  // Picking a client pre-fills its invoicing defaults.
+  useEffect(() => {
+    if (!client) return;
+    setInvoiceCurrency(client.invoiceCurrency);
+    if (!descriptionTouched) setDescription(`${client.serviceDescription} for ${periodLabel(period)}`.trim());
+  }, [client, period, descriptionTouched]);
 
   async function save() {
     setSaving(true);
@@ -168,38 +214,111 @@ function RevenueModal({ accounts, onClose, onSaved }: { accounts: ReturnType<typ
     const res = await fetch("/api/finance/revenues", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ entryDate, customerName, invoiceRef: invoiceRef || null, amount: Number(amount), incomeAccountId, depositAccountId, notes: notes || null }),
+      body: JSON.stringify({
+        clientId,
+        entryDate,
+        invoiceDate,
+        servicePeriod: periodLabel(period),
+        serviceDescription: description,
+        invoiceCurrency,
+        invoiceAmount: Number(invoiceAmount),
+        amount: Number(sameCurrency ? invoiceAmount : amount),
+        incomeAccountId,
+        depositAccountId,
+        notes: notes || null,
+      }),
     });
     setSaving(false);
     if (!res.ok) {
       setError((await res.json().catch(() => ({}))).error || "Could not save");
       return;
     }
+    const { revenue } = await res.json();
+    setPosted({ id: revenue.id, invoiceNumber: revenue.invoiceNumber ?? null, docNumber: revenue.docNumber });
     onSaved();
+  }
+
+  if (newClient) {
+    return <ClientModal client={null} onClose={() => setNewClient(false)} onSaved={(c) => { setClients((list) => [...list, c].sort((a, b) => a.name.localeCompare(b.name))); setClientId(c.id); setNewClient(false); }} />;
+  }
+
+  if (posted) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 text-center" onClick={(e) => e.stopPropagation()}>
+          <div className="mx-auto w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl mb-3">✓</div>
+          <h2 className="text-base font-semibold text-slate-900">Revenue posted</h2>
+          <p className="text-sm text-slate-500 mt-1">
+            RV-{posted.docNumber}{posted.invoiceNumber ? <> · Invoice <strong className="text-slate-900">{posted.invoiceNumber}</strong> generated.</> : null}
+          </p>
+          <div className="flex justify-center gap-2 mt-5">
+            {posted.invoiceNumber && (
+              <a href={`/api/finance/revenues/${posted.id}/invoice`} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Download invoice (PDF)</a>
+            )}
+            <button onClick={onClose} className="text-sm font-medium text-slate-600 bg-slate-100 px-4 py-2 rounded-md">Done</button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-base font-semibold text-slate-900 mb-4">Record revenue</h2>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-base font-semibold text-slate-900 mb-1">Record revenue</h2>
+        <p className="text-xs text-slate-500 mb-4">Posting generates the tax invoice (export under LUT) for the selected client.</p>
         <div className="space-y-3">
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-semibold text-slate-600">Client <span className="text-red-500">*</span></label>
+              <button type="button" onClick={() => setNewClient(true)} className="text-[11px] font-medium text-blue-700 hover:underline">+ New client</button>
+            </div>
+            <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm bg-white">
+              <option value="">Select the company that paid…</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            {client && (
+              <div className="mt-2 rounded-md bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-600">
+                <div className="font-semibold text-slate-900">{client.name}</div>
+                <div>{clientAddress(client)}</div>
+                <div>Country: {client.country}{client.gstin ? ` · GSTIN ${client.gstin}` : ""}</div>
+              </div>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
-              <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Service period <span className="text-red-500">*</span></label>
+              <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Amount</label>
-              <input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice date</label>
+              <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
             </div>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Customer</label>
-            <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Customer name" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Description of services</label>
+            <input value={description} onChange={(e) => { setDescription(e.target.value); setDescriptionTouched(true); }} placeholder="BPO Services for July 2026" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
           </div>
+          <div className="grid grid-cols-[88px_1fr] gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Currency</label>
+              <input value={invoiceCurrency} onChange={(e) => setInvoiceCurrency(e.target.value.toUpperCase())} maxLength={3} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice amount ({invoiceCurrency || "…"}) <span className="text-red-500">*</span></label>
+              <input type="number" step="0.01" min="0.01" value={invoiceAmount} onChange={(e) => setInvoiceAmount(e.target.value)} placeholder="104.00" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            </div>
+          </div>
+          {!sameCurrency && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Amount received in {baseCurrency} <span className="text-red-500">*</span></label>
+              <input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="9440.00" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              <p className="text-[11px] text-slate-400 mt-1">What actually landed in the bank after conversion — this is the figure posted to the books and printed as &quot;{baseCurrency} equivalent received&quot;.</p>
+            </div>
+          )}
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice reference (optional)</label>
-            <input value={invoiceRef} onChange={(e) => setInvoiceRef(e.target.value)} placeholder="INV-0042" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Payment received on <span className="text-red-500">*</span></label>
+            <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">Income account</label>
@@ -210,15 +329,15 @@ function RevenueModal({ accounts, onClose, onSaved }: { accounts: ReturnType<typ
             <AccountSelect accounts={accounts} value={depositAccountId} onChange={setDepositAccountId} filter={(a) => a.type === "asset" && (a.subtype === "cash" || a.subtype === "bank")} placeholder="Cash or bank account" />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Notes (optional)</label>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Notes (optional, not printed)</label>
             <input value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
           </div>
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
-          <button onClick={save} disabled={saving} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">
-            {saving ? "Posting…" : "Record & post"}
+          <button onClick={save} disabled={saving || !clientId} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">
+            {saving ? "Posting…" : "Post & generate invoice"}
           </button>
         </div>
       </div>

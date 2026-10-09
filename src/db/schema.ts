@@ -2262,9 +2262,57 @@ export const financeSettings = pgTable("finance_settings", {
   // corrections from then on are ordinary adjusting entries.
   openingBalancesLockedAt: timestamp("opening_balances_locked_at"),
   defaultCurrency: varchar("default_currency", { length: 8 }).notNull().default("USD"), // placeholder — multi-currency is a future module
+  // Invoicing (GST export invoices under LUT). The seller block printed at the
+  // top of every invoice + the LUT declaration + the signatory, entered once
+  // in Finance Settings. NULL = not set up yet (invoice download explains).
+  invoiceLegalName: varchar("invoice_legal_name", { length: 200 }),
+  invoiceAddress: text("invoice_address"), // multi-line, printed as-is
+  invoiceGstin: varchar("invoice_gstin", { length: 32 }),
+  invoiceLutNote: text("invoice_lut_note"), // "LUT for FY 2026-27 filed on 15 April 2026. LUT ARN ... as per GST portal record."
+  invoiceSignatoryName: varchar("invoice_signatory_name", { length: 120 }),
+  invoiceSignatoryTitle: varchar("invoice_signatory_title", { length: 120 }),
+  // Invoice numbers are INV/<FY>/<NNN>: the sequence restarts every Indian
+  // financial year (April–March). invoiceNumberFy is the FY the counter is
+  // currently in; allocation is one atomic UPDATE … RETURNING (see documents.ts).
+  invoiceNumberPrefix: varchar("invoice_number_prefix", { length: 16 }).notNull().default("INV"),
+  invoiceNumberFy: varchar("invoice_number_fy", { length: 9 }),
+  nextInvoiceNumber: integer("next_invoice_number").notNull().default(1),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// Billing clients — the "Bill To" party on an invoice, created once and picked
+// when recording revenue so every invoice carries the same name/address.
+export const financeClients = pgTable(
+  "finance_clients",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .references(() => companies.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    addressLine1: varchar("address_line1", { length: 200 }).notNull(),
+    addressLine2: varchar("address_line2", { length: 200 }),
+    city: varchar("city", { length: 120 }).notNull(),
+    state: varchar("state", { length: 120 }),
+    postalCode: varchar("postal_code", { length: 32 }),
+    country: varchar("country", { length: 120 }).notNull(),
+    email: varchar("email", { length: 200 }),
+    phone: varchar("phone", { length: 60 }),
+    gstin: varchar("gstin", { length: 32 }), // only for domestic (Indian) clients
+    // Per-client invoicing defaults the revenue form pre-fills.
+    invoiceCurrency: varchar("invoice_currency", { length: 3 }).notNull().default("USD"),
+    serviceDescription: varchar("service_description", { length: 200 }).notNull().default("BPO Services"),
+    notes: text("notes"),
+    active: boolean("active").notNull().default(true),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyIdx: index("finance_clients_company_idx").on(t.companyId, t.name),
+  })
+);
 
 // Financial years. Posting checks the entry date against these: a date inside
 // a CLOSED year is rejected (locked history); a date no year covers is allowed
@@ -2384,7 +2432,16 @@ export const financeRevenues = pgTable(
     entryDate: date("entry_date").notNull(),
     customerName: varchar("customer_name", { length: 160 }).notNull(),
     customerRef: varchar("customer_ref", { length: 120 }), // free-form external reference (a CRM lead id, etc.) — no FK: Finance stays CRM-independent
-    invoiceRef: varchar("invoice_ref", { length: 120 }), // placeholder — invoicing is a future module
+    invoiceRef: varchar("invoice_ref", { length: 120 }), // free-form external reference (pre-invoicing entries)
+    // Invoicing: which client paid, and the invoice generated at posting. All
+    // nullable so entries recorded before invoicing existed are untouched.
+    clientId: uuid("client_id").references(() => financeClients.id, { onDelete: "set null" }),
+    invoiceNumber: varchar("invoice_number", { length: 40 }), // "INV/2026-27/003"
+    invoiceDate: date("invoice_date"),
+    servicePeriod: varchar("service_period", { length: 60 }), // "July 2026"
+    serviceDescription: varchar("service_description", { length: 200 }), // "BPO Services for July 2026"
+    invoiceCurrency: varchar("invoice_currency", { length: 3 }), // "USD"
+    invoiceAmount: numeric("invoice_amount", { precision: 14, scale: 2 }), // 104.00 — in invoiceCurrency; `amount` is the base-currency equivalent received
     incomeAccountId: uuid("income_account_id").references(() => financeAccounts.id).notNull(),
     depositAccountId: uuid("deposit_account_id").references(() => financeAccounts.id).notNull(),
     amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
@@ -2398,6 +2455,7 @@ export const financeRevenues = pgTable(
   },
   (t) => ({
     numberUniq: uniqueIndex("finance_revenues_company_number_uniq").on(t.companyId, t.docNumber),
+    invoiceUniq: uniqueIndex("finance_revenues_company_invoice_uniq").on(t.companyId, t.invoiceNumber),
     dateIdx: index("finance_revenues_company_date_idx").on(t.companyId, t.entryDate),
   })
 );
