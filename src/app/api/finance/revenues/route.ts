@@ -28,6 +28,13 @@ export async function POST(req: NextRequest) {
       depositAccountId: String(body?.depositAccountId ?? ""),
       amount: Number(body?.amount),
       notes: typeof body?.notes === "string" ? body.notes : null,
+      // Invoicing (client-based entries)
+      clientId: typeof body?.clientId === "string" && body.clientId ? body.clientId : null,
+      invoiceDate: typeof body?.invoiceDate === "string" ? body.invoiceDate : null,
+      servicePeriod: typeof body?.servicePeriod === "string" ? body.servicePeriod : null,
+      serviceDescription: typeof body?.serviceDescription === "string" ? body.serviceDescription : null,
+      invoiceCurrency: typeof body?.invoiceCurrency === "string" ? body.invoiceCurrency : null,
+      invoiceAmount: body?.invoiceAmount === undefined || body?.invoiceAmount === null || body?.invoiceAmount === "" ? null : Number(body.invoiceAmount),
     });
     return NextResponse.json({ revenue }, { status: 201 });
   } catch (err) {

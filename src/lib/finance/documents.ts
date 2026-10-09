@@ -7,12 +7,13 @@
 // Documents are never edited after creation (their journal is posted);
 // corrections = void (reversing entry) + re-enter.
 import { db } from "@/db";
-import { financeAccounts, financeExpenses, financeRevenues, financeSettings } from "@/db/schema";
+import { financeAccounts, financeClients, financeExpenses, financeRevenues, financeSettings } from "@/db/schema";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
 import { FinanceError, PAYMENT_METHODS, isValidDateString, toCents, toMoneyString } from "./types";
 import { ensureFinanceSetup, getAccount } from "./accounts";
 import { createAndPost, voidJournal } from "./journal";
+import { getClient } from "./clients";
 
 async function nextDocNumber(companyId: string, kind: "revenue" | "expense"): Promise<number> {
   const col = kind === "revenue" ? financeSettings.nextRevenueNumber : financeSettings.nextExpenseNumber;
@@ -28,23 +29,81 @@ async function nextDocNumber(companyId: string, kind: "revenue" | "expense"): Pr
   return rows[0].n - 1;
 }
 
+// ── Invoice numbering ────────────────────────────────────────────────────────
+// Indian financial year (April–March) label for a calendar date: "2026-27".
+export function financialYearLabel(isoDate: string): string {
+  const y = Number(isoDate.slice(0, 4));
+  const m = Number(isoDate.slice(5, 7));
+  const start = m >= 4 ? y : y - 1;
+  return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
+}
+
+// Allocates the next invoice number for the FY of `invoiceDate` in ONE atomic
+// statement: the counter continues inside the same FY and restarts at 1 when
+// the FY changes. Returns e.g. "INV/2026-27/003".
+async function nextInvoiceNumber(companyId: string, invoiceDate: string): Promise<string> {
+  const fy = financialYearLabel(invoiceDate);
+  const rows = await db
+    .update(financeSettings)
+    .set({
+      nextInvoiceNumber: sql`CASE WHEN ${financeSettings.invoiceNumberFy} = ${fy} THEN ${financeSettings.nextInvoiceNumber} + 1 ELSE 2 END`,
+      invoiceNumberFy: fy,
+      updatedAt: new Date(),
+    })
+    .where(eq(financeSettings.companyId, companyId))
+    .returning({ n: financeSettings.nextInvoiceNumber, prefix: financeSettings.invoiceNumberPrefix });
+  if (rows.length === 0) {
+    await ensureFinanceSetup(companyId);
+    return nextInvoiceNumber(companyId, invoiceDate);
+  }
+  return `${rows[0].prefix || "INV"}/${fy}/${String(rows[0].n - 1).padStart(3, "0")}`;
+}
+
 // ── Revenue ─────────────────────────────────────────────────────────────────
 export interface CreateRevenueInput {
-  entryDate: string;
-  customerName: string;
+  entryDate: string; // payment received date
+  customerName?: string | null; // legacy free-text; ignored when clientId is given
   customerRef?: string | null;
   invoiceRef?: string | null;
   incomeAccountId: string;
   depositAccountId: string;
-  amount: number;
+  amount: number; // base-currency amount received (what posts to the books)
   notes?: string | null;
+  // Invoicing — all required together when clientId is given.
+  clientId?: string | null;
+  invoiceDate?: string | null;
+  servicePeriod?: string | null; // "July 2026"
+  serviceDescription?: string | null; // "BPO Services for July 2026"
+  invoiceCurrency?: string | null; // "USD"
+  invoiceAmount?: number | null; // 104.00 in invoiceCurrency
 }
 
 export async function createRevenue(companyId: string, actorUserId: string, input: CreateRevenueInput) {
   if (!isValidDateString(input.entryDate)) throw new FinanceError("A valid date is required");
-  if (!input.customerName?.trim()) throw new FinanceError("Customer is required");
   const cents = toCents(input.amount);
   if (cents <= 0) throw new FinanceError("Amount must be greater than zero");
+
+  // Client + invoice details. With a client the customer name is the client's
+  // legal name and an invoice is generated at posting.
+  let customerName = input.customerName?.trim() || "";
+  let invoice: { clientId: string; invoiceDate: string; servicePeriod: string; serviceDescription: string; invoiceCurrency: string; invoiceAmount: string } | null = null;
+  if (input.clientId) {
+    const client = await getClient(companyId, input.clientId);
+    if (!client) throw new FinanceError("Choose a client");
+    customerName = client.name;
+    const invoiceDate = input.invoiceDate || input.entryDate;
+    if (!isValidDateString(invoiceDate)) throw new FinanceError("A valid invoice date is required");
+    const servicePeriod = input.servicePeriod?.trim() || "";
+    if (!servicePeriod) throw new FinanceError("Service period is required (e.g. July 2026)");
+    const serviceDescription = input.serviceDescription?.trim() || `${client.serviceDescription} for ${servicePeriod}`;
+    const invoiceCurrency = (input.invoiceCurrency?.trim() || client.invoiceCurrency).toUpperCase();
+    if (!/^[A-Z]{3}$/.test(invoiceCurrency)) throw new FinanceError("Invoice currency must be a 3-letter code");
+    const invoiceCents = toCents(input.invoiceAmount ?? input.amount);
+    if (invoiceCents <= 0) throw new FinanceError("Invoice amount must be greater than zero");
+    invoice = { clientId: client.id, invoiceDate, servicePeriod, serviceDescription: serviceDescription.slice(0, 200), invoiceCurrency, invoiceAmount: toMoneyString(invoiceCents) };
+  }
+  if (!customerName) throw new FinanceError("Choose a client");
+  input = { ...input, customerName };
 
   const income = await getAccount(companyId, input.incomeAccountId);
   if (!income || income.type !== "income") throw new FinanceError("Choose an income account");
@@ -53,24 +112,26 @@ export async function createRevenue(companyId: string, actorUserId: string, inpu
 
   const journal = await createAndPost(companyId, actorUserId, {
     entryDate: input.entryDate,
-    memo: `Revenue — ${input.customerName.trim()}`,
+    memo: `Revenue — ${customerName}`,
     sourceType: "revenue",
     lines: [
-      { accountId: deposit.id, debit: cents / 100, description: `Received from ${input.customerName.trim()}` },
+      { accountId: deposit.id, debit: cents / 100, description: `Received from ${customerName}` },
       { accountId: income.id, credit: cents / 100, description: input.notes?.trim() || null },
     ],
   });
 
   const docNumber = await nextDocNumber(companyId, "revenue");
+  const invoiceNumber = invoice ? await nextInvoiceNumber(companyId, invoice.invoiceDate) : null;
   const [row] = await db
     .insert(financeRevenues)
     .values({
       companyId,
       docNumber,
       entryDate: input.entryDate,
-      customerName: input.customerName.trim(),
+      customerName,
       customerRef: input.customerRef?.trim() || null,
-      invoiceRef: input.invoiceRef?.trim() || null,
+      invoiceRef: invoiceNumber ?? (input.invoiceRef?.trim() || null),
+      ...(invoice ? { ...invoice, invoiceNumber } : {}),
       incomeAccountId: income.id,
       depositAccountId: deposit.id,
       amount: toMoneyString(cents),
@@ -79,7 +140,7 @@ export async function createRevenue(companyId: string, actorUserId: string, inpu
       createdBy: actorUserId,
     })
     .returning();
-  await recordAudit({ companyId, userId: actorUserId, action: "finance.revenue_created", entityType: "finance_revenue", entityId: row.id, after: { docNumber, amount: row.amount, customer: row.customerName, journalId: journal.id } });
+  await recordAudit({ companyId, userId: actorUserId, action: "finance.revenue_created", entityType: "finance_revenue", entityId: row.id, after: { docNumber, amount: row.amount, customer: row.customerName, invoiceNumber, journalId: journal.id } });
   return row;
 }
 
@@ -272,4 +333,17 @@ export async function expenseMonthlySummary(companyId: string): Promise<ExpenseM
   return [...byMonth.entries()]
     .sort((a, b) => b[0].localeCompare(a[0]))
     .map(([mo, m]) => ({ month: mo, total: m.total, count: m.count, byCategory: foldBuckets(m.cat), byMethod: foldBuckets(m.method), byType: foldBuckets(m.type) }));
+}
+
+// Everything the invoice PDF needs for one revenue entry (company-scoped).
+export async function getRevenueForInvoice(companyId: string, revenueId: string) {
+  const [[doc], [settings]] = await Promise.all([
+    db.select().from(financeRevenues).where(and(eq(financeRevenues.id, revenueId), eq(financeRevenues.companyId, companyId))).limit(1),
+    db.select().from(financeSettings).where(eq(financeSettings.companyId, companyId)).limit(1),
+  ]);
+  if (!doc) return null;
+  const [client] = doc.clientId
+    ? await db.select().from(financeClients).where(and(eq(financeClients.id, doc.clientId), eq(financeClients.companyId, companyId))).limit(1)
+    : [];
+  return { doc, client: client ?? null, settings: settings ?? null };
 }
