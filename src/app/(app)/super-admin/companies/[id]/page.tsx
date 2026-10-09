@@ -31,6 +31,25 @@ type Owner = { name: string; email: string } | null;
 
 const EDITABLE = ["name", "supportEmail", "businessPhone", "address", "website", "timezone", "plan", "status"] as const;
 type Field = (typeof EDITABLE)[number];
+
+// Declared at module level (not inside the page) so React keeps the input's
+// identity — and focus — across re-renders.
+function TextField({ id, label, type = "text", value, onChange }: { id: string; label: string; type?: string; value: string; onChange: (e: React.ChangeEvent<HTMLInputElement>) => void }) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-xs font-medium text-slate-600 mb-1">
+        {label}
+      </label>
+      <input
+        id={id}
+        type={type}
+        value={value}
+        onChange={onChange}
+        className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
+    </div>
+  );
+}
 type Form = Record<Field, string>;
 
 const STATUSES = ["active", "suspended", "pending"];
@@ -144,21 +163,6 @@ export default function CompanyDetailPage() {
   const set = (k: Field) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm((f) => (f ? { ...f, [k]: e.target.value } : f));
 
-  const Text = ({ k, label, type = "text" }: { k: Field; label: string; type?: string }) => (
-    <div>
-      <label htmlFor={k} className="block text-xs font-medium text-slate-600 mb-1">
-        {label}
-      </label>
-      <input
-        id={k}
-        type={type}
-        value={form[k]}
-        onChange={set(k)}
-        className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-      />
-    </div>
-  );
-
   return (
     <div className="p-6 max-w-3xl">
       <Link href="/super-admin/companies" className="text-sm text-blue-700 hover:underline">
@@ -205,11 +209,11 @@ export default function CompanyDetailPage() {
       <div className="bg-white border border-slate-200 rounded-lg p-4">
         <div className="text-sm font-semibold text-slate-900 mb-4">Company details</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Text k="name" label="Company Name" />
-          <Text k="supportEmail" label="Contact Email" type="email" />
-          <Text k="businessPhone" label="Business Phone" />
-          <Text k="website" label="Website" />
-          <Text k="timezone" label="Timezone" />
+          <TextField id="name" label="Company Name" value={form.name} onChange={set("name")} />
+          <TextField id="supportEmail" label="Contact Email" type="email" value={form.supportEmail} onChange={set("supportEmail")} />
+          <TextField id="businessPhone" label="Business Phone" value={form.businessPhone} onChange={set("businessPhone")} />
+          <TextField id="website" label="Website" value={form.website} onChange={set("website")} />
+          <TextField id="timezone" label="Timezone" value={form.timezone} onChange={set("timezone")} />
           <div>
             <label htmlFor="plan" className="block text-xs font-medium text-slate-600 mb-1">
               Subscription / Plan

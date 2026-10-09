@@ -121,7 +121,7 @@ export default function RevenuePage() {
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-slate-900 truncate">{r.customerName}</div>
                     <div className="text-xs text-slate-400">
-                      {r.entryDate}
+                      Received {r.entryDate}
                       {r.invoiceNumber ? ` · ${r.invoiceNumber}` : r.invoiceRef ? ` · Invoice ${r.invoiceRef}` : ""}
                       {r.servicePeriod ? ` · ${r.servicePeriod}` : ""}
                       {r.invoiceAmount && r.invoiceCurrency && r.invoiceCurrency !== currency ? ` · ${r.invoiceCurrency} ${Number(r.invoiceAmount).toLocaleString("en-US", { minimumFractionDigits: 2 })}` : ""}
@@ -182,6 +182,7 @@ function RevenueModal({ accounts, baseCurrency, onClose, onSaved }: { accounts: 
   const [newClient, setNewClient] = useState(false);
   const [entryDate, setEntryDate] = useState(todayInput()); // payment received
   const [invoiceDate, setInvoiceDate] = useState(todayInput());
+  const [invoiceDateTouched, setInvoiceDateTouched] = useState(false);
   const [period, setPeriod] = useState(lastMonthInput());
   const [description, setDescription] = useState("");
   const [descriptionTouched, setDescriptionTouched] = useState(false);
@@ -287,13 +288,29 @@ function RevenueModal({ accounts, baseCurrency, onClose, onSaved }: { accounts: 
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-600 mb-1">Service period <span className="text-red-500">*</span></label>
-              <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Revenue received date <span className="text-red-500">*</span></label>
+              <input
+                type="date"
+                value={entryDate}
+                onChange={(e) => { setEntryDate(e.target.value); if (!invoiceDateTouched) setInvoiceDate(e.target.value); }}
+                className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">The day the money arrived. Printed as &quot;Payment received&quot; and used as the entry date in the books.</p>
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice date</label>
-              <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              <input
+                type="date"
+                value={invoiceDate}
+                onChange={(e) => { setInvoiceDate(e.target.value); setInvoiceDateTouched(true); }}
+                className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">Follows the received date unless you change it.</p>
             </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Service period <span className="text-red-500">*</span></label>
+            <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">Description of services</label>
@@ -316,10 +333,6 @@ function RevenueModal({ accounts, baseCurrency, onClose, onSaved }: { accounts: 
               <p className="text-[11px] text-slate-400 mt-1">What actually landed in the bank after conversion — this is the figure posted to the books and printed as &quot;{baseCurrency} equivalent received&quot;.</p>
             </div>
           )}
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Payment received on <span className="text-red-500">*</span></label>
-            <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
-          </div>
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">Income account</label>
             <AccountSelect accounts={accounts} value={incomeAccountId} onChange={setIncomeAccountId} filter={(a) => a.type === "income"} placeholder="Which income is this?" />

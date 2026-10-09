@@ -44,7 +44,12 @@ export default function ScheduleCallbackModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [when, setWhen] = useState(initial?.scheduledAt ? toLocalInput(new Date(initial.scheduledAt)) : toLocalInput(new Date(Date.now() + 60 * 60_000)));
+  const [when, setWhen] = useState(() => {
+    if (initial?.scheduledAt) return toLocalInput(new Date(initial.scheduledAt));
+    const d = new Date();
+    d.setHours(d.getHours() + 1);
+    return toLocalInput(d);
+  });
   const [reason, setReason] = useState(initial?.reason || REASONS[0]);
   const [notes, setNotes] = useState(initial?.notes || "");
   const [priority, setPriority] = useState(initial?.priority || "normal");
@@ -62,7 +67,9 @@ export default function ScheduleCallbackModal({
       setWhen(toLocalInput(d));
       return;
     }
-    setWhen(toLocalInput(new Date(Date.now() + p.minutes * 60_000)));
+    const d = new Date();
+    d.setMinutes(d.getMinutes() + p.minutes);
+    setWhen(toLocalInput(d));
   }
 
   async function save() {

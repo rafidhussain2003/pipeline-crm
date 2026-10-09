@@ -39,6 +39,10 @@ const REASONS = [
 export default function CallbacksPage() {
   const [tab, setTab] = useState<keyof Counts>("today");
   const [rows, setRows] = useState<Row[]>([]);
+  // "Now" for overdue highlighting — captured when the list (re)loads rather
+  // than read during render, so rendering stays pure.
+  const [now, setNow] = useState(0);
+  useEffect(() => { setNow(new Date().getTime()); }, [rows]);
   const [counts, setCounts] = useState<Counts>({ today: 0, upcoming: 0, overdue: 0, completed: 0 });
   const [search, setSearch] = useState("");
   const [priority, setPriority] = useState("");
@@ -133,7 +137,7 @@ export default function CallbacksPage() {
           </div>
         )}
         {rows.map((r) => {
-          const overdue = new Date(r.scheduledAt).getTime() < Date.now() && (r.status === "scheduled" || r.status === "due" || r.status === "missed");
+          const overdue = now > 0 && new Date(r.scheduledAt).getTime() < now && (r.status === "scheduled" || r.status === "due" || r.status === "missed");
           return (
             <div key={r.id} className={`bg-white border rounded-lg p-4 ${overdue ? "border-red-200" : "border-slate-200"}`}>
               <div className="flex items-start justify-between gap-4">
