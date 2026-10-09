@@ -64,6 +64,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   try {
     const revenue = await attachInvoiceToRevenue(auth.session.companyId, auth.session.userId, id, {
       clientId: String(body?.clientId ?? ""),
+      invoiceNumber: typeof body?.invoiceNumber === "string" ? body.invoiceNumber : null,
       invoiceDate: typeof body?.invoiceDate === "string" ? body.invoiceDate : null,
       servicePeriod: String(body?.servicePeriod ?? ""),
       serviceDescription: typeof body?.serviceDescription === "string" ? body.serviceDescription : null,
