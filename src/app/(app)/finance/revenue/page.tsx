@@ -7,7 +7,8 @@ import { ClientModal, clientAddress, type Client } from "@/components/finance/Cl
 type Revenue = {
   id: string; docNumber: number; entryDate: string; customerName: string; invoiceRef: string | null;
   amount: string; status: string; notes: string | null;
-  invoiceNumber: string | null; invoiceCurrency: string | null; invoiceAmount: string | null; servicePeriod: string | null;
+  clientId: string | null; invoiceNumber: string | null; invoiceDate: string | null; invoiceCurrency: string | null;
+  invoiceAmount: string | null; servicePeriod: string | null; serviceDescription: string | null;
 };
 // Server-computed per-month totals (exact: every posted entry, voided excluded,
 // regardless of the list page size) with a breakdown by income account.
@@ -28,6 +29,7 @@ export default function RevenuePage() {
   // null = not decided yet; "" = all months (a section per month); else one YYYY-MM.
   const [month, setMonth] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [invoicing, setInvoicing] = useState<Revenue | null>(null); // row whose invoice details are open
   const [error, setError] = useState("");
 
   const loadSummary = async () => {
@@ -118,7 +120,14 @@ export default function RevenuePage() {
               {list.map((r) => (
                 <div key={r.id} className={`flex items-center gap-3 px-4 py-3 ${r.status === "voided" ? "opacity-50" : ""}`}>
                   <span className="text-xs font-mono text-slate-400 w-16 shrink-0">RV-{r.docNumber}</span>
-                  <div className="flex-1 min-w-0">
+                  <div
+                    className={`flex-1 min-w-0 ${r.status === "posted" ? "cursor-pointer" : ""}`}
+                    role={r.status === "posted" ? "button" : undefined}
+                    tabIndex={r.status === "posted" ? 0 : undefined}
+                    title={r.status === "posted" ? (r.invoiceNumber ? "Edit invoice details" : "Select client & create invoice") : undefined}
+                    onClick={() => { if (r.status === "posted") setInvoicing(r); }}
+                    onKeyDown={(e) => { if (r.status === "posted" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setInvoicing(r); } }}
+                  >
                     <div className="text-sm font-medium text-slate-900 truncate">{r.customerName}</div>
                     <div className="text-xs text-slate-400">
                       Received {r.entryDate}
@@ -132,6 +141,8 @@ export default function RevenuePage() {
                   <span className="text-sm font-semibold text-slate-900 w-24 text-right">{moneyNum(r.amount)}</span>
                   {r.invoiceNumber ? (
                     <a href={`/api/finance/revenues/${r.id}/invoice`} className="text-[11px] font-medium text-white bg-slate-900 hover:bg-slate-700 rounded px-2 py-1">Invoice</a>
+                  ) : r.status === "posted" ? (
+                    <button onClick={() => setInvoicing(r)} className="text-[11px] font-medium text-slate-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded px-2 py-1">Create invoice</button>
                   ) : (
                     <a href={`/api/finance/revenues/${r.id}/receipt`} className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1">Receipt</a>
                   )}
@@ -159,6 +170,7 @@ export default function RevenuePage() {
       )}
 
       {showForm && <RevenueModal accounts={accounts} baseCurrency={currency} onClose={() => setShowForm(false)} onSaved={() => reload()} />}
+      {invoicing && <InvoiceDetailsModal revenue={invoicing} baseCurrency={currency} onClose={() => setInvoicing(null)} onSaved={() => reload()} />}
     </div>
   );
 }
@@ -351,6 +363,169 @@ function RevenueModal({ accounts, baseCurrency, onClose, onSaved }: { accounts: 
           <button onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
           <button onClick={save} disabled={saving || !clientId} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">
             {saving ? "Posting…" : "Post & generate invoice"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// "2026-07-15" → "2026-07" for the month input; "July 2026" → "2026-07" when
+// re-opening an entry that already has a service period.
+function monthInputFrom(rev: Revenue): string {
+  if (rev.servicePeriod) {
+    const [name, year] = rev.servicePeriod.split(" ");
+    const m = MONTHS.indexOf(name);
+    if (m >= 0 && /^\d{4}$/.test(year || "")) return `${year}-${String(m + 1).padStart(2, "0")}`;
+  }
+  // Default: the month before the payment landed (services are billed in arrears).
+  const d = new Date(`${rev.entryDate}T00:00:00`);
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+// Attach a client + invoice details to an already-posted entry (or correct
+// them). The amount received and the books are untouched; the invoice number
+// is allocated the first time and kept afterwards.
+function InvoiceDetailsModal({ revenue, baseCurrency, onClose, onSaved }: { revenue: Revenue; baseCurrency: string; onClose: () => void; onSaved: () => void }) {
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientId, setClientId] = useState(revenue.clientId ?? "");
+  const [newClient, setNewClient] = useState(false);
+  const [invoiceDate, setInvoiceDate] = useState(revenue.invoiceDate ?? revenue.entryDate);
+  const [period, setPeriod] = useState(() => monthInputFrom(revenue));
+  const [description, setDescription] = useState(revenue.serviceDescription ?? "");
+  const [descriptionTouched, setDescriptionTouched] = useState(!!revenue.serviceDescription);
+  const [invoiceCurrency, setInvoiceCurrency] = useState(revenue.invoiceCurrency ?? "");
+  const [invoiceAmount, setInvoiceAmount] = useState(revenue.invoiceAmount ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState<{ invoiceNumber: string } | null>(null);
+
+  const client = clients.find((c) => c.id === clientId) ?? null;
+  const sameCurrency = (invoiceCurrency || "").toUpperCase() === baseCurrency;
+
+  useEffect(() => {
+    fetch("/api/finance/clients").then(async (r) => {
+      if (!r.ok) return;
+      const list: Client[] = (await r.json()).clients || [];
+      setClients(list);
+      // Entry recorded by free-text name: pre-select a client with the same name.
+      if (!revenue.clientId) {
+        const match = list.find((c) => c.name.trim().toLowerCase() === revenue.customerName.trim().toLowerCase());
+        if (match) setClientId(match.id);
+      }
+    });
+  }, [revenue.clientId, revenue.customerName]);
+  useEffect(() => {
+    if (!client) return;
+    if (!revenue.invoiceCurrency) setInvoiceCurrency(client.invoiceCurrency);
+    if (!descriptionTouched) setDescription(`${client.serviceDescription} for ${periodLabel(period)}`.trim());
+  }, [client, period, descriptionTouched, revenue.invoiceCurrency]);
+  // Same currency as the books → the invoice amount is simply the amount received.
+  useEffect(() => {
+    if (sameCurrency && !revenue.invoiceAmount) setInvoiceAmount(revenue.amount);
+  }, [sameCurrency, revenue.invoiceAmount, revenue.amount]);
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    const res = await fetch(`/api/finance/revenues/${revenue.id}/invoice`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientId, invoiceDate, servicePeriod: periodLabel(period), serviceDescription: description, invoiceCurrency, invoiceAmount: Number(invoiceAmount) }),
+    });
+    setSaving(false);
+    if (!res.ok) {
+      setError((await res.json().catch(() => ({}))).error || "Could not save");
+      return;
+    }
+    const { revenue: updated } = await res.json();
+    setSaved({ invoiceNumber: updated.invoiceNumber });
+    onSaved();
+  }
+
+  if (newClient) {
+    return <ClientModal client={null} onClose={() => setNewClient(false)} onSaved={(c) => { setClients((list) => [...list, c].sort((a, b) => a.name.localeCompare(b.name))); setClientId(c.id); setNewClient(false); }} />;
+  }
+
+  if (saved) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 text-center" onClick={(e) => e.stopPropagation()}>
+          <div className="mx-auto w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl mb-3">✓</div>
+          <h2 className="text-base font-semibold text-slate-900">Invoice ready</h2>
+          <p className="text-sm text-slate-500 mt-1">RV-{revenue.docNumber} · Invoice <strong className="text-slate-900">{saved.invoiceNumber}</strong></p>
+          <div className="flex justify-center gap-2 mt-5">
+            <a href={`/api/finance/revenues/${revenue.id}/invoice`} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Download invoice (PDF)</a>
+            <button onClick={onClose} className="text-sm font-medium text-slate-600 bg-slate-100 px-4 py-2 rounded-md">Done</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-base font-semibold text-slate-900 mb-1">{revenue.invoiceNumber ? `Invoice ${revenue.invoiceNumber}` : "Create invoice"}</h2>
+        <p className="text-xs text-slate-500 mb-4">
+          RV-{revenue.docNumber} · received {revenue.entryDate} · {moneyNum(revenue.amount)}. The posted amount and date stay as they are; this only sets what the invoice prints.
+        </p>
+        <div className="space-y-3">
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-semibold text-slate-600">Client <span className="text-red-500">*</span></label>
+              <button type="button" onClick={() => setNewClient(true)} className="text-[11px] font-medium text-blue-700 hover:underline">+ New client</button>
+            </div>
+            <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm bg-white">
+              <option value="">Select the company that paid…</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            {!revenue.clientId && !client && (
+              <p className="text-[11px] text-slate-400 mt-1">Recorded as &quot;{revenue.customerName}&quot;. Pick the matching client, or add it.</p>
+            )}
+            {client && (
+              <div className="mt-2 rounded-md bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-600">
+                <div className="font-semibold text-slate-900">{client.name}</div>
+                <div>{clientAddress(client)}</div>
+                <div>Country: {client.country}{client.gstin ? ` · GSTIN ${client.gstin}` : ""}</div>
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Service period <span className="text-red-500">*</span></label>
+              <input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice date</label>
+              <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Description of services</label>
+            <input value={description} onChange={(e) => { setDescription(e.target.value); setDescriptionTouched(true); }} placeholder="BPO Services for July 2026" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+          </div>
+          <div className="grid grid-cols-[88px_1fr] gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Currency</label>
+              <input value={invoiceCurrency} onChange={(e) => setInvoiceCurrency(e.target.value.toUpperCase())} maxLength={3} placeholder="USD" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Invoice amount ({invoiceCurrency || "…"}) <span className="text-red-500">*</span></label>
+              <input type="number" step="0.01" min="0.01" value={invoiceAmount} onChange={(e) => setInvoiceAmount(e.target.value)} placeholder="104.00" className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              {!sameCurrency && invoiceCurrency && (
+                <p className="text-[11px] text-slate-400 mt-1">The invoiced amount in {invoiceCurrency}. {moneyNum(revenue.amount)} received prints as &quot;{baseCurrency} equivalent received&quot;.</p>
+              )}
+            </div>
+          </div>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
+          <button onClick={save} disabled={saving || !clientId} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">
+            {saving ? "Saving…" : revenue.invoiceNumber ? "Save & download" : "Create invoice"}
           </button>
         </div>
       </div>

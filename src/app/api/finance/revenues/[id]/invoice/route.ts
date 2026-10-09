@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireFinance } from "@/lib/finance/guard";
-import { getRevenueForInvoice, clientAddressLines } from "@/lib/finance";
+import { requireFinance, requireFinanceCapability, financeErrorResponse } from "@/lib/finance/guard";
+import { getRevenueForInvoice, clientAddressLines, attachInvoiceToRevenue } from "@/lib/finance";
 import { renderInvoicePdf } from "@/lib/finance/invoice-pdf";
 import { isUuid } from "@/lib/url";
 
@@ -51,4 +51,27 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       "Cache-Control": "no-store",
     },
   });
+}
+
+// Attach / correct the client + invoice details on an existing entry. The
+// posted journal is untouched; an invoice number is allocated the first time.
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireFinanceCapability("record_income");
+  if (!auth.ok) return auth.response;
+  const { id } = await params;
+  if (!isUuid(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const body = await req.json().catch(() => ({}));
+  try {
+    const revenue = await attachInvoiceToRevenue(auth.session.companyId, auth.session.userId, id, {
+      clientId: String(body?.clientId ?? ""),
+      invoiceDate: typeof body?.invoiceDate === "string" ? body.invoiceDate : null,
+      servicePeriod: String(body?.servicePeriod ?? ""),
+      serviceDescription: typeof body?.serviceDescription === "string" ? body.serviceDescription : null,
+      invoiceCurrency: typeof body?.invoiceCurrency === "string" ? body.invoiceCurrency : null,
+      invoiceAmount: body?.invoiceAmount === undefined || body?.invoiceAmount === null || body?.invoiceAmount === "" ? null : Number(body.invoiceAmount),
+    });
+    return NextResponse.json({ revenue });
+  } catch (err) {
+    return financeErrorResponse(err);
+  }
 }
