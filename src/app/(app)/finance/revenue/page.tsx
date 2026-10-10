@@ -30,6 +30,7 @@ export default function RevenuePage() {
   const [month, setMonth] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [invoicing, setInvoicing] = useState<Revenue | null>(null); // row whose invoice details are open
+  const [renumbering, setRenumbering] = useState(false);
   const [error, setError] = useState("");
 
   const loadSummary = async () => {
@@ -85,7 +86,12 @@ export default function RevenuePage() {
       <PageHeader
         title="Revenue"
         subtitle="Money received. Each entry posts a balanced journal automatically (debit cash/bank, credit income)."
-        action={<button onClick={() => setShowForm(true)} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Record revenue</button>}
+        action={
+          <div className="flex items-center gap-2">
+            <button onClick={() => setRenumbering(true)} title="Re-assign invoice numbers in date order" className="text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 px-3 py-2 rounded-md">Renumber invoices</button>
+            <button onClick={() => setShowForm(true)} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Record revenue</button>
+          </div>
+        }
       />
       {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
 
@@ -187,6 +193,7 @@ export default function RevenuePage() {
 
       {showForm && <RevenueModal accounts={accounts} baseCurrency={currency} onClose={() => setShowForm(false)} onSaved={() => reload()} />}
       {invoicing && <InvoiceDetailsModal revenue={invoicing} baseCurrency={currency} onClose={() => setInvoicing(null)} onSaved={() => reload()} />}
+      {renumbering && <RenumberModal onClose={() => setRenumbering(false)} onApplied={() => reload()} />}
     </div>
   );
 }
@@ -560,6 +567,128 @@ function InvoiceDetailsModal({ revenue, baseCurrency, onClose, onSaved }: { reve
             {saving ? "Saving…" : revenue.invoiceNumber ? "Save & download" : "Create invoice"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Indian financial year label (April–March) for today, e.g. "2026-27".
+function currentFy(): string {
+  const d = new Date();
+  const start = d.getMonth() + 1 >= 4 ? d.getFullYear() : d.getFullYear() - 1;
+  return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
+}
+
+type PlanRow = { id: string; docNumber: number; status: string; customerName: string; entryDate: string; oldNumber: string; newNumber: string };
+
+// Re-assign a financial year's invoice numbers in date order from a chosen
+// start. Shows the full old → new mapping before anything changes; the PDFs
+// are generated from the database, so every Invoice button downloads the
+// renumbered version straight after.
+function RenumberModal({ onClose, onApplied }: { onClose: () => void; onApplied: () => void }) {
+  const [fy, setFy] = useState(currentFy());
+  const [startAt, setStartAt] = useState("1");
+  const [plan, setPlan] = useState<PlanRow[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState<{ count: number; next: number } | null>(null);
+
+  useEffect(() => {
+    if (!/^\d{4}-\d{2}$/.test(fy) || !(Number(startAt) >= 1)) { setPlan(null); return; }
+    let cancelled = false;
+    setLoading(true);
+    fetch(`/api/finance/revenues/renumber-invoices?fy=${encodeURIComponent(fy)}&startAt=${encodeURIComponent(startAt)}`)
+      .then(async (r) => {
+        if (cancelled) return;
+        if (!r.ok) { setError((await r.json().catch(() => ({}))).error || "Could not load preview"); setPlan(null); return; }
+        setError("");
+        setPlan((await r.json()).plan || []);
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [fy, startAt]);
+
+  async function apply() {
+    if (!plan || plan.length === 0) return;
+    if (!confirm(`Renumber ${plan.length} invoice${plan.length === 1 ? "" : "s"} in FY ${fy} starting at ${String(Number(startAt)).padStart(3, "0")}? Previously downloaded PDFs keep their old numbers — re-download them after.`)) return;
+    setApplying(true);
+    setError("");
+    const res = await fetch("/api/finance/revenues/renumber-invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fy, startAt: Number(startAt) }) });
+    setApplying(false);
+    if (!res.ok) { setError((await res.json().catch(() => ({}))).error || "Could not renumber"); return; }
+    const data = await res.json();
+    setDone({ count: data.plan.length, next: data.next });
+    onApplied();
+  }
+
+  const changes = plan?.filter((p) => p.oldNumber !== p.newNumber).length ?? 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-5 max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        {done ? (
+          <div className="text-center">
+            <div className="mx-auto w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl mb-3">✓</div>
+            <h2 className="text-base font-semibold text-slate-900">Invoices renumbered</h2>
+            <p className="text-sm text-slate-500 mt-1">{done.count} invoice{done.count === 1 ? "" : "s"} updated. The next invoice will be {String(done.next).padStart(3, "0")}. Use each row&apos;s Invoice button to download the updated PDFs.</p>
+            <button onClick={onClose} className="mt-5 bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Done</button>
+          </div>
+        ) : (
+          <>
+            <h2 className="text-base font-semibold text-slate-900 mb-1">Renumber invoices</h2>
+            <p className="text-xs text-slate-500 mb-4">
+              Assigns numbers in the order the money was received (oldest first), one continuous sequence for the financial year regardless of month. Set the start to continue after invoices made outside the system.
+            </p>
+            <div className="flex flex-wrap items-end gap-3 mb-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Financial year</label>
+                <input value={fy} onChange={(e) => setFy(e.target.value)} maxLength={7} placeholder="2026-27" className="w-28 rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">First number</label>
+                <input type="number" min={1} value={startAt} onChange={(e) => setStartAt(e.target.value)} className="w-28 rounded-md border border-slate-200 px-3 py-2 text-sm" />
+              </div>
+              <span className="text-xs text-slate-500 pb-2">
+                {loading ? "Loading preview…" : plan ? `${plan.length} invoice${plan.length === 1 ? "" : "s"} in FY ${fy} · ${changes} will change` : ""}
+              </span>
+            </div>
+            {plan && plan.length > 0 && (
+              <div className="border border-slate-200 rounded-lg overflow-hidden mb-4">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 text-slate-500">
+                    <tr>
+                      <th className="text-left font-semibold px-3 py-2">Entry</th>
+                      <th className="text-left font-semibold px-3 py-2">Received</th>
+                      <th className="text-left font-semibold px-3 py-2">Client</th>
+                      <th className="text-left font-semibold px-3 py-2">Current</th>
+                      <th className="text-left font-semibold px-3 py-2">New</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {plan.map((p) => (
+                      <tr key={p.id} className={p.status === "voided" ? "text-slate-400" : "text-slate-700"}>
+                        <td className="px-3 py-1.5 font-mono">RV-{p.docNumber}{p.status === "voided" ? " (voided)" : ""}</td>
+                        <td className="px-3 py-1.5">{p.entryDate}</td>
+                        <td className="px-3 py-1.5 truncate max-w-[180px]">{p.customerName}</td>
+                        <td className="px-3 py-1.5 font-mono">{p.oldNumber}</td>
+                        <td className={`px-3 py-1.5 font-mono ${p.oldNumber !== p.newNumber ? "font-semibold text-slate-900" : ""}`}>{p.newNumber}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {plan && plan.length === 0 && <p className="text-sm text-slate-400 mb-4">No invoices in FY {fy}.</p>}
+            {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
+              <button onClick={apply} disabled={applying || !plan || plan.length === 0 || changes === 0} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-50">
+                {applying ? "Renumbering…" : `Renumber ${changes} invoice${changes === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

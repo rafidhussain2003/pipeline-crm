@@ -8,8 +8,9 @@
 // corrections = void (reversing entry) + re-enter.
 import { db } from "@/db";
 import { financeAccounts, financeClients, financeExpenses, financeRevenues, financeSettings } from "@/db/schema";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, sql } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
+import { lock } from "@/lib/infra/lock";
 import { FinanceError, PAYMENT_METHODS, isValidDateString, toCents, toMoneyString } from "./types";
 import { ensureFinanceSetup, getAccount } from "./accounts";
 import { createAndPost, voidJournal } from "./journal";
@@ -427,6 +428,70 @@ export async function attachInvoiceToRevenue(companyId: string, actorUserId: str
     after: { clientId: client.id, invoiceNumber, customer: client.name, servicePeriod, invoiceCurrency, invoiceAmount: row.invoiceAmount },
   });
   return row;
+}
+
+// ── Renumber invoices ────────────────────────────────────────────────────────
+// Re-assigns invoice numbers for one financial year in CHRONOLOGICAL order
+// (received date, then RV number), starting from a chosen number — e.g. when
+// invoices were created in a different order than the payments arrived, or
+// hand-made invoices 001–002 precede the system's. Every invoiced entry in
+// the FY takes part, voided ones included (they consumed a number too, and
+// leaving them out would let a live invoice collide with a dead number).
+// The counter is then set to continue after the last assigned number.
+export type RenumberPlanRow = { id: string; docNumber: number; status: string; customerName: string; entryDate: string; oldNumber: string; newNumber: string };
+
+export async function planInvoiceRenumber(companyId: string, fy: string, startAt: number): Promise<RenumberPlanRow[]> {
+  const [settings] = await db.select({ prefix: financeSettings.invoiceNumberPrefix }).from(financeSettings).where(eq(financeSettings.companyId, companyId)).limit(1);
+  const prefix = settings?.prefix || "INV";
+  const rows = await db
+    .select({ id: financeRevenues.id, docNumber: financeRevenues.docNumber, status: financeRevenues.status, customerName: financeRevenues.customerName, entryDate: financeRevenues.entryDate, invoiceDate: financeRevenues.invoiceDate, invoiceNumber: financeRevenues.invoiceNumber })
+    .from(financeRevenues)
+    .where(and(eq(financeRevenues.companyId, companyId), isNotNull(financeRevenues.invoiceNumber)))
+    .orderBy(asc(financeRevenues.entryDate), asc(financeRevenues.docNumber));
+  let n = startAt;
+  const plan: RenumberPlanRow[] = [];
+  for (const r of rows) {
+    if (financialYearLabel(r.invoiceDate || r.entryDate) !== fy) continue;
+    plan.push({ id: r.id, docNumber: r.docNumber, status: r.status, customerName: r.customerName, entryDate: r.entryDate, oldNumber: r.invoiceNumber!, newNumber: `${prefix}/${fy}/${String(n).padStart(3, "0")}` });
+    n += 1;
+  }
+  return plan;
+}
+
+export async function renumberInvoices(companyId: string, actorUserId: string, fy: string, startAt: number) {
+  if (!/^\d{4}-\d{2}$/.test(fy)) throw new FinanceError("Financial year must look like 2026-27");
+  if (!Number.isInteger(startAt) || startAt < 1 || startAt > 999999) throw new FinanceError("Start number must be a whole number of 1 or more");
+  return lock.withLock(`finance:${companyId}`, async () => {
+    const plan = await planInvoiceRenumber(companyId, fy, startAt);
+    if (plan.length === 0) throw new FinanceError(`No invoices found in FY ${fy}`);
+    // Numbers outside the plan (other FYs) must not clash with the new ones.
+    const taken = await db
+      .select({ invoiceNumber: financeRevenues.invoiceNumber, id: financeRevenues.id })
+      .from(financeRevenues)
+      .where(and(eq(financeRevenues.companyId, companyId), isNotNull(financeRevenues.invoiceNumber)));
+    const planIds = new Set(plan.map((p) => p.id));
+    const newNumbers = new Set(plan.map((p) => p.newNumber));
+    const clash = taken.find((t) => !planIds.has(t.id) && t.invoiceNumber && newNumbers.has(t.invoiceNumber));
+    if (clash) throw new FinanceError(`Invoice number ${clash.invoiceNumber} is already used by an entry outside FY ${fy}`);
+
+    const last = startAt + plan.length - 1;
+    await db.transaction(async (tx) => {
+      // Two passes keep the unique index happy mid-way: park every number
+      // first, then assign the final ones.
+      for (const p of plan) {
+        await tx.update(financeRevenues).set({ invoiceNumber: `~${p.id}`, updatedAt: new Date() }).where(eq(financeRevenues.id, p.id));
+      }
+      for (const p of plan) {
+        await tx.update(financeRevenues).set({ invoiceNumber: p.newNumber, invoiceRef: p.newNumber, updatedAt: new Date() }).where(eq(financeRevenues.id, p.id));
+      }
+      await tx
+        .update(financeSettings)
+        .set({ invoiceNumberFy: fy, nextInvoiceNumber: last + 1, updatedAt: new Date() })
+        .where(eq(financeSettings.companyId, companyId));
+    });
+    await recordAudit({ companyId, userId: actorUserId, action: "finance.invoices_renumbered", entityType: "finance_settings", entityId: companyId, after: { fy, startAt, count: plan.length, next: last + 1, changes: plan.filter((p) => p.oldNumber !== p.newNumber).map((p) => `${p.oldNumber} -> ${p.newNumber}`) } });
+    return { plan, next: last + 1 };
+  });
 }
 
 // Everything the invoice PDF needs for one revenue entry (company-scoped).
