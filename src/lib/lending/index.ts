@@ -2,11 +2,10 @@
 // (funds in/out), loans (disburse → EMI schedule → mark paid → close) and the
 // automatic borrower emails. INR only, integer paise, not company finance.
 import { db } from "@/db";
-import { companies, lendingBanks, lendingEmis, lendingLoans, lendingTransactions } from "@/db/schema";
+import { lendingBanks, lendingEmis, lendingLoans, lendingTransactions, users } from "@/db/schema";
 import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { requireFinance } from "@/lib/finance/guard";
-import type { CompanySession } from "@/lib/auth";
+import { requireCompanySession, type CompanySession } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
 import { lock } from "@/lib/infra/lock";
 import { buildSchedule, firstDueDateAfter } from "./emi";
@@ -22,9 +21,13 @@ export function lendingErrorResponse(err: unknown): NextResponse {
   throw err;
 }
 
-// Admin only — nobody else, whatever their finance capabilities.
+// Admin only — nobody else. Deliberately NOT routed through the Finance
+// module's guard: the Lending Bank is the admin's private ledger and works
+// whether or not the company has the Finance module, finance capabilities,
+// or anything else enabled. The only requirement is a valid session for the
+// company's admin.
 export async function requireLendingAdmin(): Promise<{ ok: true; session: CompanySession } | { ok: false; response: NextResponse }> {
-  const auth = await requireFinance("finance:view");
+  const auth = await requireCompanySession();
   if (!auth.ok) return auth;
   if (auth.session.role !== "admin") {
     return { ok: false, response: NextResponse.json({ error: "The Lending Bank is available to the company admin only." }, { status: 403 }) };
@@ -49,9 +52,16 @@ async function ensureBank(companyId: string, userId: string) {
   return bank;
 }
 
+// The lender as the borrower knows them: the admin who runs the bank (the
+// person who created it), not the company — this is a personal ledger.
 async function lenderName(companyId: string): Promise<string> {
-  const [c] = await db.select({ name: companies.name }).from(companies).where(eq(companies.id, companyId)).limit(1);
-  return c?.name || "Your lender";
+  const [bank] = await db.select({ createdBy: lendingBanks.createdBy }).from(lendingBanks).where(eq(lendingBanks.companyId, companyId)).limit(1);
+  if (bank?.createdBy) {
+    const [u] = await db.select({ name: users.name }).from(users).where(eq(users.id, bank.createdBy)).limit(1);
+    if (u?.name) return u.name;
+  }
+  const [admin] = await db.select({ name: users.name }).from(users).where(and(eq(users.companyId, companyId), eq(users.role, "admin"))).limit(1);
+  return admin?.name || "Your lender";
 }
 
 // ── Summary ─────────────────────────────────────────────────────────────────
@@ -296,15 +306,16 @@ export async function sendDueEmiReminders(): Promise<{ upcoming: number; due: nu
   soon.setUTCDate(soon.getUTCDate() + 3);
   const soonIso = soon.toISOString().slice(0, 10);
   const rows = await db
-    .select({ emi: lendingEmis, loan: lendingLoans, lender: companies.name })
+    .select({ emi: lendingEmis, loan: lendingLoans })
     .from(lendingEmis)
     .innerJoin(lendingLoans, eq(lendingLoans.id, lendingEmis.loanId))
-    .innerJoin(companies, eq(companies.id, lendingLoans.companyId))
     .where(and(eq(lendingEmis.status, "pending"), eq(lendingLoans.status, "active"), lte(lendingEmis.dueDate, soonIso)))
     .limit(500);
   let upcoming = 0, due = 0;
+  const lenderByCompany = new Map<string, string>();
   for (const r of rows) {
-    const lender = r.lender || "Your lender";
+    let lender = lenderByCompany.get(r.loan.companyId);
+    if (!lender) { lender = await lenderName(r.loan.companyId); lenderByCompany.set(r.loan.companyId, lender); }
     if (r.emi.dueDate <= t) {
       if (!r.emi.dueNoticeSentAt) {
         const res = await sendEmiReminderEmail(lender, loanForEmail(r.loan), emiForEmail(r.emi), "due");

@@ -54,14 +54,21 @@ function loanSummary(loan: LoanForEmail): string {
   ]);
 }
 
-export async function sendLoanDetailsEmail(lender: string, loan: LoanForEmail, emis: EmiForEmail[]): Promise<{ ok: boolean; reason?: string }> {
+// Exported separately from the sender so the message can be previewed/tested
+// without an email provider.
+export function buildLoanDetailsEmail(lender: string, loan: LoanForEmail, emis: EmiForEmail[]): { subject: string; html: string; text: string } {
   const html = shell(
     `Your loan details — LN-${loan.loanNumber}`,
     `<p style="font-size:14px;color:#475569">Hi ${esc(loan.borrowerName)}, here are the details of your loan from ${esc(lender)}. Every EMI is due on the 1st of the month.</p>${loanSummary(loan)}<h2 style="font-size:14px;color:#0f172a;margin:16px 0 4px">EMI schedule</h2>${scheduleTable(emis)}<p style="font-size:12px;color:#94a3b8">Keep this email for your records. You will get a reminder before each due date.</p>`,
     lender
   );
   const text = `Loan LN-${loan.loanNumber} from ${lender}\nAmount: ${inrPlain(loan.principalCents)}\nRate: ${Number(loan.interestRate)}% p.a.\nTenure: ${loan.tenureMonths} months\nEMI: ${inrPlain(loan.emiCents)} due on the 1st of every month, first on ${longDate(loan.firstDueDate)}\nTotal payable: ${inrPlain(loan.totalPayableCents)}\n\nSchedule:\n${emis.map((e) => `${e.installmentNo}. ${longDate(e.dueDate)} — ${inrPlain(e.emiCents)} (${e.status})`).join("\n")}`;
-  const res = await sendViaResend({ from: FROM, to: [loan.borrowerEmail], subject: `Your loan details: LN-${loan.loanNumber} — EMI ${inrPlain(loan.emiCents)} on the 1st of every month`, html, text });
+  return { subject: `Your loan details: LN-${loan.loanNumber} — EMI ${inrPlain(loan.emiCents)} on the 1st of every month`, html, text };
+}
+
+export async function sendLoanDetailsEmail(lender: string, loan: LoanForEmail, emis: EmiForEmail[]): Promise<{ ok: boolean; reason?: string }> {
+  const msg = buildLoanDetailsEmail(lender, loan, emis);
+  const res = await sendViaResend({ from: FROM, to: [loan.borrowerEmail], ...msg });
   return res.ok ? { ok: true } : { ok: false, reason: res.reason };
 }
 

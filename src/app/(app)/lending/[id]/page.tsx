@@ -20,7 +20,7 @@ export default function LoanPage() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetch(`/api/finance/lending/loans/${id}`);
+    const res = await fetch(`/api/lending/loans/${id}`);
     if (!res.ok) { setError((await res.json().catch(() => ({}))).error || "Loan not found"); return; }
     const data = await res.json();
     setLoan(data.loan);
@@ -41,7 +41,7 @@ export default function LoanPage() {
     return data;
   }
 
-  if (error && !loan) return <div className="p-6"><p className="text-sm text-red-600">{error}</p><Link href="/finance/lending" className="text-sm text-blue-700 hover:underline">← Lending Bank</Link></div>;
+  if (error && !loan) return <div className="p-6"><p className="text-sm text-red-600">{error}</p><Link href="/lending" className="text-sm text-blue-700 hover:underline">← Lending Bank</Link></div>;
   if (!loan) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
 
   const today = todayIso();
@@ -52,16 +52,16 @@ export default function LoanPage() {
 
   return (
     <div className="p-6 max-w-4xl">
-      <Link href="/finance/lending" className="text-sm text-blue-700 hover:underline">← Lending Bank</Link>
+      <Link href="/lending" className="text-sm text-blue-700 hover:underline">← Lending Bank</Link>
       <div className="flex items-start justify-between gap-4 mt-2 mb-5">
         <div>
           <h1 className="text-xl font-semibold text-slate-900 flex items-center gap-2">LN-{loan.loanNumber} · {loan.borrowerName} <LoanStatusBadge status={loan.status} overdue={pending.filter((e) => e.dueDate < today).length} /></h1>
           <p className="text-sm text-slate-500 mt-1">{loan.borrowerPhone} · {loan.borrowerEmail}</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => act(`/api/finance/lending/loans/${loan.id}/email`, "POST", {}, "Loan details emailed to the borrower.")} disabled={busy} className="text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 px-3 py-2 rounded-md disabled:opacity-50">Email loan details</button>
+          <button onClick={() => act(`/api/lending/loans/${loan.id}/email`, "POST", {}, "Loan details emailed to the borrower.")} disabled={busy} className="text-sm font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 px-3 py-2 rounded-md disabled:opacity-50">Email loan details</button>
           {loan.status === "active" && paid.length === 0 && (
-            <button onClick={() => { if (confirm("Cancel this loan? The amount returns to the bank balance.")) act(`/api/finance/lending/loans/${loan.id}/cancel`, "POST", {}, "Loan cancelled."); }} disabled={busy} className="text-sm font-medium text-red-600 bg-red-50 px-3 py-2 rounded-md disabled:opacity-50">Cancel loan</button>
+            <button onClick={() => { if (confirm("Cancel this loan? The amount returns to the bank balance.")) act(`/api/lending/loans/${loan.id}/cancel`, "POST", {}, "Loan cancelled."); }} disabled={busy} className="text-sm font-medium text-red-600 bg-red-50 px-3 py-2 rounded-md disabled:opacity-50">Cancel loan</button>
           )}
         </div>
       </div>
@@ -130,7 +130,7 @@ export default function LoanPage() {
                       <button onClick={() => setPaying(e)} disabled={busy} className="text-[11px] font-medium text-white bg-slate-900 hover:bg-slate-700 rounded px-2 py-1 disabled:opacity-50">Mark paid</button>
                     )}
                     {e.status === "paid" && (
-                      <button onClick={() => { if (confirm(`Undo the paid mark on EMI ${e.installmentNo}?`)) act(`/api/finance/lending/loans/${loan.id}/emis/${e.id}`, "DELETE", undefined, "Paid mark removed."); }} disabled={busy} className="text-[11px] font-medium text-slate-500 hover:text-slate-800 px-2 py-1 disabled:opacity-50">Undo</button>
+                      <button onClick={() => { if (confirm(`Undo the paid mark on EMI ${e.installmentNo}?`)) act(`/api/lending/loans/${loan.id}/emis/${e.id}`, "DELETE", undefined, "Paid mark removed."); }} disabled={busy} className="text-[11px] font-medium text-slate-500 hover:text-slate-800 px-2 py-1 disabled:opacity-50">Undo</button>
                     )}
                   </td>
                 </tr>
@@ -146,7 +146,7 @@ export default function LoanPage() {
           tenure={loan.tenureMonths}
           onClose={() => setPaying(null)}
           onSave={async (paidOn, note, sendEmail) => {
-            const r = await act(`/api/finance/lending/loans/${loan.id}/emis/${paying.id}`, "POST", { paidOn, note, sendEmail }, "");
+            const r = await act(`/api/lending/loans/${loan.id}/emis/${paying.id}`, "POST", { paidOn, note, sendEmail }, "");
             if (r) {
               setPaying(null);
               const email = (r as { email?: { ok: boolean; reason?: string } | null }).email;
