@@ -94,6 +94,8 @@ const FINANCE_ITEMS: { href: string; label: string; requires?: string[]; adminOn
   // people who keep the books (admin + finance employees, every capability),
   // but NOT company finance. `roles` limits it to exactly those two.
   { href: "/finance/home", label: "My Home", roles: ["admin", "finance_employee"] },
+  // Lending Bank — the admin's private family-and-friends lending ledger.
+  { href: "/finance/lending", label: "Lending Bank", adminOnly: true },
 ];
 
 // Which FINANCE_ITEMS to show for a given viewer. Admins/managers see all

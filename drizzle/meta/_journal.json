@@ -519,6 +519,13 @@
       "when": 1791537024235,
       "tag": "0073_invoicing",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1792493097139,
+      "tag": "0074_lending_bank",
+      "breakpoints": true
     }
   ]
 }
