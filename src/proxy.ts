@@ -107,6 +107,8 @@ export async function proxy(req: NextRequest) {
     pathname.startsWith("/subscription/") ||
     pathname === "/finance" ||
     pathname.startsWith("/finance/") ||
+    pathname === "/lending" ||
+    pathname.startsWith("/lending/") ||
     pathname === "/attendance" ||
     pathname.startsWith("/attendance/") ||
     pathname === "/payroll" ||
@@ -281,6 +283,12 @@ export async function proxy(req: NextRequest) {
     }
   }
 
+  // Lending Bank — the admin's private ledger. Admin-only on the PAGE
+  // surface too (the API guards itself): anyone else is sent to their home.
+  if (session?.companyId && session.role !== "admin" && !isApiRoute && (pathname === "/lending" || pathname.startsWith("/lending/"))) {
+    return NextResponse.redirect(new URL(session.role === "finance_employee" ? "/finance" : "/profile", getPublicAppUrl()));
+  }
+
   // Enterprise Workspaces gate — the admin's per-user module assignment,
   // enforced on the PAGE surface here (each module's API routes enforce it
   // again in their own guards). Admins are never overridden; a denied
@@ -322,6 +330,8 @@ export const config = {
     "/callbacks/:path*",
     "/operations/:path*",
     "/finance/:path*",
+    "/lending",
+    "/lending/:path*",
     "/attendance/:path*",
     "/payroll/:path*",
     "/hr/:path*",

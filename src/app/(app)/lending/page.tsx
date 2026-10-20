@@ -25,7 +25,7 @@ export default function LendingPage() {
   const [filter, setFilter] = useState<"active" | "all">("active");
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/finance/lending");
+    const res = await fetch("/api/lending");
     if (!res.ok) { setLoadError((await res.json().catch(() => ({}))).error || "Could not load the Lending Bank."); return; }
     const data = await res.json();
     setSummary(data.summary);
@@ -74,7 +74,7 @@ export default function LendingPage() {
       </div>
       <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-100 mb-6">
         {visibleLoans.map((l) => (
-          <Link key={l.id} href={`/finance/lending/${l.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50">
+          <Link key={l.id} href={`/lending/${l.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50">
             <span className="text-xs font-mono text-slate-400 w-12 shrink-0">LN-{l.loanNumber}</span>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-slate-900 truncate">{l.borrowerName} <span className="text-xs font-normal text-slate-400">· {l.borrowerPhone}</span></div>
@@ -133,7 +133,7 @@ function FundsModal({ kind, initial, onClose, onSaved }: { kind: "deposit" | "wi
     e.preventDefault();
     setSaving(true);
     setError("");
-    const res = await fetch("/api/finance/lending/funds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount, date, note, kind }) });
+    const res = await fetch("/api/lending/funds", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount, date, note, kind }) });
     setSaving(false);
     if (!res.ok) { setError((await res.json().catch(() => ({}))).error || "Could not save"); return; }
     onSaved();
@@ -187,7 +187,7 @@ function LoanModal({ defaultRate, balanceCents, onClose, onSaved }: { defaultRat
     if (!(amt > 0) || !(Number(rate) >= 0)) { setPreview(null); return; }
     const ctrl = new AbortController();
     const t = setTimeout(() => {
-      fetch(`/api/finance/lending/loans?amount=${encodeURIComponent(amount)}&rate=${encodeURIComponent(rate)}&months=${months}&start=${startDate}`, { signal: ctrl.signal })
+      fetch(`/api/lending/loans?amount=${encodeURIComponent(amount)}&rate=${encodeURIComponent(rate)}&months=${months}&start=${startDate}`, { signal: ctrl.signal })
         .then(async (r) => { if (r.ok) setPreview(await r.json()); })
         .catch(() => {});
     }, 250);
@@ -198,7 +198,7 @@ function LoanModal({ defaultRate, balanceCents, onClose, onSaved }: { defaultRat
     e.preventDefault();
     setSaving(true);
     setError("");
-    const res = await fetch("/api/finance/lending/loans", {
+    const res = await fetch("/api/lending/loans", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ borrowerName, borrowerPhone, borrowerEmail, amount, interestRate: rate, tenureMonths: Number(months), startDate, notes, sendEmail }),
@@ -219,7 +219,7 @@ function LoanModal({ defaultRate, balanceCents, onClose, onSaved }: { defaultRat
             {done.emailOk === true ? "Loan details and the EMI schedule were emailed to the borrower." : done.emailOk === false ? `Loan saved, but the email could not be sent: ${done.emailReason || "unknown reason"}. You can resend it from the loan page.` : "Loan saved. No email was sent."}
           </p>
           <div className="flex justify-center gap-2 mt-5">
-            <Link href={`/finance/lending/${done.id}`} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Open loan</Link>
+            <Link href={`/lending/${done.id}`} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Open loan</Link>
             <button onClick={onSaved} className="text-sm font-medium text-slate-600 bg-slate-100 px-4 py-2 rounded-md">Done</button>
           </div>
         </div>

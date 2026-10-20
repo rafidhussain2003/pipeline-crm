@@ -94,8 +94,10 @@ const FINANCE_ITEMS: { href: string; label: string; requires?: string[]; adminOn
   // people who keep the books (admin + finance employees, every capability),
   // but NOT company finance. `roles` limits it to exactly those two.
   { href: "/finance/home", label: "My Home", roles: ["admin", "finance_employee"] },
-  // Lending Bank — the admin's private family-and-friends lending ledger.
-  { href: "/finance/lending", label: "Lending Bank", adminOnly: true },
+  // Lending Bank — the admin's private family-and-friends lending ledger. It
+  // lives OUTSIDE the Finance module (/lending) so it works even when Finance
+  // is off; this entry is just a convenience link from the finance nav.
+  { href: "/lending", label: "Lending Bank", adminOnly: true },
 ];
 
 // Which FINANCE_ITEMS to show for a given viewer. Admins/managers see all
@@ -158,6 +160,9 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   { href: "/notepad", label: "Secure Notepad", roles: ["admin", "manager", "agent"], newTab: true },
   // My Excel — a personal, private spreadsheet workspace; opens in its own tab.
   { href: "/my-excel", label: "My Excel", roles: ["admin", "manager", "agent"], newTab: true },
+  // Lending Bank — admin-only private lending ledger, independent of every
+  // module (no feature flag): it is the admin's own money, not company finance.
+  { href: "/lending", label: "Lending Bank", roles: ["admin"] },
   { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration", roles: ["admin", "manager"] },
   // Facebook Forms alias management — admin only (the page shows real Meta form
   // names, which managers/agents must never see).
