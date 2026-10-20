@@ -52,6 +52,21 @@ export async function register() {
   setTimeout(runNotepadSweep, 60_000); // once shortly after boot
   setInterval(runNotepadSweep, 60 * 60 * 1000); // then hourly
 
+  // Lending Bank — automatic EMI reminder emails (3 days before each due date
+  // and on the date itself). Each reminder is stamped on the EMI row once
+  // sent, so running hourly is safe and nothing goes out twice.
+  const runLendingReminders = async () => {
+    try {
+      const { sendDueEmiReminders } = await import("@/lib/lending");
+      const r = await sendDueEmiReminders();
+      if (r.upcoming || r.due) console.log(`[lending] reminders sent: upcoming=${r.upcoming} due=${r.due}`);
+    } catch (err) {
+      console.error("[lending] reminder sweep failed:", err);
+    }
+  };
+  setTimeout(runLendingReminders, 90_000);
+  setInterval(runLendingReminders, 60 * 60 * 1000);
+
   // Sales Ledger — one-time backfill of parsed installation dates. Existing
   // sales whose free-text installation date the parser can now understand (but
   // couldn't when they were entered) get their installationAt derived and their

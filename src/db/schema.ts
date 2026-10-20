@@ -3677,3 +3677,98 @@ export const homeExpenses = pgTable(
     companyIdx: index("home_expenses_company_idx").on(t.companyId, t.spentOn),
   })
 );
+
+// Lending Bank — the admin's private lending ledger (family & friends loans).
+// Admin-only, INR only, and deliberately NOT part of company finance: no
+// journal, no accounts. The "bank" is a pool of money the admin adds funds
+// to; loans are disbursed from it and repaid in monthly EMIs (reducing-
+// balance interest, due on the 1st). All amounts are integer paise.
+export const lendingBanks = pgTable("lending_banks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull().unique(),
+  defaultInterestRate: numeric("default_interest_rate", { precision: 5, scale: 2 }).notNull().default("14.00"), // % per annum
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const lendingLoanStatusEnum = pgEnum("lending_loan_status", ["active", "closed", "cancelled"]);
+export const lendingEmiStatusEnum = pgEnum("lending_emi_status", ["pending", "paid"]);
+
+export const lendingLoans = pgTable(
+  "lending_loans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    loanNumber: integer("loan_number").notNull(), // LN-1, LN-2 … per company
+    borrowerName: varchar("borrower_name", { length: 160 }).notNull(),
+    borrowerPhone: varchar("borrower_phone", { length: 40 }).notNull(),
+    borrowerEmail: varchar("borrower_email", { length: 200 }).notNull(),
+    principalCents: bigint("principal_cents", { mode: "number" }).notNull(),
+    interestRate: numeric("interest_rate", { precision: 5, scale: 2 }).notNull(), // % per annum, fixed for the loan
+    tenureMonths: integer("tenure_months").notNull(), // 1–12
+    emiCents: bigint("emi_cents", { mode: "number" }).notNull(),
+    totalInterestCents: bigint("total_interest_cents", { mode: "number" }).notNull(),
+    totalPayableCents: bigint("total_payable_cents", { mode: "number" }).notNull(),
+    startDate: date("start_date").notNull(), // disbursement date
+    firstDueDate: date("first_due_date").notNull(), // the 1st of the following month
+    status: lendingLoanStatusEnum("status").notNull().default("active"),
+    notes: text("notes"),
+    lastEmailAt: timestamp("last_email_at"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    closedAt: timestamp("closed_at"),
+  },
+  (t) => ({
+    numberUniq: uniqueIndex("lending_loans_company_number_uniq").on(t.companyId, t.loanNumber),
+    statusIdx: index("lending_loans_company_status_idx").on(t.companyId, t.status),
+  })
+);
+
+export const lendingEmis = pgTable(
+  "lending_emis",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    loanId: uuid("loan_id").references(() => lendingLoans.id, { onDelete: "cascade" }).notNull(),
+    installmentNo: integer("installment_no").notNull(),
+    dueDate: date("due_date").notNull(),
+    emiCents: bigint("emi_cents", { mode: "number" }).notNull(),
+    principalCents: bigint("principal_cents", { mode: "number" }).notNull(),
+    interestCents: bigint("interest_cents", { mode: "number" }).notNull(),
+    balanceAfterCents: bigint("balance_after_cents", { mode: "number" }).notNull(),
+    status: lendingEmiStatusEnum("status").notNull().default("pending"),
+    paidOn: date("paid_on"),
+    paidCents: bigint("paid_cents", { mode: "number" }),
+    paidNote: varchar("paid_note", { length: 200 }),
+    // Automatic reminder emails: set when sent so each goes out once.
+    reminderSentAt: timestamp("reminder_sent_at"), // ~3 days before due
+    dueNoticeSentAt: timestamp("due_notice_sent_at"), // on the due date
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    loanIdx: uniqueIndex("lending_emis_loan_installment_uniq").on(t.loanId, t.installmentNo),
+    dueIdx: index("lending_emis_company_due_idx").on(t.companyId, t.status, t.dueDate),
+  })
+);
+
+// Money in/out of the pool. Balance = deposits − disbursements + repayments.
+export const lendingTransactions = pgTable(
+  "lending_transactions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    kind: varchar("kind", { length: 16 }).notNull(), // deposit | withdrawal | disbursement | repayment
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(), // always positive; kind gives the sign
+    loanId: uuid("loan_id").references(() => lendingLoans.id, { onDelete: "set null" }),
+    emiId: uuid("emi_id").references(() => lendingEmis.id, { onDelete: "set null" }),
+    note: varchar("note", { length: 300 }),
+    occurredOn: date("occurred_on").notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyIdx: index("lending_transactions_company_idx").on(t.companyId, t.occurredOn),
+  })
+);
