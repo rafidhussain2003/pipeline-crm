@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { sales, users, commercialSales } from "@/db/schema";
-import { and, asc, count, eq, gte, ilike, inArray, isNotNull, isNull, lt, or, sql, type SQL } from "drizzle-orm";
+import { sales, users, commercialSales, companies } from "@/db/schema";
+import { and, asc, count, eq, gte, ilike, inArray, isNotNull, isNull, lt, lte, or, sql, type SQL } from "drizzle-orm";
 import { requireSales, resolveSalesScope, currentSaleMonth } from "@/lib/sales/access";
 import { isValidSaleMonth, isSaleStatus } from "@/lib/sales/types";
 import { classifyProduct, productCategoryLabel } from "@/lib/sales/products";
 import { parseInstallationDate, syncSaleReminders } from "@/lib/sales/reminders";
+import { parseOrderDate, localMidnightUtc } from "@/lib/sales/parse-date";
 import { recordAudit } from "@/lib/audit";
 import { checkPolicy } from "@/lib/rate-limit";
 import { isUuid } from "@/lib/url";
@@ -55,9 +56,13 @@ export async function GET(req: NextRequest) {
   // may narrow to one agent via ?agentId=.
   const ownerId = scope.viewAll ? (isUuid(p.get("agentId") || "") ? p.get("agentId")! : null) : session.userId;
 
-  // Incentive date range (?from=&to=, yyyy-mm-dd, inclusive) — "sales made
-  // between these dates", keyed on createdAt (when the sale was RECORDED; the
-  // reliable timestamp — orderDate is free text and can't be range-filtered).
+  // Date range (?from=&to=, yyyy-mm-dd, inclusive) — "sales made between
+  // these dates", keyed on the ORDER DATE the agents see (sales.orderOn, the
+  // parsed calendar date of the free-text column). A row whose order date
+  // isn't a real date ("na") falls back to WHEN it was recorded (createdAt),
+  // with the day boundaries taken at the company's local midnight — not the
+  // server's UTC midnight, which silently dropped entries typed late in the
+  // evening or just after midnight local time.
   // Admin/manager: the range REPLACES the month scope, so a commission week
   // spanning a month boundary just works. Agents: the range narrows WITHIN
   // the selected month, so ranging into a past month can never bypass that
@@ -66,16 +71,24 @@ export async function GET(req: NextRequest) {
   const range: SQL[] = [];
   const fromStr = p.get("from");
   const toStr = p.get("to");
-  if (fromStr && DATE_RE.test(fromStr)) {
-    const d = new Date(`${fromStr}T00:00:00`);
-    if (!Number.isNaN(d.getTime())) range.push(gte(sales.createdAt, d));
-  }
-  if (toStr && DATE_RE.test(toStr)) {
-    const d = new Date(`${toStr}T00:00:00`);
-    if (!Number.isNaN(d.getTime())) {
-      d.setDate(d.getDate() + 1); // include all of the "to" day
-      range.push(lt(sales.createdAt, d));
+  const fromOk = !!fromStr && DATE_RE.test(fromStr) && !Number.isNaN(Date.parse(fromStr));
+  const toOk = !!toStr && DATE_RE.test(toStr) && !Number.isNaN(Date.parse(toStr));
+  if (fromOk || toOk) {
+    const [co] = await db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, session.companyId)).limit(1);
+    const tz = co?.timezone || "Asia/Kolkata";
+    const byOrderDate: SQL[] = [isNotNull(sales.orderOn)];
+    const byRecorded: SQL[] = [isNull(sales.orderOn)];
+    if (fromOk) {
+      byOrderDate.push(gte(sales.orderOn, fromStr!));
+      byRecorded.push(gte(sales.createdAt, localMidnightUtc(fromStr!, tz)));
     }
+    if (toOk) {
+      byOrderDate.push(lte(sales.orderOn, toStr!));
+      const next = new Date(`${toStr}T00:00:00Z`);
+      next.setUTCDate(next.getUTCDate() + 1); // include all of the "to" day
+      byRecorded.push(lt(sales.createdAt, localMidnightUtc(next.toISOString().slice(0, 10), tz)));
+    }
+    range.push(or(and(...byOrderDate), and(...byRecorded))!);
   }
   const period: SQL[] = range.length > 0 && scope.viewAll ? [...range] : [eq(sales.saleMonth, month), ...range];
 
@@ -238,6 +251,8 @@ export async function POST(req: NextRequest) {
       agentId,
       saleMonth,
       orderDate: typeof body?.orderDate === "string" ? body.orderDate.slice(0, 120) : null,
+      // Derived from the free-text orderDate — what the From/To filter keys on.
+      orderOn: parseOrderDate(typeof body?.orderDate === "string" ? body.orderDate : null, saleMonth),
       installationDate: typeof body?.installationDate === "string" ? body.installationDate.slice(0, 120) : null,
       // Derived from the free-text installationDate — drives reminders/dashboard.
       installationAt: parseInstallationDate(typeof body?.installationDate === "string" ? body.installationDate : null),

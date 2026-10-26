@@ -75,9 +75,12 @@ export async function register() {
   // after boot (not on an interval); bounded, keyset-paged, and idempotent.
   setTimeout(async () => {
     try {
-      const { reconcileInstallationDates } = await import("@/lib/sales/reminders");
+      const { reconcileInstallationDates, reconcileOrderDates } = await import("@/lib/sales/reminders");
       const res = await reconcileInstallationDates();
       if (res.fixed > 0) console.log(`[sales] installation-date backfill: derived ${res.fixed} of ${res.scanned} scanned`);
+      // Same one-time pass for the parsed ORDER DATE the date filter keys on.
+      const od = await reconcileOrderDates();
+      if (od.fixed > 0) console.log(`[sales] order-date backfill: derived ${od.fixed} of ${od.scanned} scanned`);
     } catch (err) {
       console.error("[sales] installation-date backfill failed:", err);
     }

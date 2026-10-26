@@ -14,7 +14,7 @@ import { db } from "@/db";
 import { sales, salesReminders } from "@/db/schema";
 import { and, asc, eq, gt, isNotNull, isNull } from "drizzle-orm";
 import { recordAudit } from "@/lib/audit";
-import { computeDueAts, parseInstallationDate, type ReminderKind } from "./parse-date";
+import { computeDueAts, parseInstallationDate, parseOrderDate, type ReminderKind } from "./parse-date";
 
 export { REMINDER_COPY, parseInstallationDate, computeDueAts } from "./parse-date";
 export type { ReminderKind } from "./parse-date";
@@ -133,5 +133,36 @@ export async function reconcileInstallationDates(
     if (batch.length < batchSize) break;
   }
 
+  return { scanned, fixed };
+}
+
+// One-time backfill of the parsed ORDER DATE (sales.orderOn) for rows entered
+// before the column existed, so the From/To filter covers old sales too.
+// Keyset-paged, bounded, idempotent: a row is touched once (orderOn set) and
+// rows whose text isn't a date stay NULL (the filter falls back to createdAt).
+export async function reconcileOrderDates(opts: { batchSize?: number; maxRows?: number } = {}): Promise<{ scanned: number; fixed: number }> {
+  const batchSize = opts.batchSize ?? 500;
+  const maxRows = opts.maxRows ?? 50_000;
+  let cursor = "00000000-0000-0000-0000-000000000000";
+  let scanned = 0;
+  let fixed = 0;
+  while (scanned < maxRows) {
+    const batch = await db
+      .select({ id: sales.id, orderDate: sales.orderDate, saleMonth: sales.saleMonth })
+      .from(sales)
+      .where(and(isNotNull(sales.orderDate), isNull(sales.orderOn), gt(sales.id, cursor)))
+      .orderBy(asc(sales.id))
+      .limit(batchSize);
+    if (batch.length === 0) break;
+    for (const row of batch) {
+      scanned++;
+      const orderOn = parseOrderDate(row.orderDate, row.saleMonth);
+      if (!orderOn) continue;
+      await db.update(sales).set({ orderOn }).where(eq(sales.id, row.id));
+      fixed++;
+    }
+    cursor = batch[batch.length - 1].id;
+    if (batch.length < batchSize) break;
+  }
   return { scanned, fixed };
 }
