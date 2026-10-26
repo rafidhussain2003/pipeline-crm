@@ -526,6 +526,13 @@
       "when": 1792493097139,
       "tag": "0074_lending_bank",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1793029518549,
+      "tag": "0075_sales_order_on",
+      "breakpoints": true
     }
   ]
 }

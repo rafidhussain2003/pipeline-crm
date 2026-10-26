@@ -5,6 +5,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { requireSales, resolveSalesScope } from "@/lib/sales/access";
 import { EDITABLE_FIELDS, isSaleStatus } from "@/lib/sales/types";
 import { parseInstallationDate, syncSaleReminders } from "@/lib/sales/reminders";
+import { parseOrderDate } from "@/lib/sales/parse-date";
 import { recordAudit } from "@/lib/audit";
 import { isUuid } from "@/lib/url";
 
@@ -108,6 +109,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // reminders + dashboard key off (server-set, never client-supplied).
   if ("installationDate" in set) {
     set.installationAt = parseInstallationDate(typeof set.installationDate === "string" ? set.installationDate : null);
+  }
+  // Same for the order date → the calendar date the From/To filter keys on.
+  if ("orderDate" in set) {
+    set.orderOn = parseOrderDate(typeof set.orderDate === "string" ? set.orderDate : null, row.saleMonth);
   }
   set.updatedAt = new Date();
 

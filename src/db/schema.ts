@@ -3391,6 +3391,13 @@ export const sales = pgTable(
     // ("05 Aug 2026"); installationDate can carry a qualifier ("10 Aug 2026
     // Morning") or a non-date ("TBD"). Neither drives grouping — saleMonth does.
     orderDate: varchar("order_date", { length: 120 }),
+    // Derived (server-set): the ORDER DATE as a real calendar date, parsed from
+    // the free text and disambiguated against saleMonth ("5/10/2026" in an
+    // October sheet is 5 Oct, not 10 May). This — not createdAt — is what the
+    // From/To date filter keys on, so "sales between the 5th and the 9th"
+    // means exactly the dates agents see in the ORDER DATE column. NULL when
+    // the text isn't a date ("na"); the filter then falls back to createdAt.
+    orderOn: date("order_on"),
     installationDate: varchar("installation_date", { length: 120 }),
     // Derived (server-set, NOT user-editable): the PARSED installation datetime
     // when installationDate holds a real date, else NULL. Drives the installation
@@ -3424,6 +3431,8 @@ export const sales = pgTable(
     // Dashboard "Today's / Upcoming installations" — indexed range scan on the
     // parsed installation datetime, never a full-table scan.
     companyInstallIdx: index("sales_company_installation_idx").on(t.companyId, t.installationAt),
+    // From/To date filter — indexed range scan on the parsed order date.
+    companyOrderOnIdx: index("sales_company_order_on_idx").on(t.companyId, t.orderOn),
     // Trash purge — the 30-day sweep deletes by deleted_at range; indexed so
     // the hourly cron check never scans the live table.
     deletedAtIdx: index("sales_deleted_at_idx").on(t.deletedAt),

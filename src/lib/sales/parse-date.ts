@@ -119,3 +119,106 @@ export function computeDueAts(installationAt: Date): Record<ReminderKind, Date> 
   before.setDate(before.getDate() - 2);
   return { before_2d: before, day_of: dayOf };
 }
+
+// ── Order date ──────────────────────────────────────────────────────────────
+// The ORDER DATE column is free text and agents write it the way they think:
+// "5/10/2026" (5 Oct, day-first), "10/5/2026" (same sale, month-first),
+// "7 oct 2026", "2026-10-07", "oct 7". The sale's month (saleMonth, 'YYYY-MM')
+// is the tie-breaker for ambiguous numerics: the reading whose month matches
+// the sheet's month wins, then the one nearest to it, then US month-first.
+// Returns 'YYYY-MM-DD' (a calendar date — no clock, no timezone) or null for
+// genuine non-dates ("na", "TBD", ""). Pure and unit-tested.
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const ymd = (y: number, mo: number, d: number) => `${y}-${pad2(mo + 1)}-${pad2(d)}`;
+function validYmd(y: number, mo: number, d: number): boolean {
+  if (mo < 0 || mo > 11 || d < 1 || d > 31 || y < 2000 || y > 2100) return false;
+  const dt = new Date(Date.UTC(y, mo, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo && dt.getUTCDate() === d;
+}
+// Months between a candidate (y, mo) and the sheet month — 0 = same month.
+function monthDistance(y: number, mo: number, sheetY: number, sheetMo: number): number {
+  return Math.abs((y - sheetY) * 12 + (mo - sheetMo));
+}
+// Year for a year-less order date: the sheet's year, nudged across a year
+// boundary when that brings the month next to the sheet month (a "Dec 30"
+// order in a January sheet is last year's December).
+function yearNearSheet(mo: number, sheetY: number, sheetMo: number): number {
+  const options = [sheetY - 1, sheetY, sheetY + 1];
+  return options.reduce((best, y) => (monthDistance(y, mo, sheetY, sheetMo) < monthDistance(best, mo, sheetY, sheetMo) ? y : best), sheetY);
+}
+
+export function parseOrderDate(raw: string | null | undefined, saleMonth: string): string | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  if (!s) return null;
+  const sheet = saleMonth.match(/^(\d{4})-(\d{2})$/);
+  const sheetY = sheet ? Number(sheet[1]) : new Date().getFullYear();
+  const sheetMo = sheet ? Number(sheet[2]) - 1 : new Date().getMonth();
+
+  // Year-first ISO / numeric: YYYY-MM-DD, YYYY/M/D, YYYY.M.D
+  const iso = s.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (iso) {
+    const y = Number(iso[1]), mo = Number(iso[2]) - 1, d = Number(iso[3]);
+    return validYmd(y, mo, d) ? ymd(y, mo, d) : null;
+  }
+
+  // Month name + day, either order, year optional, ordinals tolerated.
+  const MON = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)";
+  const monthRe = new RegExp(
+    `\\b${MON}\\.?\\s*(\\d{1,2})(?:st|nd|rd|th)?(?:\\s*,?\\s*(\\d{2,4}))?\\b|\\b(\\d{1,2})(?:st|nd|rd|th)?\\s*${MON}\\.?(?:\\s*,?\\s*(\\d{2,4}))?\\b`,
+    "gi"
+  );
+  for (const m of s.matchAll(monthRe)) {
+    const name = m[1] ?? m[5];
+    const dayStr = m[2] ?? m[4];
+    if (!name || dayStr === undefined) continue;
+    const mo = MONTHS[name.toLowerCase().slice(0, 3)];
+    if (mo === undefined) continue;
+    const d = Number(dayStr);
+    const yStr = m[3] ?? m[6];
+    let y = yStr ? Number(yStr) : yearNearSheet(mo, sheetY, sheetMo);
+    if (yStr && yStr.length === 2) y = 2000 + y;
+    if (validYmd(y, mo, d)) return ymd(y, mo, d);
+  }
+
+  // Numeric a/b or a/b/y: both readings are candidates when both are valid.
+  const num = s.match(/\b(\d{1,2})[-/.](\d{1,2})(?:[-/.](\d{2,4}))?\b/);
+  if (num) {
+    const a = Number(num[1]), b = Number(num[2]);
+    const yGiven = num[3] ? (num[3].length === 2 ? 2000 + Number(num[3]) : Number(num[3])) : null;
+    const candidates: { y: number; mo: number; d: number; usFirst: boolean }[] = [];
+    for (const [mo1, d1, usFirst] of [[a - 1, b, true], [b - 1, a, false]] as [number, number, boolean][]) {
+      const y = yGiven ?? yearNearSheet(mo1, sheetY, sheetMo);
+      if (validYmd(y, mo1, d1)) candidates.push({ y, mo: mo1, d: d1, usFirst });
+    }
+    if (candidates.length === 0) return null;
+    candidates.sort((p, q) => {
+      const dp = monthDistance(p.y, p.mo, sheetY, sheetMo), dq = monthDistance(q.y, q.mo, sheetY, sheetMo);
+      if (dp !== dq) return dp - dq;
+      return (q.usFirst ? 1 : 0) - (p.usFirst ? 1 : 0); // tie → US month-first
+    });
+    const c = candidates[0];
+    return ymd(c.y, c.mo, c.d);
+  }
+
+  return null;
+}
+
+// The UTC instant of local midnight on `dateStr` ('YYYY-MM-DD') in `timeZone`.
+// Used for the createdAt fallback of the date filter so "the 5th" starts at
+// the company's midnight, not the server's (UTC) — an entry typed at 01:00
+// IST on the 5th is 19:30 UTC on the 4th and must still count as the 5th.
+export function localMidnightUtc(dateStr: string, timeZone: string): Date {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const guess = Date.UTC(y, m - 1, d, 0, 0, 0);
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch {
+    return new Date(guess); // unknown zone → UTC
+  }
+  // offset = (what the zone shows at `guess`) − guess; local midnight = guess − offset.
+  const parts = Object.fromEntries(fmt.formatToParts(new Date(guess)).map((p) => [p.type, p.value]));
+  const shown = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+  return new Date(guess - (shown - guess));
+}
