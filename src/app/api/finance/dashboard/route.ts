@@ -4,7 +4,7 @@ import { FINANCE_CAPABILITIES, type FinanceCapability } from "@/lib/finance/perm
 import { ensureFinanceSetup, listAccounts, getAccountBalances, listJournals, ledgerIntegrity, toCents, FINANCE_REPORTS } from "@/lib/finance";
 import { FinanceError } from "@/lib/finance/types";
 import { db } from "@/db";
-import { financeJournalLines, financeAccounts, financeInvestments, financeSettings } from "@/db/schema";
+import { financeJournalLines, financeAccounts, financeInvestments, financeSettings, companies } from "@/db/schema";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { isSchemaLagError } from "@/lib/db-errors";
 import { createLogger } from "@/lib/logger";
@@ -29,6 +29,16 @@ export async function GET() {
     // vanished into a bare 500 and the page could only say "couldn't load".
     logger.error("finance_dashboard_failed", { companyId, error: err instanceof Error ? err.message : String(err) });
     return NextResponse.json({ error: "The finance dashboard could not load. The error has been logged — try again shortly." }, { status: 500 });
+  }
+}
+
+// 'YYYY-MM' of today in a timezone (falls back to UTC for an unknown zone).
+function localYearMonth(timeZone: string): string {
+  try {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "2-digit" }).formatToParts(new Date()).map((p) => [p.type, p.value]));
+    return `${parts.year}-${parts.month}`;
+  } catch {
+    return new Date().toISOString().slice(0, 7);
   }
 }
 
@@ -83,8 +93,11 @@ async function buildDashboard(companyId: string, caps: Set<FinanceCapability>) {
     investmentsCents = activeInvestments.reduce((sum, r) => sum + toCents(Number(r.currentValue)), 0);
 
     // Month-to-date income/expense movement from the ledger, one grouped scan.
-    const now = new Date();
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    // "This month" is the calendar month where the COMPANY is (its timezone),
+    // not where the server runs: on a UTC server an IST user saw last month's
+    // figures until 05:30 on the 1st.
+    const [co] = await db.select({ timezone: companies.timezone }).from(companies).where(eq(companies.id, companyId)).limit(1);
+    const monthStart = `${localYearMonth(co?.timezone || "Asia/Kolkata")}-01`;
     const mtd = await db
       .select({
         type: financeAccounts.type,

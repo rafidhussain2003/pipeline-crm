@@ -81,6 +81,11 @@ export async function register() {
       // Same one-time pass for the parsed ORDER DATE the date filter keys on.
       const od = await reconcileOrderDates();
       if (od.fixed > 0) console.log(`[sales] order-date backfill: derived ${od.fixed} of ${od.scanned} scanned`);
+      // Finance: move existing void reversals onto their original entry's date
+      // (see lib/finance/repair.ts) so monthly figures stop double-counting.
+      const { redateReversalsToOriginal } = await import("@/lib/finance/repair");
+      const rd = await redateReversalsToOriginal();
+      if (rd.moved > 0) console.log(`[finance] reversal re-dating: moved ${rd.moved} of ${rd.scanned} scanned`);
     } catch (err) {
       console.error("[sales] installation-date backfill failed:", err);
     }
