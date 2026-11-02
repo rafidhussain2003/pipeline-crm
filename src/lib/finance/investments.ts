@@ -5,11 +5,19 @@
 // the dashboard's balances) updates by construction:
 //
 //   Purchase:    Debit  Investments (asset)     Credit payment (cash/bank)
-//   Withdrawal:  Debit  deposit (cash/bank)     Credit Investments (asset)
+//   Withdrawal:  Debit  deposit (cash/bank)     proceeds
+//                Credit Investments (asset)     purchase value (book value)
+//                Credit Investment Gains / Debit Investment Losses  the difference
 //
-// currentValue is an admin-maintained valuation; gain/loss is COMPUTED for
-// display (currentValue − purchaseValue) and never posted — keeping the
-// books simple and the UI honest. Every mutation is audited before/after.
+// The withdrawal takes the investment OFF the books at its book value, with
+// the realised gain or loss going to income/expense. (It used to credit the
+// asset only by the proceeds, so a gain left a permanent negative residual in
+// the Investments account and a loss left a phantom asset — total assets were
+// wrong by exactly the gain/loss, forever.)
+//
+// currentValue is an admin-maintained valuation; the UNREALISED gain/loss is
+// computed for display (currentValue − purchaseValue) and never posted.
+// Every mutation is audited before/after.
 import { db } from "@/db";
 import { financeAccounts, financeInvestments } from "@/db/schema";
 import { and, desc, eq } from "drizzle-orm";
@@ -39,6 +47,19 @@ export async function ensureInvestmentsAccount(companyId: string): Promise<{ id:
     .where(and(eq(financeAccounts.companyId, companyId), eq(financeAccounts.code, INVESTMENTS_ACCOUNT_CODE)))
     .limit(1);
   if (!row) throw new FinanceError("Could not prepare the Investments account");
+  return row;
+}
+
+// Realised gain/loss accounts, created on first use (system, idempotent).
+export const INVESTMENT_GAIN_CODE = "4200";
+export const INVESTMENT_LOSS_CODE = "5400";
+async function ensureSystemAccount(companyId: string, code: string, name: string, type: "income" | "expense"): Promise<{ id: string }> {
+  const find = () => db.select({ id: financeAccounts.id }).from(financeAccounts).where(and(eq(financeAccounts.companyId, companyId), eq(financeAccounts.code, code))).limit(1);
+  const [existing] = await find();
+  if (existing) return existing;
+  await db.insert(financeAccounts).values({ companyId, code, name, type, isSystem: true }).onConflictDoNothing();
+  const [row] = await find();
+  if (!row) throw new FinanceError(`Could not prepare the ${name} account`);
   return row;
 }
 
@@ -174,15 +195,25 @@ export async function withdrawInvestment(
     throw new FinanceError("Choose the cash or bank account the money returns to");
   }
   const invAccount = await ensureInvestmentsAccount(companyId);
+  const bookCents = toCents(Number(existing.purchaseValue));
+  const diff = cents - bookCents; // > 0 realised gain, < 0 realised loss
 
+  const lines = [
+    { accountId: deposit.id, debit: cents / 100, description: `Withdrawal — ${existing.name}` },
+    { accountId: invAccount.id, credit: bookCents / 100, description: `${existing.name} — book value` },
+  ];
+  if (diff > 0) {
+    const gain = await ensureSystemAccount(companyId, INVESTMENT_GAIN_CODE, "Investment Gains", "income");
+    lines.push({ accountId: gain.id, credit: diff / 100, description: `Gain on ${existing.name}` });
+  } else if (diff < 0) {
+    const loss = await ensureSystemAccount(companyId, INVESTMENT_LOSS_CODE, "Investment Losses", "expense");
+    lines.push({ accountId: loss.id, debit: -diff / 100, description: `Loss on ${existing.name}` });
+  }
   const journal = await createAndPost(companyId, actorUserId, {
     entryDate: input.date,
     memo: `Investment withdrawal — ${existing.name}`,
     sourceType: "investment",
-    lines: [
-      { accountId: deposit.id, debit: cents / 100, description: `Withdrawal — ${existing.name}` },
-      { accountId: invAccount.id, credit: cents / 100, description: existing.name },
-    ],
+    lines,
   });
 
   const [row] = await db
@@ -205,7 +236,7 @@ export async function withdrawInvestment(
     entityType: "finance_investment",
     entityId: id,
     before: { status: existing.status, currentValue: existing.currentValue },
-    after: { status: "withdrawn", withdrawnValue: row.withdrawnValue, journalId: journal.id },
+    after: { status: "withdrawn", withdrawnValue: row.withdrawnValue, bookValue: existing.purchaseValue, realisedGainLossCents: diff, journalId: journal.id },
   });
   return row;
 }

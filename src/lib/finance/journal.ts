@@ -277,17 +277,24 @@ export async function createAndPost(companyId: string, actorUserId: string, inpu
 }
 
 // VOID: the ledger loses nothing. The original stays posted-in-ledger, its
-// header is marked voided, and a dated-today REVERSING entry (lines swapped)
-// is posted, netting the effect to zero. Voiding an entry whose reversal
-// would land in a closed period is rejected by the same year gate as any post.
+// header is marked voided, and a REVERSING entry (lines swapped) is posted,
+// netting the effect to zero.
+//
+// The reversal is dated on the ORIGINAL entry's date, so the void undoes the
+// entry in the period it belongs to: a September sale voided in November
+// leaves September's income and November's income both exactly right. (It
+// used to be dated "today", which made the month of the void show a
+// negative and left the original month overstated — and, with a later
+// un-void, double-counted the original month.) Only when the original date
+// sits in a CLOSED financial year does the reversal land on today's date,
+// the standard treatment for a locked period.
 export async function voidJournal(companyId: string, actorUserId: string, journalId: string, reason?: string) {
   return lock.withLock(`finance:${companyId}`, async () => {
     const journal = await getJournal(companyId, journalId);
     if (!journal) throw new FinanceError("Journal entry not found", 404);
     if (journal.status !== "posted") throw new FinanceError(`Only posted entries can be voided (this one is ${journal.status})`);
 
-    const today = todayDate();
-    await assertDatePostable(companyId, today);
+    const today = await reversalDateFor(companyId, journal.entryDate);
     const entryNumber = await nextEntryNumber(companyId);
 
     const reversal = await db.transaction(async (tx) => {
@@ -328,6 +335,19 @@ export async function voidJournal(companyId: string, actorUserId: string, journa
     await recordAudit({ companyId, userId: actorUserId, action: "finance.journal_voided", entityType: "finance_journal", entityId: journalId, after: { reversalId: reversal.id, reversalNumber: entryNumber, reason: reason ?? null } });
     return { voided: journalId, reversal };
   });
+}
+
+// The date a reversal of an entry dated `entryDate` posts on: the same date
+// while that period is open, otherwise today (which itself must be open).
+export async function reversalDateFor(companyId: string, entryDate: string): Promise<string> {
+  try {
+    await assertDatePostable(companyId, entryDate);
+    return entryDate;
+  } catch {
+    const today = todayDate();
+    await assertDatePostable(companyId, today);
+    return today;
+  }
 }
 
 // Drafts (only) can be discarded entirely — they were never in the ledger.

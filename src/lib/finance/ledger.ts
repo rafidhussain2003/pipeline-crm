@@ -16,8 +16,11 @@ export interface LedgerQuery {
 }
 
 // One account's ledger: entries in date order with a running balance. The
-// opening figure is the SUM of everything before `from` (one indexed
-// aggregate), so pagination and date-windowing stay exact.
+// opening figure is the SUM of everything before `from`; each row's running
+// balance is a SQL window sum over the whole window (not just the page), and
+// the closing figure is an aggregate over the whole window — so a page at any
+// offset shows the right balances, and "Closing" is the account's real
+// balance even when the window has more entries than one page.
 export async function getAccountLedger(companyId: string, q: LedgerQuery) {
   // Same discipline as getAccount(): a malformed id is "not found", never a
   // Postgres uuid-cast 500.
@@ -58,35 +61,52 @@ export async function getAccountLedger(companyId: string, q: LedgerQuery) {
     ...(q.to ? [lte(financeJournalLines.entryDate, q.to)] : []),
   );
 
-  const rows = await db
-    .select({
-      id: financeJournalLines.id,
-      entryDate: financeJournalLines.entryDate,
-      debit: financeJournalLines.debit,
-      credit: financeJournalLines.credit,
-      description: financeJournalLines.description,
-      journalId: financeJournalLines.journalId,
-      entryNumber: financeJournals.entryNumber,
-      memo: financeJournals.memo,
-      journalStatus: financeJournals.status,
-      sourceType: financeJournals.sourceType,
-    })
-    .from(financeJournalLines)
-    .innerJoin(financeJournals, eq(financeJournals.id, financeJournalLines.journalId))
-    .where(where)
-    .orderBy(asc(financeJournalLines.entryDate), asc(financeJournals.entryNumber), asc(financeJournalLines.lineNo))
-    .limit(limit)
-    .offset(offset);
+  // Signed movement of one line on this account's normal side.
+  const signed = debitNormal
+    ? sql`(${financeJournalLines.debit} - ${financeJournalLines.credit})`
+    : sql`(${financeJournalLines.credit} - ${financeJournalLines.debit})`;
 
-  let running = openingCents;
-  const entries = rows.map((r) => {
-    const d = Math.round(Number(r.debit) * 100);
-    const c = Math.round(Number(r.credit) * 100);
-    running += debitNormal ? d - c : c - d;
-    return { ...r, runningBalanceCents: running };
-  });
+  const [rows, [totals]] = await Promise.all([
+    db
+      .select({
+        id: financeJournalLines.id,
+        entryDate: financeJournalLines.entryDate,
+        debit: financeJournalLines.debit,
+        credit: financeJournalLines.credit,
+        description: financeJournalLines.description,
+        journalId: financeJournalLines.journalId,
+        entryNumber: financeJournals.entryNumber,
+        memo: financeJournals.memo,
+        journalStatus: financeJournals.status,
+        sourceType: financeJournals.sourceType,
+        // Cumulative movement up to and including this row, over the WHOLE
+        // window in ledger order — correct on every page.
+        cumulative: sql<string>`sum(${signed}) over (order by ${financeJournalLines.entryDate}, ${financeJournals.entryNumber}, ${financeJournalLines.lineNo} rows unbounded preceding)`,
+      })
+      .from(financeJournalLines)
+      .innerJoin(financeJournals, eq(financeJournals.id, financeJournalLines.journalId))
+      .where(where)
+      .orderBy(asc(financeJournalLines.entryDate), asc(financeJournals.entryNumber), asc(financeJournalLines.lineNo))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ movement: sql<string>`coalesce(sum(${signed}), 0)`, count: sql<number>`count(*)::int` })
+      .from(financeJournalLines)
+      .innerJoin(financeJournals, eq(financeJournals.id, financeJournalLines.journalId))
+      .where(where),
+  ]);
 
-  return { account, openingCents, entries, closingCents: running };
+  const entries = rows.map(({ cumulative, ...r }) => ({ ...r, runningBalanceCents: openingCents + Math.round(Number(cumulative) * 100) }));
+  const total = Number(totals?.count ?? 0);
+  return {
+    account,
+    openingCents,
+    entries,
+    closingCents: openingCents + Math.round(Number(totals?.movement ?? 0) * 100),
+    total,
+    offset,
+    hasMore: offset + rows.length < total,
+  };
 }
 
 // The module-wide integrity invariant: over ALL posted lines of a company,

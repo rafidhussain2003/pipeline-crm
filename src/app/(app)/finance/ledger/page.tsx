@@ -8,7 +8,11 @@ type LedgerData = {
   openingCents: number;
   closingCents: number;
   entries: { id: string; entryDate: string; entryNumber: number | null; memo: string | null; sourceType: string; debit: string; credit: string; description: string | null; runningBalanceCents: number; journalStatus: string }[];
+  total: number;
+  offset: number;
+  hasMore: boolean;
 };
+const PAGE = 200;
 
 export default function GeneralLedgerPage() {
   useFinanceCurrency();
@@ -18,18 +22,37 @@ export default function GeneralLedgerPage() {
   const [to, setTo] = useState("");
   const [data, setData] = useState<LedgerData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const fetchPage = async (offset: number) => {
+    const p = new URLSearchParams({ accountId, limit: String(PAGE), offset: String(offset) });
+    if (from) p.set("from", from);
+    if (to) p.set("to", to);
+    const r = await fetch(`/api/finance/ledger?${p}`);
+    return r.ok ? ((await r.json()) as LedgerData) : null;
+  };
 
   useEffect(() => {
     if (!accountId) return;
+    let cancelled = false;
     setLoading(true);
-    const p = new URLSearchParams({ accountId });
-    if (from) p.set("from", from);
-    if (to) p.set("to", to);
-    fetch(`/api/finance/ledger?${p}`).then(async (r) => {
-      setData(r.ok ? await r.json() : null);
+    fetchPage(0).then((d) => {
+      if (cancelled) return;
+      setData(d);
       setLoading(false);
     });
-  }, [accountId, from, to]);
+    return () => { cancelled = true; };
+  }, [accountId, from, to]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Next page appended; its running balances are computed server-side over the
+  // whole window, so they continue exactly from the rows already shown.
+  async function loadMore() {
+    if (!data || !data.hasMore) return;
+    setLoadingMore(true);
+    const next = await fetchPage(data.offset + PAGE);
+    if (next) setData({ ...next, entries: [...data.entries, ...next.entries] });
+    setLoadingMore(false);
+  }
 
   return (
     <div className="p-6 max-w-4xl">
@@ -80,6 +103,14 @@ export default function GeneralLedgerPage() {
                 )}
               </tbody>
             </table>
+          </div>
+          <div className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Showing {data.entries.length} of {data.total} entries</span>
+            {data.hasMore && (
+              <button onClick={loadMore} disabled={loadingMore} className="font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1 disabled:opacity-50">
+                {loadingMore ? "Loading…" : "Load more"}
+              </button>
+            )}
           </div>
         </div>
       )}
