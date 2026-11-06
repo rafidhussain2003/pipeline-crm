@@ -163,6 +163,8 @@ const navItems: { href: string; label: string; feature?: string; roles?: string[
   // Lending Bank — admin-only private lending ledger, independent of every
   // module (no feature flag): it is the admin's own money, not company finance.
   { href: "/lending", label: "Lending Bank", roles: ["admin"] },
+  // E-Sign — admin-only DocuSign-style signing, independent of every module.
+  { href: "/esign", label: "E-Sign", roles: ["admin"] },
   { href: "/settings/connector", label: "Lead Sources", feature: "meta_integration", roles: ["admin", "manager"] },
   // Facebook Forms alias management — admin only (the page shows real Meta form
   // names, which managers/agents must never see).

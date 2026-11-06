@@ -533,6 +533,13 @@
       "when": 1793029518549,
       "tag": "0075_sales_order_on",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1793970411303,
+      "tag": "0076_esign",
+      "breakpoints": true
     }
   ]
 }
