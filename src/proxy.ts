@@ -109,6 +109,8 @@ export async function proxy(req: NextRequest) {
     pathname.startsWith("/finance/") ||
     pathname === "/lending" ||
     pathname.startsWith("/lending/") ||
+    pathname === "/esign" ||
+    pathname.startsWith("/esign/") ||
     pathname === "/attendance" ||
     pathname.startsWith("/attendance/") ||
     pathname === "/payroll" ||
@@ -285,7 +287,7 @@ export async function proxy(req: NextRequest) {
 
   // Lending Bank — the admin's private ledger. Admin-only on the PAGE
   // surface too (the API guards itself): anyone else is sent to their home.
-  if (session?.companyId && session.role !== "admin" && !isApiRoute && (pathname === "/lending" || pathname.startsWith("/lending/"))) {
+  if (session?.companyId && session.role !== "admin" && !isApiRoute && (pathname === "/lending" || pathname.startsWith("/lending/") || pathname === "/esign" || pathname.startsWith("/esign/"))) {
     return NextResponse.redirect(new URL(session.role === "finance_employee" ? "/finance" : "/profile", getPublicAppUrl()));
   }
 
@@ -332,6 +334,8 @@ export const config = {
     "/finance/:path*",
     "/lending",
     "/lending/:path*",
+    "/esign",
+    "/esign/:path*",
     "/attendance/:path*",
     "/payroll/:path*",
     "/hr/:path*",

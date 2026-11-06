@@ -14,3 +14,4 @@ node_modules
 
 # Local database backup output (scripts/backup.mjs)
 backups/
+public/pdf.worker.min.mjs

@@ -13,7 +13,9 @@
     "db:seed": "tsx src/db/seed.ts",
     "test:notepad": "tsx src/lib/notepad/detect.test.ts",
     "test:excel": "tsx src/lib/excel/excel.test.ts",
-    "test:sales": "tsx src/lib/sales/parse-date.test.ts"
+    "test:sales": "tsx src/lib/sales/parse-date.test.ts",
+    "prebuild": "node scripts/copy-pdf-worker.mjs",
+    "postinstall": "node scripts/copy-pdf-worker.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -22,6 +24,7 @@
     "next": "16.2.10",
     "papaparse": "^5.5.4",
     "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.10.38",
     "pg": "^8.22.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",

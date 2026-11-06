@@ -5,6 +5,7 @@ import {
   varchar,
   timestamp,
   integer,
+  doublePrecision,
   boolean,
   jsonb,
   pgEnum,
@@ -3779,5 +3780,131 @@ export const lendingTransactions = pgTable(
   },
   (t) => ({
     companyIdx: index("lending_transactions_company_idx").on(t.companyId, t.occurredOn),
+  })
+);
+
+// E-Sign — lightweight DocuSign-style signing, admin-only and independent of
+// every other module. The admin uploads a PDF, places fields for each signer,
+// and sends each signer a secret link; the signer needs no account. Files live
+// in Postgres (bytea) like HR documents — no bucket. Field positions are
+// FRACTIONS of the page (0–1 of width/height), so they're resolution-free.
+export const esignDocStatusEnum = pgEnum("esign_doc_status", ["draft", "sent", "completed", "voided"]);
+export const esignSignerStatusEnum = pgEnum("esign_signer_status", ["pending", "sent", "viewed", "signed", "declined"]);
+export const esignFieldTypeEnum = pgEnum("esign_field_type", ["signature", "initials", "date", "text", "checkbox"]);
+
+export const esignDocuments = pgTable(
+  "esign_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    title: varchar("title", { length: 200 }).notNull(),
+    fileName: varchar("file_name", { length: 255 }).notNull(),
+    fileSize: integer("file_size").notNull(),
+    pageCount: integer("page_count").notNull().default(1),
+    status: esignDocStatusEnum("status").notNull().default("draft"),
+    message: text("message"), // optional note included in the signing email
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    sentAt: timestamp("sent_at"),
+    completedAt: timestamp("completed_at"),
+    voidedAt: timestamp("voided_at"),
+    voidReason: text("void_reason"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    companyIdx: index("esign_documents_company_idx").on(t.companyId, t.createdAt),
+  })
+);
+
+// The PDF bytes: 'original' as uploaded, 'signed' once every signer has signed
+// (fields burned in + a certificate page appended).
+export const esignFiles = pgTable(
+  "esign_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    documentId: uuid("document_id").references(() => esignDocuments.id, { onDelete: "cascade" }).notNull(),
+    kind: varchar("kind", { length: 16 }).notNull(), // original | signed
+    data: bytea("data").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    docKindUniq: uniqueIndex("esign_files_document_kind_uniq").on(t.documentId, t.kind),
+  })
+);
+
+export const esignSigners = pgTable(
+  "esign_signers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    documentId: uuid("document_id").references(() => esignDocuments.id, { onDelete: "cascade" }).notNull(),
+    name: varchar("name", { length: 160 }).notNull(),
+    email: varchar("email", { length: 200 }).notNull(),
+    position: integer("position").notNull().default(0),
+    color: varchar("color", { length: 7 }).notNull().default("#2563eb"),
+    // The secret in the signing link. 64 hex chars from 32 random bytes;
+    // knowing it IS the authorization (no account needed), so it never
+    // appears anywhere but the signer's own email and link.
+    token: varchar("token", { length: 64 }).notNull().unique(),
+    status: esignSignerStatusEnum("status").notNull().default("pending"),
+    // The adopted signature/initials as PNG data URLs, applied to every
+    // signature/initials field of this signer (sign once, like DocuSign).
+    signatureData: text("signature_data"),
+    initialsData: text("initials_data"),
+    sentAt: timestamp("sent_at"),
+    viewedAt: timestamp("viewed_at"),
+    signedAt: timestamp("signed_at"),
+    declinedAt: timestamp("declined_at"),
+    declineReason: text("decline_reason"),
+    ipAddress: varchar("ip_address", { length: 64 }),
+    userAgent: varchar("user_agent", { length: 300 }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    documentIdx: index("esign_signers_document_idx").on(t.documentId, t.position),
+  })
+);
+
+export const esignFields = pgTable(
+  "esign_fields",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    documentId: uuid("document_id").references(() => esignDocuments.id, { onDelete: "cascade" }).notNull(),
+    signerId: uuid("signer_id").references(() => esignSigners.id, { onDelete: "cascade" }).notNull(),
+    type: esignFieldTypeEnum("type").notNull(),
+    page: integer("page").notNull(), // 1-based
+    x: doublePrecision("x").notNull(), // fraction of page width (left edge)
+    y: doublePrecision("y").notNull(), // fraction of page height (top edge)
+    w: doublePrecision("w").notNull(),
+    h: doublePrecision("h").notNull(),
+    required: boolean("required").notNull().default(true),
+    label: varchar("label", { length: 80 }),
+    value: text("value"), // text/date/"true" for checkbox/"applied" for signature & initials
+    filledAt: timestamp("filled_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    documentIdx: index("esign_fields_document_idx").on(t.documentId, t.page),
+  })
+);
+
+// Audit trail — what the certificate page is built from.
+export const esignEvents = pgTable(
+  "esign_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    documentId: uuid("document_id").references(() => esignDocuments.id, { onDelete: "cascade" }).notNull(),
+    signerId: uuid("signer_id").references(() => esignSigners.id, { onDelete: "set null" }),
+    kind: varchar("kind", { length: 32 }).notNull(), // created | sent | reminded | viewed | signed | declined | completed | voided
+    detail: text("detail"),
+    ipAddress: varchar("ip_address", { length: 64 }),
+    userAgent: varchar("user_agent", { length: 300 }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    documentIdx: index("esign_events_document_idx").on(t.documentId, t.createdAt),
   })
 );
