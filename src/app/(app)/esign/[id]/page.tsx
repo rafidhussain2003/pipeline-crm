@@ -103,14 +103,14 @@ export default function EsignDocumentPage() {
     setNotice(ok); await load();
   }
 
-  if (error && !data) return <div className="p-6"><p className="text-sm text-red-600">{error}</p><Link href="/esign" className="text-sm text-blue-700 hover:underline">← E-Sign</Link></div>;
+  if (error && !data) return <div className="p-6"><p className="text-sm text-red-600">{error}</p><Link href="/esign" className="text-sm text-blue-700 hover:underline">← Docusign</Link></div>;
   if (!data) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
   const signerById = new Map(data.signers.map((s) => [s.id, s]));
   const colorOf = (sid: string) => signers.find((s) => s.id === sid)?.color || signerById.get(sid)?.color || "#2563eb";
 
   return (
     <div className="p-6 max-w-6xl">
-      <Link href="/esign" className="text-sm text-blue-700 hover:underline">← E-Sign</Link>
+      <Link href="/esign" className="text-sm text-blue-700 hover:underline">← Docusign</Link>
       <div className="flex flex-wrap items-start justify-between gap-3 mt-2 mb-4">
         <div>
           <h1 className="text-xl font-semibold text-slate-900 flex items-center gap-2">{data.doc.title} <span className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${STATUS_STYLE[data.doc.status] || ""}`}>{data.doc.status}</span></h1>

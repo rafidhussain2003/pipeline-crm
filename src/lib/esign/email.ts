@@ -12,7 +12,7 @@ function shell(title: string, body: string): string {
       <h1 style="font-size:18px;color:#0f172a;margin:0 0 12px">${title}</h1>
       ${body}
     </div>
-    <p style="text-align:center;color:#94a3b8;font-size:12px;margin-top:16px">Sent via Ziplod E-Sign. The link is private to you — please don't forward it.</p>
+    <p style="text-align:center;color:#94a3b8;font-size:12px;margin-top:16px">Sent via Ziplod Docusign. The link is private to you — please don't forward it.</p>
   </div></body></html>`;
 }
 const button = (href: string, label: string) => `<p style="margin:20px 0"><a href="${href}" style="display:inline-block;background:#0f172a;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 20px;border-radius:8px">${label}</a></p><p style="font-size:12px;color:#94a3b8;word-break:break-all">Or open this link: ${href}</p>`;

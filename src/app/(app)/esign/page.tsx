@@ -23,7 +23,7 @@ export default function EsignPage() {
     <div className="p-6 max-w-5xl">
       <div className="flex items-start justify-between gap-4 mb-5">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">E-Sign</h1>
+          <h1 className="text-xl font-semibold text-slate-900">Docusign</h1>
           <p className="text-sm text-slate-500 mt-1">Upload a PDF, place signature fields, and send it. Signers get a private link and sign in their browser — no account needed.</p>
         </div>
         <button onClick={() => setShowUpload(true)} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Upload document</button>
