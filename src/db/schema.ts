@@ -3808,11 +3808,38 @@ export const esignDocuments = pgTable(
     completedAt: timestamp("completed_at"),
     voidedAt: timestamp("voided_at"),
     voidReason: text("void_reason"),
+    // Set on a copy created when someone opened a share link: points at the
+    // document the link belonged to, so copies list under their original.
+    parentDocumentId: uuid("parent_document_id"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => ({
     companyIdx: index("esign_documents_company_idx").on(t.companyId, t.createdAt),
+    parentIdx: index("esign_documents_parent_idx").on(t.parentDocumentId),
+  })
+);
+
+// A shareable signing link. Anyone who opens it (no account) enters their
+// name and email and receives their own copy of the document to sign, taking
+// the place of the chosen signer slot. Links expire 24 hours after creation
+// and can be regenerated or disabled by the admin.
+export const esignShareLinks = pgTable(
+  "esign_share_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }).notNull(),
+    documentId: uuid("document_id").references(() => esignDocuments.id, { onDelete: "cascade" }).notNull(),
+    signerId: uuid("signer_id").references(() => esignSigners.id, { onDelete: "cascade" }).notNull(),
+    token: varchar("token", { length: 64 }).notNull().unique(),
+    expiresAt: timestamp("expires_at").notNull(),
+    revokedAt: timestamp("revoked_at"),
+    uses: integer("uses").notNull().default(0),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    documentIdx: index("esign_share_links_document_idx").on(t.documentId, t.createdAt),
   })
 );
 

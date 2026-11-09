@@ -5,8 +5,8 @@
 // certificate of completion page) and everyone is emailed.
 import { randomBytes } from "node:crypto";
 import { db } from "@/db";
-import { esignDocuments, esignEvents, esignFields, esignFiles, esignSigners, users } from "@/db/schema";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { esignDocuments, esignEvents, esignFields, esignFiles, esignShareLinks, esignSigners, users } from "@/db/schema";
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { requireCompanySession, type CompanySession } from "@/lib/auth";
 import { recordAudit } from "@/lib/audit";
@@ -41,6 +41,12 @@ const SIGNER_COLORS = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed", "#
 export function signingUrl(token: string): string {
   return `${getPublicAppUrl()}/sign/${token}`;
 }
+// A share link: anyone who opens it signs their own copy (see createShareLink).
+export function shareLinkUrl(token: string): string {
+  return `${getPublicAppUrl()}/sign/link/${token}`;
+}
+export const SHARE_LINK_TTL_MS = 24 * 60 * 60 * 1000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 async function logEvent(companyId: string, documentId: string, kind: string, opts: { signerId?: string | null; detail?: string | null; ip?: string | null; userAgent?: string | null } = {}) {
   await db.insert(esignEvents).values({ companyId, documentId, signerId: opts.signerId ?? null, kind, detail: opts.detail ?? null, ipAddress: opts.ip?.slice(0, 64) ?? null, userAgent: opts.userAgent?.slice(0, 300) ?? null });
@@ -56,7 +62,15 @@ export async function listDocuments(companyId: string) {
     .orderBy(asc(esignSigners.position));
   const byDoc = new Map<string, typeof signers>();
   for (const s of signers) byDoc.set(s.documentId, [...(byDoc.get(s.documentId) ?? []), s]);
-  return docs.map((d) => ({ ...d, signers: byDoc.get(d.id) ?? [] }));
+  const activeLinks = await db
+    .select({ documentId: esignShareLinks.documentId })
+    .from(esignShareLinks)
+    .where(and(eq(esignShareLinks.companyId, companyId), isNull(esignShareLinks.revokedAt), gt(esignShareLinks.expiresAt, new Date())));
+  const linked = new Set(activeLinks.map((l) => l.documentId));
+  const copies = new Map<string, number>();
+  for (const d of docs) if (d.parentDocumentId) copies.set(d.parentDocumentId, (copies.get(d.parentDocumentId) ?? 0) + 1);
+  const titleById = new Map(docs.map((d) => [d.id, d.title]));
+  return docs.map((d) => ({ ...d, signers: byDoc.get(d.id) ?? [], linkActive: linked.has(d.id) && (d.status === "draft" || d.status === "sent"), copies: copies.get(d.id) ?? 0, parentTitle: d.parentDocumentId ? titleById.get(d.parentDocumentId) ?? null : null }));
 }
 
 export async function createDocument(companyId: string, userId: string, input: { title: string; fileName: string; bytes: Buffer }) {
@@ -89,6 +103,12 @@ export async function getDocument(companyId: string, id: string) {
     db.select().from(esignEvents).where(eq(esignEvents.documentId, id)).orderBy(asc(esignEvents.createdAt)),
   ]);
   const hasSigned = await db.select({ id: esignFiles.id }).from(esignFiles).where(and(eq(esignFiles.documentId, id), eq(esignFiles.kind, "signed"))).limit(1);
+  const [link] = await db.select().from(esignShareLinks).where(and(eq(esignShareLinks.documentId, id), isNull(esignShareLinks.revokedAt))).orderBy(desc(esignShareLinks.createdAt)).limit(1);
+  const copyDocs = await db.select().from(esignDocuments).where(eq(esignDocuments.parentDocumentId, id)).orderBy(desc(esignDocuments.createdAt));
+  const copySigners = copyDocs.length
+    ? await db.select({ documentId: esignSigners.documentId, name: esignSigners.name, email: esignSigners.email, status: esignSigners.status, signedAt: esignSigners.signedAt }).from(esignSigners).where(inArray(esignSigners.documentId, copyDocs.map((c) => c.id))).orderBy(asc(esignSigners.position))
+    : [];
+  const parent = doc.parentDocumentId ? (await db.select({ id: esignDocuments.id, title: esignDocuments.title }).from(esignDocuments).where(eq(esignDocuments.id, doc.parentDocumentId)).limit(1))[0] ?? null : null;
   return {
     doc,
     // The token is the signer's secret; the admin sees the link (to copy) but it never leaves this company's session.
@@ -96,6 +116,9 @@ export async function getDocument(companyId: string, id: string) {
     fields,
     events,
     hasSignedFile: hasSigned.length > 0,
+    shareLink: link ? { id: link.id, url: shareLinkUrl(link.token), signerId: link.signerId, expiresAt: link.expiresAt, uses: link.uses, createdAt: link.createdAt, expired: link.expiresAt.getTime() <= Date.now() } : null,
+    copies: copyDocs.map((c) => ({ id: c.id, title: c.title, status: c.status, createdAt: c.createdAt, completedAt: c.completedAt, signers: copySigners.filter((s) => s.documentId === c.id) })),
+    parent,
   };
 }
 
@@ -139,9 +162,11 @@ export async function setSigners(companyId: string, userId: string, documentId: 
     const name = String(s.name ?? "").trim().slice(0, 160);
     const email = String(s.email ?? "").trim().toLowerCase().slice(0, 200);
     if (!name) throw new EsignError(`Signer ${i + 1} needs a name`);
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new EsignError(`Signer ${i + 1} needs a valid email`);
-    if (seen.has(email)) throw new EsignError(`${email} is listed twice`);
-    seen.add(email);
+    // Email is optional: a signer without one can only be reached through a
+    // share link (whoever opens it fills in their own name and email).
+    if (email && !EMAIL_RE.test(email)) throw new EsignError(`Signer ${i + 1} needs a valid email`);
+    if (email && seen.has(email)) throw new EsignError(`${email} is listed twice`);
+    if (email) seen.add(email);
     return { id: typeof s.id === "string" ? s.id : null, name, email, position: i };
   });
   const existing = await db.select().from(esignSigners).where(eq(esignSigners.documentId, documentId));
@@ -198,6 +223,7 @@ export async function sendDocument(companyId: string, userId: string, documentId
   if (signers.length === 0) throw new EsignError("Add at least one signer before sending");
   const fields = await db.select({ signerId: esignFields.signerId, type: esignFields.type }).from(esignFields).where(eq(esignFields.documentId, documentId));
   for (const s of signers) {
+    if (!s.email) throw new EsignError(`${s.name} has no email address. Add one to send by email, or generate a share link instead.`);
     if (!fields.some((f) => f.signerId === s.id && f.type === "signature")) throw new EsignError(`${s.name} has no signature field. Place at least one signature field for every signer.`);
   }
   const note = message !== undefined && message !== null ? message.trim().slice(0, 2000) || null : doc.message;
@@ -221,6 +247,7 @@ export async function remindSigner(companyId: string, userId: string, documentId
   const [s] = await db.select().from(esignSigners).where(and(eq(esignSigners.id, signerId), eq(esignSigners.documentId, documentId))).limit(1);
   if (!s) throw new EsignError("Signer not found", 404);
   if (s.status === "signed") throw new EsignError(`${s.name} has already signed`);
+  if (!s.email) throw new EsignError(`${s.name} has no email address`);
   const res = await sendSigningRequestEmail({ to: s.email, signerName: s.name, sender: await senderName(companyId, userId), title: doc.title, message: doc.message, link: signingUrl(s.token), reminder: true });
   await logEvent(companyId, documentId, "reminded", { signerId, detail: res.ok ? `Reminder sent to ${s.email}` : `Reminder to ${s.email} failed: ${res.reason}` });
   return res;
@@ -232,8 +259,153 @@ export async function voidDocument(companyId: string, userId: string, documentId
   if (doc.status === "voided") throw new EsignError("Already voided");
   if (doc.status === "completed") throw new EsignError("A completed document can't be voided");
   await db.update(esignDocuments).set({ status: "voided", voidedAt: new Date(), voidReason: reason?.trim().slice(0, 500) || null, updatedAt: new Date() }).where(eq(esignDocuments.id, documentId));
+  // A voided document can't be signed through its share link either.
+  await db.update(esignShareLinks).set({ revokedAt: new Date() }).where(and(eq(esignShareLinks.documentId, documentId), isNull(esignShareLinks.revokedAt)));
   await logEvent(companyId, documentId, "voided", { detail: reason?.trim() || null });
   await recordAudit({ companyId, userId, action: "esign.document_voided", entityType: "esign_document", entityId: documentId, after: { reason: reason ?? null } });
+}
+
+// ── Share links (anyone with the link signs their own copy) ─────────────────
+// The admin picks which signer slot the link stands for. Whoever opens the
+// link enters their name and email; we copy the document (file, every signer,
+// every field) into a new "sent" document where that slot carries their
+// details, email any other signers, and hand them their private signing link.
+// The link itself expires 24 hours after it was generated.
+async function requireShareable(companyId: string, documentId: string) {
+  const [doc] = await db.select().from(esignDocuments).where(and(eq(esignDocuments.id, documentId), eq(esignDocuments.companyId, companyId))).limit(1);
+  if (!doc) throw new EsignError("Document not found", 404);
+  if (doc.status === "voided") throw new EsignError("A voided document can't be shared");
+  if (doc.status === "completed") throw new EsignError("A completed document can't be shared. Upload it again to collect more signatures.");
+  if (doc.parentDocumentId) throw new EsignError("This is a copy signed through a share link. Share the original document instead.");
+  return doc;
+}
+
+export async function createShareLink(companyId: string, userId: string, documentId: string, signerId?: string | null) {
+  const doc = await requireShareable(companyId, documentId);
+  const signers = await db.select().from(esignSigners).where(eq(esignSigners.documentId, documentId)).orderBy(asc(esignSigners.position));
+  if (signers.length === 0) throw new EsignError("Add a signer first. Whoever opens the link signs in that signer's place.");
+  const slot = signerId ? signers.find((s) => s.id === signerId) : signers[0];
+  if (!slot) throw new EsignError("Signer not found", 404);
+  const fields = await db.select({ signerId: esignFields.signerId, type: esignFields.type }).from(esignFields).where(eq(esignFields.documentId, documentId));
+  if (!fields.some((f) => f.signerId === slot.id && f.type === "signature")) throw new EsignError(`${slot.name} has no signature field. Place at least one signature field for ${slot.name} before sharing a link.`);
+  for (const s of signers) {
+    if (s.id !== slot.id && !s.email) throw new EsignError(`${s.name} needs an email address: every other signer is emailed their copy when someone signs through the link.`);
+    if (s.id !== slot.id && !fields.some((f) => f.signerId === s.id && f.type === "signature")) throw new EsignError(`${s.name} has no signature field. Place at least one signature field for every signer.`);
+  }
+  const expiresAt = new Date(Date.now() + SHARE_LINK_TTL_MS);
+  const link = await db.transaction(async (tx) => {
+    // One live link per document: generating a new one retires the old.
+    await tx.update(esignShareLinks).set({ revokedAt: new Date() }).where(and(eq(esignShareLinks.documentId, documentId), isNull(esignShareLinks.revokedAt)));
+    const [row] = await tx.insert(esignShareLinks).values({ companyId, documentId, signerId: slot.id, token: randomBytes(32).toString("hex"), expiresAt, createdBy: userId }).returning();
+    return row;
+  });
+  await logEvent(companyId, documentId, "link_created", { signerId: slot.id, detail: `Share link generated for the "${slot.name}" slot, valid until ${expiresAt.toISOString()}` });
+  await recordAudit({ companyId, userId, action: "esign.share_link_created", entityType: "esign_document", entityId: documentId, after: { linkId: link.id, signerId: slot.id, expiresAt: expiresAt.toISOString() } });
+  return { id: link.id, url: shareLinkUrl(link.token), signerId: link.signerId, expiresAt: link.expiresAt, uses: link.uses, createdAt: link.createdAt, expired: false, title: doc.title };
+}
+
+export async function revokeShareLink(companyId: string, userId: string, documentId: string) {
+  const [doc] = await db.select({ id: esignDocuments.id }).from(esignDocuments).where(and(eq(esignDocuments.id, documentId), eq(esignDocuments.companyId, companyId))).limit(1);
+  if (!doc) throw new EsignError("Document not found", 404);
+  const revoked = await db.update(esignShareLinks).set({ revokedAt: new Date() }).where(and(eq(esignShareLinks.documentId, documentId), isNull(esignShareLinks.revokedAt))).returning({ id: esignShareLinks.id });
+  if (revoked.length) {
+    await logEvent(companyId, documentId, "link_disabled", { detail: "Share link disabled" });
+    await recordAudit({ companyId, userId, action: "esign.share_link_disabled", entityType: "esign_document", entityId: documentId, after: { links: revoked.length } });
+  }
+}
+
+async function getShareLink(token: string) {
+  if (!/^[0-9a-f]{64}$/.test(token)) return null;
+  const [link] = await db.select().from(esignShareLinks).where(eq(esignShareLinks.token, token)).limit(1);
+  if (!link) return null;
+  const [doc] = await db.select().from(esignDocuments).where(eq(esignDocuments.id, link.documentId)).limit(1);
+  if (!doc) return null;
+  return { link, doc };
+}
+
+// Why a link can't be used right now, or null when it can.
+function shareLinkProblem(link: typeof esignShareLinks.$inferSelect, doc: typeof esignDocuments.$inferSelect): { message: string; status: number } | null {
+  if (link.revokedAt) return { message: "This link was disabled by the sender. Ask them for a new one.", status: 410 };
+  if (link.expiresAt.getTime() <= Date.now()) return { message: "This link has expired. Links are valid for 24 hours — ask the sender for a new one.", status: 410 };
+  if (doc.status === "voided") return { message: "This document was voided by the sender.", status: 410 };
+  if (doc.status === "completed") return { message: "This document is no longer open for signing.", status: 410 };
+  return null;
+}
+
+export async function shareLinkView(token: string) {
+  const data = await getShareLink(token);
+  if (!data) throw new EsignError("This link is not valid.", 404);
+  const { link, doc } = data;
+  const problem = shareLinkProblem(link, doc);
+  if (problem) throw new EsignError(problem.message, problem.status);
+  const [slot] = await db.select({ name: esignSigners.name }).from(esignSigners).where(eq(esignSigners.id, link.signerId)).limit(1);
+  const sender = doc.createdBy ? await senderName(doc.companyId, doc.createdBy) : "Your sender";
+  return { title: doc.title, pageCount: doc.pageCount, sender, message: doc.message, expiresAt: link.expiresAt, role: slot?.name ?? "Signer" };
+}
+
+export async function claimShareLink(token: string, input: { name: string; email: string }, meta: { ip?: string | null; userAgent?: string | null }) {
+  const data = await getShareLink(token);
+  if (!data) throw new EsignError("This link is not valid.", 404);
+  const { link, doc } = data;
+  const problem = shareLinkProblem(link, doc);
+  if (problem) throw new EsignError(problem.message, problem.status);
+  const name = String(input.name ?? "").trim().replace(/\s+/g, " ").slice(0, 160);
+  const email = String(input.email ?? "").trim().toLowerCase().slice(0, 200);
+  if (name.length < 2) throw new EsignError("Please enter your full name");
+  if (!EMAIL_RE.test(email)) throw new EsignError("Please enter a valid email address");
+
+  // Same person opening the link again before signing → back to their copy.
+  const existing = await db
+    .select({ token: esignSigners.token, status: esignSigners.status, docStatus: esignDocuments.status })
+    .from(esignSigners)
+    .innerJoin(esignDocuments, eq(esignDocuments.id, esignSigners.documentId))
+    .where(and(eq(esignDocuments.parentDocumentId, doc.id), eq(esignSigners.email, email), eq(esignDocuments.status, "sent")))
+    .orderBy(desc(esignSigners.createdAt))
+    .limit(1);
+  if (existing[0] && existing[0].status !== "signed" && existing[0].status !== "declined") return { token: existing[0].token, resumed: true };
+
+  const [signers, fields] = await Promise.all([
+    db.select().from(esignSigners).where(eq(esignSigners.documentId, doc.id)).orderBy(asc(esignSigners.position)),
+    db.select().from(esignFields).where(eq(esignFields.documentId, doc.id)),
+  ]);
+  if (!signers.some((s) => s.id === link.signerId)) throw new EsignError("This link is no longer valid: its signer was removed.", 410);
+  const original = await getFile(doc.companyId, doc.id, "original");
+  if (!original) throw new EsignError("Original file is missing", 500);
+
+  const copy = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(esignDocuments)
+      .values({ companyId: doc.companyId, title: doc.title, fileName: doc.fileName, fileSize: doc.fileSize, pageCount: doc.pageCount, status: "sent", message: doc.message, createdBy: doc.createdBy, sentAt: new Date(), parentDocumentId: doc.id })
+      .returning();
+    await tx.insert(esignFiles).values({ companyId: doc.companyId, documentId: row.id, kind: "original", data: original });
+    const idMap = new Map<string, string>();
+    for (const s of signers) {
+      const isSlot = s.id === link.signerId;
+      const [ns] = await tx
+        .insert(esignSigners)
+        .values({ companyId: doc.companyId, documentId: row.id, name: isSlot ? name : s.name, email: isSlot ? email : s.email, position: s.position, color: s.color, token: randomBytes(32).toString("hex"), status: "sent", sentAt: new Date() })
+        .returning();
+      idMap.set(s.id, ns.id);
+    }
+    if (fields.length) {
+      await tx.insert(esignFields).values(fields.map((f) => ({ companyId: doc.companyId, documentId: row.id, signerId: idMap.get(f.signerId)!, type: f.type, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: f.required, label: f.label })));
+    }
+    await tx.update(esignShareLinks).set({ uses: sql`${esignShareLinks.uses} + 1` }).where(eq(esignShareLinks.id, link.id));
+    return { row, idMap };
+  });
+  const mySignerId = copy.idMap.get(link.signerId)!;
+  const [me] = await db.select({ token: esignSigners.token }).from(esignSigners).where(eq(esignSigners.id, mySignerId)).limit(1);
+  await logEvent(doc.companyId, copy.row.id, "created", { signerId: mySignerId, ip: meta.ip, userAgent: meta.userAgent, detail: `Copy created from share link by ${name} <${email}>` });
+  await logEvent(doc.companyId, doc.id, "link_used", { signerId: link.signerId, ip: meta.ip, userAgent: meta.userAgent, detail: `${name} <${email}> opened the share link` });
+
+  // Any other signer on the copy is emailed their private link, as on Send.
+  const sender = doc.createdBy ? await senderName(doc.companyId, doc.createdBy) : "Your sender";
+  for (const s of signers) {
+    if (s.id === link.signerId || !s.email) continue;
+    const [ns] = await db.select({ token: esignSigners.token }).from(esignSigners).where(eq(esignSigners.id, copy.idMap.get(s.id)!)).limit(1);
+    await sendSigningRequestEmail({ to: s.email, signerName: s.name, sender, title: doc.title, message: doc.message, link: signingUrl(ns.token) });
+  }
+  return { token: me.token, resumed: false };
 }
 
 // ── Signer side (token = authorization) ─────────────────────────────────────
@@ -359,7 +531,7 @@ async function finalizeDocument(companyId: string, documentId: string) {
   });
   await logEvent(companyId, documentId, "completed", { detail: `Signed PDF generated (${bytes.length} bytes)` });
   // Everyone gets the completed copy: each signer via their own link, the admin via the document page.
-  const recipients = signers.map((s) => ({ to: s.email, name: s.name, link: signingUrl(s.token) }));
+  const recipients = signers.filter((s) => s.email).map((s) => ({ to: s.email, name: s.name, link: signingUrl(s.token) }));
   if (doc.createdBy) {
     const [admin] = await db.select({ email: users.email, name: users.name }).from(users).where(eq(users.id, doc.createdBy)).limit(1);
     if (admin?.email) recipients.push({ to: admin.email, name: admin.name, link: `${getPublicAppUrl()}/esign/${documentId}` });

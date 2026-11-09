@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { STATUS_STYLE, fmtWhen } from "@/components/esign/shared";
 
-type Doc = { id: string; title: string; status: string; pageCount: number; createdAt: string; sentAt: string | null; completedAt: string | null; signers: { name: string; email: string; status: string }[] };
+type Doc = { id: string; title: string; status: string; pageCount: number; createdAt: string; sentAt: string | null; completedAt: string | null; signers: { name: string; email: string; status: string }[]; linkActive: boolean; copies: number; parentDocumentId: string | null; parentTitle: string | null };
 
 export default function EsignPage() {
   const [docs, setDocs] = useState<Doc[] | null>(null);
@@ -24,7 +24,7 @@ export default function EsignPage() {
       <div className="flex items-start justify-between gap-4 mb-5">
         <div>
           <h1 className="text-xl font-semibold text-slate-900">Docusign</h1>
-          <p className="text-sm text-slate-500 mt-1">Upload a PDF, place signature fields, and send it. Signers get a private link and sign in their browser — no account needed.</p>
+          <p className="text-sm text-slate-500 mt-1">Upload a PDF, place signature fields, then email it to named signers or generate a 24-hour share link anyone can open and sign — no account needed.</p>
         </div>
         <button onClick={() => setShowUpload(true)} className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Upload document</button>
       </div>
@@ -39,6 +39,9 @@ export default function EsignPage() {
                 {d.status === "completed" ? ` · completed ${fmtWhen(d.completedAt)}` : d.sentAt ? ` · sent ${fmtWhen(d.sentAt)}` : ` · created ${fmtWhen(d.createdAt)}`}
               </div>
             </div>
+            {d.parentDocumentId && <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 text-violet-700 bg-violet-50" title={d.parentTitle ? `Copy of ${d.parentTitle}` : undefined}>via link</span>}
+            {d.copies > 0 && <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 text-violet-700 bg-violet-50">{d.copies} via link</span>}
+            {d.linkActive && <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 text-sky-700 bg-sky-50">Link active</span>}
             <span className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${STATUS_STYLE[d.status] || ""}`}>{d.status}</span>
           </Link>
         ))}

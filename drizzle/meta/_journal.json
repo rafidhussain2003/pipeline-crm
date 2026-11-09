@@ -540,6 +540,13 @@
       "when": 1793970411303,
       "tag": "0076_esign",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1794235121008,
+      "tag": "0077_esign_share_links",
+      "breakpoints": true
     }
   ]
 }
