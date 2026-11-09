@@ -12,7 +12,9 @@ import { FIELD_DEFAULT, FIELD_LABEL, STATUS_STYLE, fmtWhen, type FieldType } fro
 type Signer = { id: string; name: string; email: string; color: string; status: string; link: string; sentAt: string | null; viewedAt: string | null; signedAt: string | null; declinedAt: string | null; declineReason: string | null; ipAddress: string | null };
 type Field = { id?: string; signerId: string; type: FieldType; page: number; x: number; y: number; w: number; h: number; required: boolean; label?: string | null; value?: string | null };
 type Doc = { id: string; title: string; status: string; pageCount: number; message: string | null; sentAt: string | null; completedAt: string | null; voidReason: string | null };
-type Data = { doc: Doc; signers: Signer[]; fields: Field[]; events: { id: string; kind: string; detail: string | null; createdAt: string; signerId: string | null; ipAddress: string | null }[]; hasSignedFile: boolean };
+type ShareLink = { id: string; url: string; signerId: string; expiresAt: string; uses: number; createdAt: string; expired: boolean };
+type Copy = { id: string; title: string; status: string; createdAt: string; completedAt: string | null; signers: { name: string; email: string; status: string; signedAt: string | null }[] };
+type Data = { doc: Doc & { parentDocumentId: string | null }; signers: Signer[]; fields: Field[]; events: { id: string; kind: string; detail: string | null; createdAt: string; signerId: string | null; ipAddress: string | null }[]; hasSignedFile: boolean; shareLink: ShareLink | null; copies: Copy[]; parent: { id: string; title: string } | null };
 
 const TYPES: FieldType[] = ["signature", "initials", "date", "text", "checkbox"];
 
@@ -103,6 +105,24 @@ export default function EsignDocumentPage() {
     setNotice(ok); await load();
   }
 
+  async function makeLink(signerId: string) {
+    setBusy(true); setError(""); setNotice("");
+    const res = await fetch(`/api/esign/${id}/link`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ signerId }) });
+    setBusy(false);
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { setError(d.error || "Could not generate the link"); return; }
+    try { await navigator.clipboard?.writeText(d.shareLink.url); setNotice("Share link generated and copied. It works for 24 hours."); } catch { setNotice("Share link generated. It works for 24 hours."); }
+    await load();
+  }
+  async function disableLink() {
+    if (!confirm("Disable this share link? Anyone who opens it afterwards will be told it's no longer available.")) return;
+    setBusy(true); setError(""); setNotice("");
+    const res = await fetch(`/api/esign/${id}/link`, { method: "DELETE" });
+    setBusy(false);
+    if (!res.ok) { setError((await res.json().catch(() => ({}))).error || "Could not disable the link"); return; }
+    setNotice("Share link disabled."); await load();
+  }
+
   if (error && !data) return <div className="p-6"><p className="text-sm text-red-600">{error}</p><Link href="/esign" className="text-sm text-blue-700 hover:underline">← Docusign</Link></div>;
   if (!data) return <div className="p-6 text-sm text-slate-400">Loading…</div>;
   const signerById = new Map(data.signers.map((s) => [s.id, s]));
@@ -114,6 +134,7 @@ export default function EsignDocumentPage() {
       <div className="flex flex-wrap items-start justify-between gap-3 mt-2 mb-4">
         <div>
           <h1 className="text-xl font-semibold text-slate-900 flex items-center gap-2">{data.doc.title} <span className={`text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${STATUS_STYLE[data.doc.status] || ""}`}>{data.doc.status}</span></h1>
+          {data.parent && <p className="text-xs text-violet-700 mt-1">Signed through a share link · copy of <Link href={`/esign/${data.parent.id}`} className="underline">{data.parent.title}</Link></p>}
           <p className="text-xs text-slate-500 mt-1">{data.doc.pageCount} page{data.doc.pageCount === 1 ? "" : "s"}{data.doc.sentAt ? ` · sent ${fmtWhen(data.doc.sentAt)}` : ""}{data.doc.completedAt ? ` · completed ${fmtWhen(data.doc.completedAt)}` : ""}{data.doc.voidReason ? ` · voided: ${data.doc.voidReason}` : ""}</p>
         </div>
         <div className="flex items-center gap-2">
@@ -142,14 +163,14 @@ export default function EsignDocumentPage() {
                       <span className="font-medium text-slate-900 truncate">{s.name}</span>
                       <span className={`ml-auto text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${STATUS_STYLE[s.status] || ""}`}>{s.status}</span>
                     </div>
-                    <div className="text-xs text-slate-400 truncate">{s.email}</div>
+                    <div className="text-xs text-slate-400 truncate">{s.email || "no email · signs through the share link"}</div>
                     <div className="text-[11px] text-slate-400">
                       {s.signedAt ? `Signed ${fmtWhen(s.signedAt)}${s.ipAddress ? ` · ${s.ipAddress}` : ""}` : s.declinedAt ? `Declined ${fmtWhen(s.declinedAt)}${s.declineReason ? ` — ${s.declineReason}` : ""}` : s.viewedAt ? `Viewed ${fmtWhen(s.viewedAt)}` : s.sentAt ? `Sent ${fmtWhen(s.sentAt)}` : ""}
                     </div>
                     {data.doc.status === "sent" && s.status !== "signed" && (
                       <div className="flex gap-2 mt-1">
                         <button onClick={() => { navigator.clipboard?.writeText(s.link); setNotice(`Link for ${s.name} copied.`); }} className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-0.5">Copy link</button>
-                        <button onClick={() => act(`/api/esign/${id}/remind`, { signerId: s.id }, `Reminder sent to ${s.email}.`)} disabled={busy} className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-0.5 disabled:opacity-50">Resend email</button>
+                        {s.email && <button onClick={() => act(`/api/esign/${id}/remind`, { signerId: s.id }, `Reminder sent to ${s.email}.`)} disabled={busy} className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-0.5 disabled:opacity-50">Resend email</button>}
                       </div>
                     )}
                   </li>
@@ -183,6 +204,31 @@ export default function EsignDocumentPage() {
               <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} maxLength={2000} placeholder="Please review and sign by Friday." className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm mb-3" />
               <button onClick={send} disabled={sending || busy || signers.length === 0 || fields.length === 0} className="w-full bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md disabled:opacity-40">{sending ? "Sending…" : "Send for signature"}</button>
               <p className="text-[11px] text-slate-400 mt-2">Every signer needs at least one signature field. Once sent, the document is locked.</p>
+            </div>
+          )}
+
+          {(isDraft || data.doc.status === "sent") && !data.parent && (
+            <ShareLinkCard link={data.shareLink} signers={signers.filter((s) => s.id) as { id: string; name: string }[]} busy={busy} onGenerate={makeLink} onDisable={disableLink} onNotice={setNotice} />
+          )}
+
+          {data.copies.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-lg p-4">
+              <h2 className="text-sm font-semibold text-slate-900 mb-1">Signed through the link</h2>
+              <p className="text-[11px] text-slate-500 mb-2">Each person who opened the share link got their own copy.</p>
+              <ul className="space-y-2 max-h-72 overflow-y-auto">
+                {data.copies.map((c) => {
+                  const who = c.signers.find((s) => s.status !== "pending") ?? c.signers[0];
+                  return (
+                    <li key={c.id} className="text-sm">
+                      <Link href={`/esign/${c.id}`} className="flex items-center gap-2 hover:underline">
+                        <span className="font-medium text-slate-900 truncate">{who?.name ?? "—"}</span>
+                        <span className={`ml-auto text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 ${STATUS_STYLE[c.status] || ""}`}>{c.status}</span>
+                      </Link>
+                      <div className="text-xs text-slate-400 truncate">{who?.email}{c.completedAt ? ` · signed ${fmtWhen(c.completedAt)}` : ` · opened ${fmtWhen(c.createdAt)}`}</div>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           )}
 
@@ -229,7 +275,7 @@ function SignerEditor({ signers, busy, onSave }: { signers: { id?: string; name:
   useEffect(() => { setList(signers); }, [signers]);
   async function add(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !email.trim()) return;
+    if (!name.trim()) return;
     await onSave([...list, { name: name.trim(), email: email.trim() }]);
     setName(""); setEmail("");
   }
@@ -239,7 +285,7 @@ function SignerEditor({ signers, busy, onSave }: { signers: { id?: string; name:
         {list.map((s, i) => (
           <li key={s.id ?? i} className="flex items-center gap-2 text-sm">
             <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: s.color || "#2563eb" }} />
-            <span className="min-w-0 flex-1"><span className="font-medium text-slate-900">{s.name}</span> <span className="text-xs text-slate-400">{s.email}</span></span>
+            <span className="min-w-0 flex-1"><span className="font-medium text-slate-900">{s.name}</span> <span className="text-xs text-slate-400">{s.email || "link only"}</span></span>
             <button type="button" onClick={() => onSave(list.filter((_, j) => j !== i))} disabled={busy} className="text-slate-400 hover:text-red-600 text-sm px-1" title="Remove signer">×</button>
           </li>
         ))}
@@ -247,9 +293,57 @@ function SignerEditor({ signers, busy, onSave }: { signers: { id?: string; name:
       </ul>
       <form onSubmit={add} className="space-y-1.5">
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" required maxLength={160} className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm" />
-        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@example.com" required maxLength={200} className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm" />
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@example.com (optional)" maxLength={200} className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm" />
         <button type="submit" disabled={busy} className="w-full text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1.5 disabled:opacity-50">+ Add signer</button>
+        <p className="text-[11px] text-slate-400">Leave the email blank for a signer you&apos;ll reach with a share link — whoever opens it fills in their own name and email.</p>
       </form>
+    </div>
+  );
+}
+
+// Share link: one live 24-hour link per document. Anyone who opens it signs
+// their own copy in the chosen signer's place — no email or account needed.
+function ShareLinkCard({ link, signers, busy, onGenerate, onDisable, onNotice }: { link: ShareLink | null; signers: { id: string; name: string }[]; busy: boolean; onGenerate: (signerId: string) => Promise<void>; onDisable: () => Promise<void>; onNotice: (s: string) => void }) {
+  const [slot, setSlot] = useState(link?.signerId || signers[0]?.id || "");
+  // Clock ticks in an effect (never during render) so the countdown stays live.
+  const [now, setNow] = useState(0);
+  useEffect(() => { if (!signers.some((s) => s.id === slot)) setSlot(signers[0]?.id || ""); }, [signers, slot]);
+  useEffect(() => { setNow(Date.now()); const t = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(t); }, []);
+  const live = link && !link.expired && (now === 0 || new Date(link.expiresAt).getTime() > now);
+  const left = live ? Math.max(0, new Date(link!.expiresAt).getTime() - now) : 0;
+  const leftLabel = left >= 3600_000 ? `${Math.floor(left / 3600_000)}h ${Math.floor((left % 3600_000) / 60_000)}m` : `${Math.max(1, Math.floor(left / 60_000))}m`;
+  const slotName = signers.find((s) => s.id === (live ? link!.signerId : slot))?.name;
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg p-4">
+      <h2 className="text-sm font-semibold text-slate-900 mb-1">Share link</h2>
+      <p className="text-[11px] text-slate-500 mb-3">Anyone with the link can sign — no sign-up or sign-in. They enter their name and email, get their own copy to sign, and the signed PDF is emailed to them and you. The link expires 24 hours after you generate it.</p>
+      {live ? (
+        <>
+          <div className="flex gap-1.5">
+            <input readOnly value={link!.url} onFocus={(e) => e.currentTarget.select()} className="flex-1 min-w-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-700" />
+            <button type="button" onClick={() => { navigator.clipboard?.writeText(link!.url); onNotice("Share link copied."); }} className="text-xs font-medium text-white bg-slate-900 rounded-md px-3 py-1.5">Copy</button>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-2">Signs as <span className="font-medium text-slate-700">{slotName}</span> · expires in <span className="font-medium text-slate-700">{leftLabel}</span> ({fmtWhen(link!.expiresAt)}) · opened {link!.uses} time{link!.uses === 1 ? "" : "s"}</div>
+          <div className="flex gap-2 mt-3">
+            <button type="button" onClick={() => onGenerate(link!.signerId)} disabled={busy} className="text-[11px] font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded px-2 py-1 disabled:opacity-50">Regenerate (new 24h)</button>
+            <button type="button" onClick={onDisable} disabled={busy} className="text-[11px] font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded px-2 py-1 disabled:opacity-50">Disable link</button>
+          </div>
+        </>
+      ) : (
+        <>
+          {link && <p className="text-[11px] text-amber-700 bg-amber-50 rounded px-2 py-1.5 mb-3">The previous link expired {fmtWhen(link.expiresAt)} after {link.uses} use{link.uses === 1 ? "" : "s"}. Generate a new one to keep collecting signatures.</p>}
+          {signers.length > 1 && (
+            <>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Whoever opens the link signs as</label>
+              <select value={slot} onChange={(e) => setSlot(e.target.value)} className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm bg-white mb-3">
+                {signers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </>
+          )}
+          <button type="button" onClick={() => onGenerate(slot)} disabled={busy || !slot} className="w-full text-sm font-medium text-slate-900 bg-white border border-slate-300 hover:bg-slate-50 rounded-md px-3 py-2 disabled:opacity-40">{signers.length === 0 ? "Add a signer first" : "Generate 24-hour share link"}</button>
+          {signers.length > 0 && <p className="text-[11px] text-slate-400 mt-2">Place at least one signature field for {slotName || "that signer"} first.</p>}
+        </>
+      )}
     </div>
   );
 }
