@@ -14,8 +14,7 @@
     "test:notepad": "tsx src/lib/notepad/detect.test.ts",
     "test:excel": "tsx src/lib/excel/excel.test.ts",
     "test:sales": "tsx src/lib/sales/parse-date.test.ts",
-    "prebuild": "node scripts/copy-pdf-worker.mjs",
-    "postinstall": "node scripts/copy-pdf-worker.mjs"
+    "prebuild": "node scripts/copy-pdf-worker.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
