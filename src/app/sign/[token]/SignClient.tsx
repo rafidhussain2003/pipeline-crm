@@ -152,7 +152,7 @@ export function SignClient({ token }: { token: string }) {
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
-  return <div className="min-h-screen bg-slate-100 text-slate-900">{children}<p className="text-center text-[11px] text-slate-400 py-6">Secured by Ziplod E-Sign · each action is time-stamped with your IP address</p></div>;
+  return <div className="min-h-screen bg-slate-100 text-slate-900">{children}<p className="text-center text-[11px] text-slate-400 py-6">Secured by Ziplod Docusign · each action is time-stamped with your IP address</p></div>;
 }
 function Note({ tone, children }: { tone: "green" | "red" | "blue"; children: React.ReactNode }) {
   const cls = tone === "green" ? "bg-emerald-50 border-emerald-200 text-emerald-800" : tone === "red" ? "bg-red-50 border-red-200 text-red-800" : "bg-blue-50 border-blue-200 text-blue-900";
