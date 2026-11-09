@@ -29,7 +29,7 @@ export function esignErrorResponse(err: unknown): NextResponse {
 export async function requireEsignAdmin(): Promise<{ ok: true; session: CompanySession } | { ok: false; response: NextResponse }> {
   const auth = await requireCompanySession();
   if (!auth.ok) return auth;
-  if (auth.session.role !== "admin") return { ok: false, response: NextResponse.json({ error: "E-Sign is available to the company admin only." }, { status: 403 }) };
+  if (auth.session.role !== "admin") return { ok: false, response: NextResponse.json({ error: "Docusign is available to the company admin only." }, { status: 403 }) };
   return auth;
 }
 
