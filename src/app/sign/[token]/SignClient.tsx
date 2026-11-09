@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PdfPages, type PageGeom } from "@/components/esign/PdfPages";
 import { SignaturePad } from "@/components/esign/SignaturePad";
-import { FIELD_LABEL, type FieldType } from "@/components/esign/shared";
+import { STAMP_COLOR, autofillFor, fieldCaption, stampIdFor, type FieldType } from "@/components/esign/shared";
 
 type Field = { id: string; signerId: string; type: FieldType; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string | null; value: string | null; mine: boolean };
 type View = {
@@ -24,7 +24,6 @@ export function SignClient({ token }: { token: string }) {
   const [initials, setInitials] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [pad, setPad] = useState<{ kind: "signature" | "initials"; fieldId: string } | null>(null);
-  const [editingText, setEditingText] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [declining, setDeclining] = useState(false);
   const [done, setDone] = useState<"signed" | "completed" | "declined" | null>(null);
@@ -36,6 +35,10 @@ export function SignClient({ token }: { token: string }) {
     setView(v);
     setSignature(v.signer.signatureData);
     setInitials(v.signer.initialsData);
+    // Name / Email boxes start pre-filled with the signer's own details.
+    const auto: Record<string, string> = {};
+    for (const f of v.fields) if (f.mine && f.type === "text" && !f.value) { const a = autofillFor(f.label, v.signer); if (a) auto[f.id] = a; }
+    setValues((prev) => ({ ...auto, ...prev }));
   }, [token]);
   useEffect(() => { load(); }, [load]);
 
@@ -51,7 +54,7 @@ export function SignClient({ token }: { token: string }) {
     else if (f.type === "initials") { if (initials) setValues((v) => ({ ...v, [f.id]: !(v[f.id] === true) })); else setPad({ kind: "initials", fieldId: f.id }); }
     else if (f.type === "date") setValues((v) => ({ ...v, [f.id]: v[f.id] ? "" : todayLabel }));
     else if (f.type === "checkbox") setValues((v) => ({ ...v, [f.id]: !(v[f.id] === true) }));
-    else setEditingText(f.id);
+    // Text boxes are typed into inline (see SignerField).
   }
   function applyAllOfType(kind: "signature" | "initials") {
     setValues((v) => { const next = { ...v }; for (const f of mine) if (f.type === kind) next[f.id] = true; return next; });
@@ -131,7 +134,7 @@ export function SignClient({ token }: { token: string }) {
         <PdfPages
           src={`/api/sign/${token}/file`}
           renderOverlay={(page) => view.fields.map((f) => f.page === page.index && (
-            <SignerField key={f.id} f={f} page={page} view={view} applied={isApplied(f)} value={values[f.id]} signature={signature} initials={initials} canSign={canSign && !done} onClick={() => clickField(f)} />
+            <SignerField key={f.id} f={f} page={page} view={view} applied={isApplied(f)} value={values[f.id]} signature={signature} initials={initials} canSign={canSign && !done} onClick={() => clickField(f)} onText={(t) => setValues((v) => ({ ...v, [f.id]: t }))} />
           ))}
         />
       </div>
@@ -143,9 +146,6 @@ export function SignClient({ token }: { token: string }) {
           onClose={() => setPad(null)}
           onAdopt={(data) => { if (pad.kind === "signature") setSignature(data); else setInitials(data); applyAllOfType(pad.kind); setPad(null); }}
         />
-      )}
-      {editingText && (
-        <TextPrompt field={mine.find((f) => f.id === editingText)!} initial={typeof values[editingText] === "string" ? (values[editingText] as string) : ""} onClose={() => setEditingText(null)} onSave={(v) => { setValues((x) => ({ ...x, [editingText]: v })); setEditingText(null); }} />
       )}
     </Shell>
   );
@@ -159,19 +159,51 @@ function Note({ tone, children }: { tone: "green" | "red" | "blue"; children: Re
   return <div className={`rounded-md border px-4 py-3 text-sm mb-4 ${cls}`}>{children}</div>;
 }
 
-function SignerField({ f, page, view, applied, value, signature, initials, canSign, onClick }: { f: Field; page: PageGeom; view: View; applied: boolean; value: string | boolean | undefined; signature: string | null; initials: string | null; canSign: boolean; onClick: () => void }) {
+// DocuSign-style frame around an applied signature/initials: left bracket,
+// "Signed by:" caption, the signature, and the signature ID underneath.
+function Stamp({ src, kind, signerId, height }: { src: string; kind: "signature" | "initials"; signerId: string; height: number }) {
+  const roomy = height >= 34;
+  return (
+    <div className="absolute inset-0 flex flex-col overflow-hidden border-l-[1.5px] pl-1" style={{ borderColor: STAMP_COLOR }}>
+      {roomy && kind === "signature" && <span className="leading-none font-medium shrink-0" style={{ color: STAMP_COLOR, fontSize: Math.max(5, Math.min(7, height * 0.13)) }}>Signed by:</span>}
+      <img src={src} alt="" className="flex-1 min-h-0 w-full object-contain object-left-bottom" />
+      {roomy && <span className="leading-none shrink-0 tracking-wide" style={{ color: STAMP_COLOR, fontSize: Math.max(4.5, Math.min(6, height * 0.11)) }}>{stampIdFor(signerId)}</span>}
+    </div>
+  );
+}
+
+function SignerField({ f, page, view, applied, value, signature, initials, canSign, onClick, onText }: { f: Field; page: PageGeom; view: View; applied: boolean; value: string | boolean | undefined; signature: string | null; initials: string | null; canSign: boolean; onClick: () => void; onText: (t: string) => void }) {
   const color = view.signers.find((s) => s.id === f.signerId)?.color || "#2563eb";
   const style = { left: f.x * page.width, top: f.y * page.height, width: f.w * page.width, height: f.h * page.height };
+  const boxH = f.h * page.height;
+  const textSize = Math.max(10, Math.min(15, boxH * 0.55));
   // Someone else's (or my already-submitted) field: render its value.
   const submitted = !!f.value;
   if (!f.mine || submitted) {
     const sig = f.type === "signature" ? view.signatures[f.signerId]?.signature : f.type === "initials" ? view.signatures[f.signerId]?.initials : null;
     return (
-      <div className="absolute flex items-end" style={style} title={`${FIELD_LABEL[f.type]} — ${view.signers.find((s) => s.id === f.signerId)?.name ?? ""}`}>
-        {submitted && sig && <img src={sig} alt="" className="max-h-full max-w-full object-contain object-left-bottom" />}
+      <div className="absolute" style={style} title={`${fieldCaption(f)} — ${view.signers.find((s) => s.id === f.signerId)?.name ?? ""}`}>
+        {submitted && sig && (f.type === "signature" || f.type === "initials") && <Stamp src={sig} kind={f.type} signerId={f.signerId} height={boxH} />}
         {submitted && f.type === "checkbox" && f.value === "true" && <span className="w-full h-full flex items-center justify-center font-bold text-[#0b1a6b]">✕</span>}
-        {submitted && (f.type === "date" || f.type === "text") && <span className="text-[#0b1a6b] text-xs truncate">{f.value}</span>}
+        {submitted && (f.type === "date" || f.type === "text") && <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[#0b1a6b] truncate max-w-full" style={{ fontSize: textSize }}>{f.value}</span>}
         {!submitted && <div className="absolute inset-0 rounded-sm border border-dashed opacity-60" style={{ borderColor: color }} />}
+      </div>
+    );
+  }
+  // A long text box: type straight into it (Name/Email arrive pre-filled).
+  if (f.type === "text") {
+    return (
+      <div className={`absolute pointer-events-auto rounded-sm border-2 transition ${applied ? "border-emerald-500 bg-white/70" : ""}`} style={{ ...style, borderColor: applied ? "#10b981" : color, background: applied ? "rgba(255,255,255,0.7)" : `${color}2e` }} title={f.label || "Enter text"}>
+        <input
+          type="text"
+          value={typeof value === "string" ? value : ""}
+          onChange={(e) => onText(e.target.value)}
+          disabled={!canSign}
+          maxLength={500}
+          placeholder={f.label || "Enter text"}
+          className="absolute inset-0 w-full h-full bg-transparent outline-none px-1 text-[#0b1a6b] placeholder:font-semibold placeholder:text-slate-500/80"
+          style={{ fontSize: textSize }}
+        />
       </div>
     );
   }
@@ -183,33 +215,17 @@ function SignerField({ f, page, view, applied, value, signature, initials, canSi
       disabled={!canSign}
       className={`absolute pointer-events-auto rounded-sm border-2 text-left overflow-hidden transition ${applied ? "border-emerald-500 bg-white/70" : ""} ${canSign ? "cursor-pointer hover:shadow-md" : ""}`}
       style={{ ...style, borderColor: applied ? "#10b981" : color, background: applied ? "rgba(255,255,255,0.7)" : `${color}2e` }}
-      title={applied ? "Click to change" : `Click to ${f.type === "signature" ? "sign" : f.type === "initials" ? "initial" : f.type === "date" ? "date" : f.type === "checkbox" ? "check" : "fill in"}`}
+      title={applied ? "Click to change" : `Click to ${f.type === "signature" ? "sign" : f.type === "initials" ? "initial" : f.type === "date" ? "date" : "check"}`}
     >
       {applied && img && (f.type === "signature" || f.type === "initials") ? (
-        <img src={img} alt="" className="absolute left-0.5 bottom-0.5 max-h-[95%] max-w-[95%] object-contain" />
+        <Stamp src={img} kind={f.type} signerId={view.signer.id} height={boxH} />
       ) : applied && f.type === "checkbox" ? (
         <span className="w-full h-full flex items-center justify-center font-bold text-[#0b1a6b]">✕</span>
       ) : applied ? (
-        <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[#0b1a6b] text-xs truncate max-w-[95%]">{String(value)}</span>
+        <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[#0b1a6b] truncate max-w-[95%]" style={{ fontSize: textSize }}>{String(value)}</span>
       ) : (
-        <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color }}>{f.type === "signature" ? "Sign here" : f.type === "initials" ? "Initial" : f.type === "date" ? "Date" : f.type === "checkbox" ? "" : f.label || "Enter text"}</span>
+        <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[11px] font-semibold" style={{ color }}>{f.type === "signature" ? "Sign here" : f.type === "initials" ? "Initial" : f.type === "date" ? "Date" : ""}</span>
       )}
     </button>
-  );
-}
-
-function TextPrompt({ field, initial, onClose, onSave }: { field: Field; initial: string; onClose: () => void; onSave: (v: string) => void }) {
-  const [v, setV] = useState(initial);
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" onClick={onClose}>
-      <form onSubmit={(e) => { e.preventDefault(); onSave(v.trim()); }} className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-base font-semibold text-slate-900 mb-3">{field.label || "Enter text"}</h2>
-        <input autoFocus value={v} onChange={(e) => setV(e.target.value)} maxLength={500} className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
-        <div className="flex justify-end gap-2 mt-4">
-          <button type="button" onClick={onClose} className="text-sm font-medium text-slate-500 px-4 py-2 rounded-md hover:bg-slate-50">Cancel</button>
-          <button type="submit" className="bg-slate-900 text-white text-sm font-medium px-4 py-2 rounded-md">Apply</button>
-        </div>
-      </form>
-    </div>
   );
 }

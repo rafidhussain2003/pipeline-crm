@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { PdfPages, type PageGeom } from "@/components/esign/PdfPages";
-import { FIELD_DEFAULT, FIELD_LABEL, STATUS_STYLE, fmtWhen, type FieldType } from "@/components/esign/shared";
+import { FIELD_PRESETS, PRESET_LABEL, STATUS_STYLE, fieldCaption, fmtWhen, type FieldType } from "@/components/esign/shared";
 
 type Signer = { id: string; name: string; email: string; color: string; status: string; link: string; sentAt: string | null; viewedAt: string | null; signedAt: string | null; declinedAt: string | null; declineReason: string | null; ipAddress: string | null };
 type Field = { id?: string; signerId: string; type: FieldType; page: number; x: number; y: number; w: number; h: number; required: boolean; label?: string | null; value?: string | null };
@@ -15,8 +15,6 @@ type Doc = { id: string; title: string; status: string; pageCount: number; messa
 type ShareLink = { id: string; url: string; signerId: string; expiresAt: string; uses: number; createdAt: string; expired: boolean };
 type Copy = { id: string; title: string; status: string; createdAt: string; completedAt: string | null; signers: { name: string; email: string; status: string; signedAt: string | null }[] };
 type Data = { doc: Doc & { parentDocumentId: string | null }; signers: Signer[]; fields: Field[]; events: { id: string; kind: string; detail: string | null; createdAt: string; signerId: string | null; ipAddress: string | null }[]; hasSignedFile: boolean; shareLink: ShareLink | null; copies: Copy[]; parent: { id: string; title: string } | null };
-
-const TYPES: FieldType[] = ["signature", "initials", "date", "text", "checkbox"];
 
 export default function EsignDocumentPage() {
   const { id } = useParams<{ id: string }>();
@@ -26,7 +24,8 @@ export default function EsignDocumentPage() {
   const [signers, setSigners] = useState<{ id?: string; name: string; email: string; color?: string }[]>([]);
   const [fields, setFields] = useState<Field[]>([]);
   const [activeSigner, setActiveSigner] = useState<string>("");
-  const [tool, setTool] = useState<FieldType>("signature");
+  const [tool, setTool] = useState<string>("signature");
+  const [customLabel, setCustomLabel] = useState("");
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
@@ -81,9 +80,10 @@ export default function EsignDocumentPage() {
 
   function placeField(page: PageGeom, fx: number, fy: number) {
     if (!isDraft || !activeSigner) { if (!activeSigner) setError("Add a signer first, then click the page to place a field."); return; }
-    const def = FIELD_DEFAULT[tool];
+    const def = FIELD_PRESETS.find((p) => p.key === tool) ?? FIELD_PRESETS[0];
     const w = def.w, h = def.h * (page.width / page.height) * 1.294; // keep the default box the same visual size on any page aspect
-    scheduleSave([...fieldsRef.current, { signerId: activeSigner, type: tool, page: page.index, x: Math.min(Math.max(0, fx - w / 2), 1 - w), y: Math.min(Math.max(0, fy - h / 2), 1 - h), w, h, required: true }]);
+    const label = def.key === "text" ? customLabel.trim().slice(0, 80) || null : def.label;
+    scheduleSave([...fieldsRef.current, { signerId: activeSigner, type: def.type, page: page.index, x: Math.min(Math.max(0, fx - w / 2), 1 - w), y: Math.min(Math.max(0, fy - h / 2), 1 - h), w, h, required: true, label }]);
   }
 
   async function send() {
@@ -182,17 +182,21 @@ export default function EsignDocumentPage() {
           {isDraft && (
             <div className="bg-white border border-slate-200 rounded-lg p-4">
               <h2 className="text-sm font-semibold text-slate-900 mb-1">Place fields</h2>
-              <p className="text-[11px] text-slate-500 mb-3">Pick a signer and a field type, then click on the page where it should go. Drag to move; drag the corner to resize; × removes.</p>
+              <p className="text-[11px] text-slate-500 mb-3">Pick a signer and a box type, then click on the page where it should go. Drag to move; drag the corner to make it longer; × removes; double-click a text box to rename it.</p>
               <label className="block text-xs font-semibold text-slate-600 mb-1">For signer</label>
               <select value={activeSigner} onChange={(e) => setActiveSigner(e.target.value)} className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm bg-white mb-3">
                 {signers.filter((s) => s.id).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 {signers.filter((s) => s.id).length === 0 && <option value="">Add a signer first</option>}
               </select>
               <div className="grid grid-cols-2 gap-1.5">
-                {TYPES.map((t) => (
-                  <button key={t} type="button" onClick={() => setTool(t)} className={`text-xs font-medium px-2 py-1.5 rounded border ${tool === t ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"}`}>{FIELD_LABEL[t]}</button>
+                {FIELD_PRESETS.map((p) => (
+                  <button key={p.key} type="button" onClick={() => setTool(p.key)} title={p.hint} className={`text-xs font-medium px-2 py-1.5 rounded border ${tool === p.key ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"}`}>{PRESET_LABEL[p.key]}</button>
                 ))}
               </div>
+              {tool === "text" && (
+                <input value={customLabel} onChange={(e) => setCustomLabel(e.target.value)} maxLength={80} placeholder="Label, e.g. GST number, Address, Phone" className="w-full rounded-md border border-slate-200 px-2 py-1.5 text-xs mt-2" />
+              )}
+              <p className="text-[11px] text-slate-400 mt-2">{FIELD_PRESETS.find((p) => p.key === tool)?.hint}</p>
               <div className="text-[11px] text-slate-400 mt-3">{fields.length} field{fields.length === 1 ? "" : "s"} placed{dirty ? " · saving…" : ""}</div>
             </div>
           )}
@@ -370,10 +374,11 @@ function FieldBox({ field, page, color, signerName, editable, onChange, onRemove
       style={{ left: field.x * page.width, top: field.y * page.height, width: field.w * page.width, height: field.h * page.height, borderColor: color, background: `${color}22` }}
       onPointerDown={(e) => beginDrag("move", e)} onPointerMove={move} onPointerUp={end} onPointerCancel={end}
       onClick={(e) => e.stopPropagation()}
-      title={`${FIELD_LABEL[field.type]} — ${signerName}`}
+      onDoubleClick={(e) => { e.stopPropagation(); if (!editable || field.type !== "text") return; const l = prompt("Label for this box (what the signer should fill in):", field.label || ""); if (l !== null) onChange({ ...field, label: l.trim().slice(0, 80) || null }); }}
+      title={`${fieldCaption(field)} — ${signerName}${editable && field.type === "text" ? " (double-click to rename)" : ""}`}
     >
       <div className="absolute inset-0 overflow-hidden">
-        <span className="absolute left-1 top-0.5 font-semibold truncate max-w-[90%]" style={{ color }}>{FIELD_LABEL[field.type]}{field.value ? " ✓" : ""}</span>
+        <span className="absolute left-1 top-0.5 font-semibold truncate max-w-[90%]" style={{ color }}>{fieldCaption(field)}{field.value ? " ✓" : ""}</span>
         <span className="absolute left-1 bottom-0.5 text-[9px] truncate max-w-[90%] opacity-80" style={{ color }}>{signerName}</span>
       </div>
       {editable && (

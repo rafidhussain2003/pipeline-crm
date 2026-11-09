@@ -14,6 +14,10 @@ type Event = typeof esignEvents.$inferSelect;
 
 const INK = rgb(0.05, 0.05, 0.2);
 const MUTED = rgb(0.4, 0.4, 0.45);
+const STAMP = rgb(0.17, 0.37, 0.74); // the blue of the DocuSign-style signature frame
+// 15-character signature ID printed under every stamped signature; the web
+// view derives the same one (see components/esign/shared.ts).
+const stampIdFor = (signerId: string) => signerId.replace(/-/g, "").slice(0, 15).toUpperCase();
 
 function safe(s: string): string {
   return s.replace(/[\u2013\u2014]/g, "-").replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\u2026/g, "...").replace(/[^\x20-\x7E\xA0-\xFF]/g, "?");
@@ -67,10 +71,24 @@ export async function buildSignedPdf(input: { original: Buffer; doc: Doc; signer
       const data = f.type === "signature" ? signer?.signatureData : signer?.initialsData;
       if (!data) continue;
       const img = await embed(data);
-      // Fit the image inside the box, keep its aspect ratio, align bottom-left.
-      const scale = Math.min(w / img.width, h / img.height);
+      // DocuSign-style stamp: a left bracket, "Signed by:" above, the
+      // signature, and the signature ID beneath — all inside the box. Boxes
+      // too short for the captions get just the bracket and the signature.
+      const roomy = h >= 26;
+      const capSize = roomy ? Math.max(3.5, Math.min(5, h * 0.13)) : 0;
+      const idSize = roomy ? Math.max(3.2, Math.min(4.5, h * 0.11)) : 0;
+      const captioned = roomy && f.type === "signature";
+      const top = y + h - (captioned ? capSize + 1.5 : 0);
+      const bottom = y + (roomy ? idSize + 1.5 : 0);
+      const inner = Math.max(4, top - bottom), left = x + 3;
+      const scale = Math.min((w - 4) / img.width, inner / img.height);
       const dw = img.width * scale, dh = img.height * scale;
-      page.drawImage(img, { x, y, width: dw, height: dh });
+      page.drawLine({ start: { x: x + 0.6, y: y }, end: { x: x + 0.6, y: y + h }, thickness: 1, color: STAMP });
+      page.drawLine({ start: { x: x + 0.6, y: y + h }, end: { x: x + 4, y: y + h }, thickness: 1, color: STAMP });
+      page.drawLine({ start: { x: x + 0.6, y: y }, end: { x: x + 4, y: y }, thickness: 1, color: STAMP });
+      if (captioned) page.drawText("Signed by:", { x: left, y: y + h - capSize, size: capSize, font: regular, color: STAMP });
+      page.drawImage(img, { x: left, y: bottom, width: dw, height: dh });
+      if (roomy) page.drawText(stampIdFor(f.signerId), { x: left, y: y + 1, size: idSize, font: regular, color: STAMP });
     } else if (f.type === "checkbox") {
       if (f.value === "true") {
         const size = Math.min(w, h);
@@ -111,7 +129,7 @@ export async function buildSignedPdf(input: { original: Buffer; doc: Doc; signer
     line(`${s.name}  <${s.email}>`, 10, bold);
     line(`Status: ${s.status === "signed" ? "Signed" : s.status}`, 9, regular, MUTED, M + 12);
     line(`Sent: ${fmt(s.sentAt)}   Viewed: ${fmt(s.viewedAt)}   Signed: ${fmt(s.signedAt)}`, 9, regular, MUTED, M + 12);
-    line(`IP address: ${s.ipAddress || "—"}`, 9, regular, MUTED, M + 12);
+    line(`IP address: ${s.ipAddress || "—"}   Signature ID: ${stampIdFor(s.id)}`, 9, regular, MUTED, M + 12);
     if (s.userAgent) for (const l of wrap(regular, 8, `Device: ${s.userAgent}`, 595.28 - M * 2 - 12)) line(l, 8, regular, MUTED, M + 12);
     const own = input.fields.filter((f) => f.signerId === s.id);
     line(`Fields completed: ${own.filter((f) => f.value).length} of ${own.length}`, 9, regular, MUTED, M + 12);
