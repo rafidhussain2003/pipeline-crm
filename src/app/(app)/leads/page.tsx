@@ -696,12 +696,15 @@ export default function LeadsPage() {
             </button>
             <input ref={fileInputRef} type="file" accept=".csv" onChange={handleImportFile} className="hidden" />
             {/* Smart Excel export — ADMIN ONLY (managers don't get it; the API
-                403s them too). Sold / closed leads are automatically left out
-                of the file so an already-sold customer can never be re-sold. */}
+                403s them too). Sold / closed leads AND leads an agent is
+                still working (Call Back Later, In Progress) are automatically
+                left out of the file, so a customer who bought or is about to
+                buy from one of our agents can never be re-sold by someone
+                else. */}
             {role === "admin" && (
               <button
                 onClick={exportCsv}
-                title="Downloads an Excel file of your leads. Sold / closed leads are automatically excluded."
+                title="Downloads an Excel file of your leads. Sold / closed leads and leads in progress or marked Call Back Later are automatically excluded."
                 className="text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-md px-3 py-2"
               >
                 Export Excel

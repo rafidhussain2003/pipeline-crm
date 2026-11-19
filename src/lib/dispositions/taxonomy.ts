@@ -78,6 +78,14 @@ export const DEFAULT_DISPOSITIONS: DefaultDisposition[] = [
 // won after it advances. "Sold" is the pre-taxonomy label live data carries.
 export const WON_DISPOSITIONS = ["Sale Closed", "Installation Scheduled", "Sold"];
 
+// Leads an agent is actively working: a callback has been promised or the
+// sale is in progress. Together with WON_DISPOSITIONS these never leave the
+// system through the bulk Excel export — exported sheets get handed to other
+// agents or sold on, and a lead that someone is already closing (or has
+// closed) must not be dialled again by a stranger.
+export const WORKING_DISPOSITIONS = ["Call Back Later", "In Progress"];
+export const EXPORT_EXCLUDED_DISPOSITIONS = [...WON_DISPOSITIONS, ...WORKING_DISPOSITIONS];
+
 // Negative-terminal labels: the lead is done and it was not a sale. "Do Not
 // Call" / "Invalid Lead" live under the OTHER display category but carry
 // lost semantics — they must never be recycled, rebalanced or counted as

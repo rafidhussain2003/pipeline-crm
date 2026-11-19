@@ -4,20 +4,23 @@ import { leads, users } from "@/db/schema";
 import { getSession } from "@/lib/auth";
 import { checkPolicy } from "@/lib/rate-limit";
 import { recordAudit } from "@/lib/audit";
-import { WON_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
+import { EXPORT_EXCLUDED_DISPOSITIONS } from "@/lib/dispositions/taxonomy";
 import { and, desc, eq, isNull, notInArray } from "drizzle-orm";
 
 // Smart lead export — an Excel sheet of the company's leads that AUTOMATICALLY
-// EXCLUDES every sold / closed lead. Bulk-exported leads get sent on or sold
-// in bulk, and once they are in a spreadsheet nobody can tell a sold lead
-// from an open one — so a customer who already bought from us could be
-// re-sold, causing order cancellations and a security problem for the
-// business. Excluding them AT THE DATABASE (never in the file) makes that
-// impossible: a sold lead simply never leaves the system.
+// EXCLUDES every sold / closed lead AND every lead an agent is still working
+// ("Call Back Later", "In Progress"). Bulk-exported leads get handed to other
+// agents, other companies, or sold on, and once they are in a spreadsheet
+// nobody can tell a sold or in-progress lead from an open one — so a
+// customer who already bought, or is about to buy from one of our agents,
+// could be dialled and re-sold by someone else. Excluding them AT THE
+// DATABASE (never in the file) makes that impossible: such a lead simply
+// never leaves the system. Everything else (New Lead, Answering Machine,
+// Disconnected, No Answer, Hung Up, Not Interested, …) is exported.
 //
-// "Sold" = the taxonomy's WON_DISPOSITIONS ("Sale Closed", "Installation
-// Scheduled", "Sold") — the same single source of truth the pipeline and
-// analytics use, so what counts as sold can never drift.
+// The list is EXPORT_EXCLUDED_DISPOSITIONS in the taxonomy: WON_DISPOSITIONS
+// ("Sale Closed", "Installation Scheduled", "Sold") plus WORKING_DISPOSITIONS
+// — the same single source of truth the pipeline and analytics use.
 //
 // ADMIN ONLY. Managers, agents and distributors all get 403 — an export is
 // the whole customer database in one file, the prime data-theft vector, and
@@ -49,8 +52,9 @@ export async function GET() {
       and(
         eq(leads.companyId, session.companyId),
         isNull(leads.deletedAt),
-        // The smart part: sold / closed leads never make it into the file.
-        notInArray(leads.disposition, WON_DISPOSITIONS)
+        // The smart part: sold / closed and in-progress / callback leads never
+        // make it into the file.
+        notInArray(leads.disposition, EXPORT_EXCLUDED_DISPOSITIONS)
       )
     )
     .orderBy(desc(leads.createdAt));
@@ -60,7 +64,7 @@ export async function GET() {
     userId: session.userId,
     action: "leads.exported",
     entityType: "lead",
-    metadata: { format: "xls", count: rows.length, excludedDispositions: WON_DISPOSITIONS },
+    metadata: { format: "xls", count: rows.length, excludedDispositions: EXPORT_EXCLUDED_DISPOSITIONS },
   });
 
   // Excel-native .xls: an HTML table Excel opens as a formatted sheet (bold
